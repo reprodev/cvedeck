@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="CveDeck">
+  <!--
+    CveDeck mark: a stamped asset tag.
+
+    The design language is "rack and label": a fleet is physical, and a hostname
+    is a label on hardware. So the mark is the label itself. A tag body with a
+    punch hole, near-square corners (equipment has corners), and one amber bar
+    for the severity ramp the product is built on.
+
+    No lettering. At 16px a glyph turns to mush; a silhouette does not.
+  -->
+  <rect width="32" height="32" rx="3" fill="#141614"/>
+  <path d="M7 8.5h13.2a2 2 0 0 1 1.55.74l4.2 5.2a2 2 0 0 1 0 2.52l-4.2 5.2a2 2 0 0 1-1.55.74H7a2 2 0 0 1-2-2V10.5a2 2 0 0 1 2-2z"
+        fill="#4E9A8A"/>
+  <circle cx="9.6" cy="16" r="1.7" fill="#141614"/>
+  <rect x="14.2" y="12.4" width="2.1" height="7.2" rx="0.6" fill="#141614" opacity="0.55"/>
+  <rect x="17.6" y="12.4" width="2.1" height="7.2" rx="0.6" fill="#EFC043"/>
+</svg>

@@ -1,0 +1,76 @@
+name: Bug report
+description: Something behaves differently from how it is documented to behave.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Not for security issues.** If this is a vulnerability, please use the
+        private advisory link on the previous page instead.
+
+
+        Please redact hostnames, IP addresses, and credentials from anything you
+        paste. CveDeck output describes your actual infrastructure.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Enroll a host running ...
+        2. Run a scan
+        3. The Ready to Fix tab shows ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: CveDeck version
+      description: >-
+        The badge beside the wordmark in the dashboard header, or
+        `curl localhost:3325/api/health`.
+      placeholder: 0.6.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running it?
+      options:
+        - Docker (ghcr.io image)
+        - Docker (built from source)
+        - systemd (deploy/install.sh)
+        - From source, for development
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: target
+    attributes:
+      label: Which target OS is involved?
+      description: >-
+        Only if the bug involves scanning a specific machine. The distribution
+        and version, e.g. "Debian 12" or "Windows Server 2022".
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >-
+        Container logs, or the scan's error message. This is rendered as code,
+        so no backticks needed.
+      render: text
+    validations:
+      required: false

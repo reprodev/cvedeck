@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest a capability CveDeck does not have.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Worth a look first: [AGENTS.md §5](https://github.com/reprodev/cvedeck/blob/main/AGENTS.md#5-known-follow-ups--roadmap--research-tracks)
+        lists what is already planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do that you cannot do today?
+      description: >-
+        Describe the situation rather than the feature. "I have 40 hosts and no
+        way to X" leads somewhere better than "add a Y button", because it
+        leaves room for a solution neither of us has thought of yet.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What did you have in mind?
+    validations:
+      required: false
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: How are you handling it now?
+      description: Including "I am not" — that is useful information about severity.
+    validations:
+      required: false

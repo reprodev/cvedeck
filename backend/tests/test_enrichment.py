@@ -1,0 +1,456 @@
+"""Tests for threat-intel enrichment and feed cache refresh.
+
+The invariant under test throughout this file is the one that makes enrichment
+safe to act on: **an unenriched finding must be visibly unenriched.**
+
+``kev_listed=None`` means "we did not check". ``kev_listed=False`` means "we
+checked, and this CVE is genuinely not in CISA's catalogue". Collapsing the two
+would present a stale or failed feed as "nothing here is being exploited" --
+a silent false negative, and the worst failure mode a vulnerability scanner
+has. Several tests below exist only to pin that distinction.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.data.repository import FindingInput, Repository
+from app.data.schema import Base, EpssScore, KevEntry
+from app.enums import FeedStatus, Severity
+from app.scanner.epss_client import EpssRecord
+from app.scanner.kev_client import KevRecord
+from app.services.enrichment import (
+    EPSS_FEED,
+    KEV_FEED,
+    FeedRefreshService,
+    FindingEnricher,
+)
+
+
+@pytest.fixture()
+def session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as s:
+        yield s
+
+
+@pytest.fixture()
+def repo(session):
+    return Repository(session)
+
+
+def _finding(cve_id: str, score: float = 7.5) -> FindingInput:
+    return FindingInput(
+        cve_id=cve_id,
+        cvss_score=score,
+        severity=Severity.HIGH,
+        source="osv",
+        package_identifier=f"Ubuntu:22.04:pkg@1.0 ({cve_id})",
+    )
+
+
+class _StubSource:
+    """A feed source that returns a canned result or raises."""
+
+    def __init__(self, records=None, error: Exception | None = None) -> None:
+        self._records = records or []
+        self._error = error
+        self.calls = 0
+
+    def fetch(self):
+        self.calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._records
+
+
+def _seed_kev(repo: Repository, *cve_ids: str) -> None:
+    repo.replace_kev_entries(
+        [KevEntry(cve_id=c, due_date="2026-01-01") for c in cve_ids]
+    )
+    repo.record_feed_refresh(
+        KEV_FEED, status=FeedStatus.OK, record_count=len(cve_ids)
+    )
+
+
+def _seed_epss(repo: Repository, scores: dict[str, tuple[float, float]]) -> None:
+    now = datetime.now(timezone.utc)
+    repo.replace_epss_scores(
+        [
+            EpssScore(cve_id=c, score=s, percentile=p, scored_at=now)
+            for c, (s, p) in scores.items()
+        ]
+    )
+    repo.record_feed_refresh(
+        EPSS_FEED, status=FeedStatus.OK, record_count=len(scores)
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The unknown-vs-negative invariant
+# --------------------------------------------------------------------------- #
+
+
+def test_unrefreshed_kev_leaves_findings_unenriched_not_marked_safe(repo):
+    """With no KEV cache, kev_listed stays None -- never False.
+
+    This is the whole point of the feature. Returning False here would tell a
+    user that nothing in their fleet is being actively exploited, on the basis
+    of a catalogue that was never downloaded.
+    """
+    enricher = FindingEnricher(repo)
+    [result] = enricher.enrich([_finding("CVE-2021-44228")])
+
+    assert result.kev_listed is None
+    assert result.kev_due_date is None
+    assert result.epss_score is None
+
+
+def test_populated_kev_marks_absent_cves_as_checked_and_absent(repo):
+    """With a usable cache, absence is a real answer and is recorded as False."""
+    _seed_kev(repo, "CVE-2021-44228")
+    enricher = FindingEnricher(repo)
+
+    listed, absent = enricher.enrich(
+        [_finding("CVE-2021-44228"), _finding("CVE-2019-0001")]
+    )
+
+    assert listed.kev_listed is True
+    assert listed.kev_due_date == "2026-01-01"
+    assert absent.kev_listed is False
+    assert absent.kev_due_date is None
+
+
+def test_a_failed_refresh_does_not_invalidate_a_previously_good_cache(repo):
+    """Yesterday's KEV answer beats no answer.
+
+    A failed download must leave the cache intact, so enrichment keeps working
+    (with data the dashboard reports as stale) rather than falling back to
+    "unknown" for the whole fleet.
+    """
+    _seed_kev(repo, "CVE-2021-44228")
+    service = FeedRefreshService(
+        repo, kev_source=_StubSource(error=RuntimeError("upstream down"))
+    )
+
+    outcome = service.refresh_kev()
+
+    assert outcome.status is FeedStatus.FAILED
+    assert "upstream down" in (outcome.error_detail or "")
+    [result] = FindingEnricher(repo).enrich([_finding("CVE-2021-44228")])
+    assert result.kev_listed is True
+
+
+def test_one_feed_being_usable_does_not_imply_the_other_is(repo):
+    """EPSS present, KEV absent: each field reflects only its own feed."""
+    _seed_epss(repo, {"CVE-2021-44228": (0.94, 0.99)})
+
+    [result] = FindingEnricher(repo).enrich([_finding("CVE-2021-44228")])
+
+    assert result.epss_score == pytest.approx(0.94)
+    assert result.epss_percentile == pytest.approx(0.99)
+    assert result.kev_listed is None
+
+
+# --------------------------------------------------------------------------- #
+# Enrichment behaviour
+# --------------------------------------------------------------------------- #
+
+
+def test_enrichment_preserves_order_and_every_original_field(repo):
+    _seed_kev(repo, "CVE-2000-0002")
+    findings = [_finding(f"CVE-2000-000{i}", score=float(i)) for i in range(1, 5)]
+
+    enriched = FindingEnricher(repo).enrich(findings)
+
+    assert [f.cve_id for f in enriched] == [f.cve_id for f in findings]
+    for before, after in zip(findings, enriched):
+        assert after.cvss_score == before.cvss_score
+        assert after.severity == before.severity
+        assert after.source == before.source
+        assert after.package_identifier == before.package_identifier
+
+
+def test_enrichment_matches_cve_ids_case_insensitively(repo):
+    """Findings and feeds disagree on case often enough to matter."""
+    _seed_kev(repo, "CVE-2021-44228")
+
+    [result] = FindingEnricher(repo).enrich([_finding("cve-2021-44228")])
+
+    assert result.kev_listed is True
+
+
+def test_enrichment_of_an_empty_finding_list_is_empty(repo):
+    assert FindingEnricher(repo).enrich([]) == []
+
+
+def test_enrichment_handles_more_findings_than_the_in_clause_chunk(repo):
+    """A fleet-wide pass exceeds SQLite's bound-parameter ceiling.
+
+    Unchunked, this raises OperationalError on the first real fleet while
+    passing every small fixture-sized test.
+    """
+    cve_ids = [f"CVE-2020-{i:05d}" for i in range(1500)]
+    _seed_kev(repo, *cve_ids[:750])
+
+    enriched = FindingEnricher(repo).enrich([_finding(c) for c in cve_ids])
+
+    assert len(enriched) == 1500
+    assert sum(1 for f in enriched if f.kev_listed) == 750
+    assert all(f.kev_listed is not None for f in enriched)
+
+
+# --------------------------------------------------------------------------- #
+# Feed health / staleness
+# --------------------------------------------------------------------------- #
+
+
+def test_a_never_refreshed_feed_reports_stale_and_unusable(repo):
+    health = FindingEnricher(repo).feed_health(KEV_FEED)
+
+    assert health.status is FeedStatus.NEVER_REFRESHED
+    assert health.stale is True
+    assert health.usable is False
+
+
+def test_a_fresh_feed_is_neither_stale_nor_unusable(repo):
+    _seed_kev(repo, "CVE-2021-44228")
+
+    health = FindingEnricher(repo).feed_health(KEV_FEED)
+
+    assert health.status is FeedStatus.OK
+    assert health.stale is False
+    assert health.usable is True
+    assert health.record_count == 1
+
+
+def test_an_old_cache_is_reported_stale_but_stays_usable(repo, session):
+    """Stale data still enriches; staleness is a warning, not a withdrawal.
+
+    Refusing to enrich from a two-day-old KEV cache would throw away a nearly
+    complete answer to avoid a marginally incomplete one.
+    """
+    _seed_kev(repo, "CVE-2021-44228")
+    row = repo.get_feed_refresh(KEV_FEED)
+    row.last_refreshed_at = datetime.now(timezone.utc) - timedelta(hours=100)
+    session.flush()
+
+    health = FindingEnricher(repo, max_age_hours=48.0).feed_health(KEV_FEED)
+
+    assert health.stale is True
+    assert health.usable is True
+    [result] = FindingEnricher(repo).enrich([_finding("CVE-2021-44228")])
+    assert result.kev_listed is True
+
+
+def test_refresh_age_tracks_the_data_not_the_last_attempt(repo):
+    """A failing feed must report the age of its data, not of its retry.
+
+    Advancing last_refreshed_at on a failed attempt would make a feed that has
+    been broken for a week look freshly updated.
+    """
+    _seed_kev(repo, "CVE-2021-44228")
+    before = repo.get_feed_refresh(KEV_FEED).last_refreshed_at
+
+    FeedRefreshService(
+        repo, kev_source=_StubSource(error=RuntimeError("down"))
+    ).refresh_kev()
+
+    row = repo.get_feed_refresh(KEV_FEED)
+    assert row.last_refreshed_at == before
+    assert row.last_attempted_at is not None
+    assert row.last_status is FeedStatus.FAILED
+
+
+def test_all_feed_health_always_reports_both_feeds(repo):
+    """A feed that has never run is reported, not omitted.
+
+    Omitting it would imply the signal does not exist, rather than that it has
+    not been fetched.
+    """
+    names = [h.feed_name for h in FindingEnricher(repo).all_feed_health()]
+    assert names == [KEV_FEED, EPSS_FEED]
+
+
+# --------------------------------------------------------------------------- #
+# Feed refresh service
+# --------------------------------------------------------------------------- #
+
+
+def test_refresh_replaces_rather_than_merges_the_catalogue(repo):
+    """A withdrawn KEV entry must stop being reported as known-exploited."""
+    _seed_kev(repo, "CVE-2000-0001", "CVE-2000-0002")
+    service = FeedRefreshService(
+        repo, kev_source=_StubSource([KevRecord(cve_id="CVE-2000-0002")])
+    )
+
+    outcome = service.refresh_kev()
+
+    assert outcome.record_count == 1
+    listed = repo.get_kev_map({"CVE-2000-0001", "CVE-2000-0002"})
+    assert set(listed) == {"CVE-2000-0002"}
+
+
+def test_an_empty_feed_response_is_treated_as_a_failure(repo):
+    """A 200 with no rows means the feed changed shape, not that KEV is empty.
+
+    Writing it would erase every KEV flag in the fleet.
+    """
+    _seed_kev(repo, "CVE-2021-44228")
+    service = FeedRefreshService(repo, kev_source=_StubSource([]))
+
+    outcome = service.refresh_kev()
+
+    assert outcome.status is FeedStatus.FAILED
+    assert repo.get_kev_map({"CVE-2021-44228"})
+
+
+def test_one_feed_failing_does_not_prevent_the_other_refreshing(repo):
+    """KEV and EPSS are unrelated upstreams; one outage must not cost both."""
+    service = FeedRefreshService(
+        repo,
+        kev_source=_StubSource(error=RuntimeError("cisa down")),
+        epss_source=_StubSource(
+            [EpssRecord(cve_id="CVE-2021-44228", score=0.9, percentile=0.99)]
+        ),
+    )
+
+    outcomes = {o.feed_name: o for o in service.refresh_all()}
+
+    assert outcomes[KEV_FEED].status is FeedStatus.FAILED
+    assert outcomes[EPSS_FEED].status is FeedStatus.OK
+    assert repo.get_epss_map({"CVE-2021-44228"})
+
+
+def test_refresh_records_epss_scores_with_their_percentiles(repo):
+    service = FeedRefreshService(
+        repo,
+        epss_source=_StubSource(
+            [EpssRecord(cve_id="CVE-2021-44228", score=0.944, percentile=0.9995)]
+        ),
+    )
+
+    assert service.refresh_epss().status is FeedStatus.OK
+    stored = repo.get_epss_map({"CVE-2021-44228"})["CVE-2021-44228"]
+    assert stored.score == pytest.approx(0.944)
+    assert stored.percentile == pytest.approx(0.9995)
+
+
+def test_an_unconfigured_feed_is_recorded_as_never_refreshed(repo):
+    """Not "failed": nothing was attempted, so nothing broke."""
+    outcome = FeedRefreshService(repo).refresh_kev()
+
+    assert outcome.status is FeedStatus.NEVER_REFRESHED
+    assert repo.get_feed_refresh(KEV_FEED).last_status is FeedStatus.NEVER_REFRESHED
+
+
+def test_refresh_all_skips_feeds_with_no_configured_source(repo):
+    service = FeedRefreshService(repo, kev_source=_StubSource([KevRecord("CVE-1")]))
+    assert [o.feed_name for o in service.refresh_all()] == [KEV_FEED]
+
+
+def test_a_defect_in_a_feed_source_is_not_disguised_as_an_outage(repo):
+    """A TypeError is a bug, not CISA being down.
+
+    Recording it as a feed outage would send someone to check the network for
+    a defect that lives in this codebase -- the same reasoning as the
+    programming-error re-raise in app.scanner.matcher.
+    """
+    service = FeedRefreshService(
+        repo, kev_source=_StubSource(error=TypeError("bad call"))
+    )
+    with pytest.raises(TypeError):
+        service.refresh_kev()
+
+
+# --------------------------------------------------------------------------- #
+# Properties
+# --------------------------------------------------------------------------- #
+
+
+def test_an_empty_catalogue_is_not_treated_as_a_usable_answer(repo):
+    """Zero records with an OK status still enriches to None, not False.
+
+    ``FeedRefreshService`` refuses to write an empty catalogue, so this state
+    should be unreachable in production -- but if it ever is reached, the safe
+    reading is "we know nothing", not "nothing in your fleet is exploited".
+    """
+    repo.record_feed_refresh(KEV_FEED, status=FeedStatus.OK, record_count=0)
+
+    [result] = FindingEnricher(repo).enrich([_finding("CVE-2021-44228")])
+
+    assert result.kev_listed is None
+
+
+@given(
+    listed=st.lists(
+        st.integers(min_value=0, max_value=40),
+        min_size=1,
+        max_size=20,
+        unique=True,
+    ),
+    queried=st.lists(
+        st.integers(min_value=0, max_value=40), max_size=20, unique=True
+    ),
+)
+def test_kev_flag_is_exactly_membership_of_the_cache(listed, queried):
+    """With a usable cache, kev_listed is true iff the CVE is in it.
+
+    Never None, for any query -- a usable cache always yields an answer.
+
+    ``listed`` is non-empty because a zero-record cache is deliberately *not*
+    usable; that case is pinned separately above.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        repo = Repository(session)
+        _seed_kev(repo, *(f"CVE-2020-{i:05d}" for i in listed))
+
+        findings = [_finding(f"CVE-2020-{i:05d}") for i in queried]
+        enriched = FindingEnricher(repo).enrich(findings)
+
+        listed_set = set(listed)
+        for index, result in zip(queried, enriched):
+            assert result.kev_listed is (index in listed_set)
+
+
+@given(
+    scores=st.dictionaries(
+        st.integers(min_value=0, max_value=30),
+        st.tuples(
+            st.floats(min_value=0.0, max_value=1.0),
+            st.floats(min_value=0.0, max_value=1.0),
+        ),
+        max_size=15,
+    )
+)
+def test_enrichment_never_invents_an_epss_score(scores):
+    """A CVE absent from the EPSS cache keeps a None score, not a zero.
+
+    Zero would be indistinguishable from a genuinely measured near-zero
+    probability and would sort as though it had been assessed.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        repo = Repository(session)
+        _seed_epss(
+            repo, {f"CVE-2020-{i:05d}": v for i, v in scores.items()}
+        )
+
+        findings = [_finding(f"CVE-2020-{i:05d}") for i in range(31)]
+        enriched = FindingEnricher(repo).enrich(findings)
+
+        for index, result in enumerate(enriched):
+            if index in scores:
+                assert result.epss_score == pytest.approx(scores[index][0])
+            else:
+                assert result.epss_score is None

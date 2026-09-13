@@ -1,0 +1,45 @@
+# Single-service deployment. Copy .env.example to .env to change the port,
+# data location, or file ownership, then: docker compose up -d
+#
+# This pulls the published image, so it works without a checkout. To build from
+# source instead -- which is what you want when developing, or on an
+# architecture we do not publish -- uncomment `build: .` below.
+services:
+  cvedeck:
+    image: ghcr.io/reprodev/cvedeck:latest
+    # build: .
+    container_name: cvedeck
+    restart: unless-stopped
+    ports:
+      # Host port -> container port. The container port is fixed at 8000.
+      # 3325 ("DECK" on a phone keypad) is IANA-unassigned and unused by common
+      # self-hosted apps; 8080 collides with half a homelab. Override with PORT.
+      - "${PORT:-3325}:8000"
+    volumes:
+      # The database lives here. Back this directory up.
+      - "${DATA_DIR:-./data}:/data"
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-UTC}"
+      # Uncomment to use PostgreSQL instead of the bundled SQLite file.
+      # CVEDECK_DB_URL: "postgresql+psycopg://user:password@db/cvedeck"
+      # Uncomment to enable POST /api/sync.
+      # CVEDECK_ONLINE_DB_URL: "postgresql+psycopg://user:password@online/cvedeck"
+      # Uncomment to enable OS-level CVE matching against NVD. Get a free key
+      # first (https://nvd.nist.gov/developers/request-an-api-key) -- unkeyed,
+      # NVD allows only 5 requests per rolling 30 seconds.
+      # CVEDECK_NVD_ENABLED: "true"
+      # CVEDECK_NVD_API_KEY: "your-key-here"
+      # Uncomment to run as a public demo: seeds a fictional fleet and
+      # refuses scans, discovery sweeps, and connection tests. Do not enable
+      # on an instance you actually scan with.
+      # CVEDECK_DEMO_MODE: "true"
+      # Threat-intel feeds (CISA KEV, FIRST EPSS) need no configuration to work.
+      # Refresh them daily -- see DEPLOYMENT.md "Keeping threat intel fresh".
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

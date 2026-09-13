@@ -1,0 +1,65 @@
+#!/bin/sh
+# Refuse a commit that stages a secret, a database, a personal identifier, or a
+# file an ignore rule says should stay local.
+#
+# Fast by design -- filenames and added lines only, no tests. The point is to
+# catch the mistake while it is still trivially undoable: an unstaged file
+# costs nothing, a commit costs a rewrite, and a pushed commit costs a
+# published secret. See .githooks/_checks.sh for what is checked and why.
+
+CVEDECK_ACTION=COMMIT
+. "$(dirname "$0")/_checks.sh"
+
+# ---- the clean room is written only by the sync ----
+#
+# A folder whose role is `public` holds snapshots of committed work from a
+# private staging folder, and nothing else. A commit authored here directly
+# would be erased by the next snapshot, or worse, published without ever having
+# existed in the staging history. The sync sets CVEDECK_SYNC=1; nothing else
+# should.
+if [ "$(cvedeck_role)" = "public" ] && [ "${CVEDECK_SYNC:-0}" != "1" ]; then
+    cvedeck_banner "this is the public clean room"
+    cat >&2 <<'EOF'
+  Nothing is authored here. Make the change in the private staging folder,
+  commit it there, and run the sync to bring it across.
+
+EOF
+    exit 1
+fi
+
+_staged=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -z "$_staged" ]; then
+    exit 0
+fi
+
+_fail=0
+
+_force_offences=$(cvedeck_check_force_added "") || _fail=1
+_path_offences=$(printf '%s\n' "$_staged" | cvedeck_check_paths) || _fail=1
+_line_offences=$(git diff --cached --unified=0 | cvedeck_check_added_lines) || _fail=1
+
+if [ "$_fail" -ne 0 ]; then
+    cvedeck_banner "staged changes contain something that must not be committed"
+    [ -n "$_force_offences" ] && { printf '  Force-added past an ignore rule:\n' >&2; printf '%s\n' "$_force_offences" >&2; }
+    [ -n "$_path_offences" ] && { printf '  Files:\n' >&2; printf '%s\n' "$_path_offences" >&2; }
+    [ -n "$_line_offences" ] && { printf '  Content:\n' >&2; printf '%s\n' "$_line_offences" >&2; }
+    cat >&2 <<'EOF'
+
+  To inspect what is staged:
+
+      git diff --cached --stat
+      git diff --cached
+
+  To unstage a file without losing it:
+
+      git restore --staged <path>
+
+  If a file like this is legitimate and recurring, add it to .gitignore rather
+  than bypassing this hook. --no-verify skips every check here, including the
+  secret scan, so reach for it only when you have already looked.
+
+EOF
+    exit 1
+fi
+
+exit 0

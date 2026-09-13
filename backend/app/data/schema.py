@@ -1,0 +1,347 @@
+"""SQLAlchemy ORM models for the CveDeck persistence layer.
+
+These ORM tables are intentionally separate from the in-memory domain models in
+``app.models`` (which are Pydantic structures produced by collectors and consumed
+by the matcher). The persistence layer maps domain structures to/from these rows.
+
+The schema defined here is identical for the Local_Database and Online_Database,
+so synchronization is a direct row propagation (Req 5.5). Every syncable row
+carries a ``sync_status`` column (Req 5.2, 5.3, 5.4).
+
+The data model is deliberately extensible for a future dependency/application-path
+visualization: ``CveFinding`` carries a ``package_identifier`` (Req 7.1) and a
+``dependency_path_id`` FK into ``DependencyPath`` (Req 5.5, 7.2), and
+``DependencyPath`` has a ``parent_path_id`` self-reference so dependency chains can
+be modeled. These are stored now and remain inert until the visualization consumes
+them; no restructuring is required to add that feature (Req 7).
+
+Enum columns use SQLAlchemy's ``Enum`` type backed by the shared string enums in
+``app.enums`` so values persist identically in both databases and match the JSON
+serialization used by the API.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import Boolean
+from sqlalchemy import Enum as SqlEnum
+from sqlalchemy import Float, ForeignKey, Integer, String
+from sqlalchemy import false as sa_false
+from sqlalchemy import text as sa_text
+from sqlalchemy import true as sa_true
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    relationship,
+)
+
+from ..enums import (
+    FeedStatus,
+    Platform,
+    RemediationStatus,
+    ScanStatus,
+    Severity,
+    SyncStatus,
+)
+
+
+class Base(DeclarativeBase):
+    """Declarative base for all ORM models in the persistence layer."""
+
+
+class TargetMachine(Base):
+    """A Windows or Linux host that the system scans remotely.
+
+    Root entity that findings, inventory, dependency paths, and remediation
+    records associate with (CVE <-> machine association, Req 5.5).
+    """
+
+    __tablename__ = "target_machines"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    hostname: Mapped[str] = mapped_column(String, nullable=False)
+    platform: Mapped[Platform] = mapped_column(
+        SqlEnum(Platform, name="platform"), nullable=False
+    )
+    last_scan_status: Mapped[ScanStatus] = mapped_column(
+        SqlEnum(ScanStatus, name="scan_status"), nullable=False
+    )
+    last_scanned_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # False when a data source was unreachable during the last scan, so its
+    # findings are partial. A scan that reports SUCCESS with an unreachable
+    # source produces a reduced finding count that is otherwise
+    # indistinguishable from a genuinely clean host.
+    last_scan_sources_ok: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    sync_status: Mapped[SyncStatus] = mapped_column(
+        SqlEnum(SyncStatus, name="sync_status"), nullable=False
+    )
+
+    inventories: Mapped[list[Inventory]] = relationship(
+        back_populates="machine", cascade="all, delete-orphan"
+    )
+    findings: Mapped[list[CveFinding]] = relationship(
+        back_populates="machine", cascade="all, delete-orphan"
+    )
+    dependency_paths: Mapped[list[DependencyPath]] = relationship(
+        back_populates="machine", cascade="all, delete-orphan"
+    )
+    remediation_records: Mapped[list[RemediationRecord]] = relationship(
+        back_populates="machine", cascade="all, delete-orphan"
+    )
+
+
+class Inventory(Base):
+    """Normalized OS/package inventory collected from a single Target_Machine.
+
+    Stored in the Local_Database and propagated to the Online_Database (Req 1.6,
+    5.1). Installed packages are stored as child ``Package`` rows.
+    """
+
+    __tablename__ = "inventories"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(
+        ForeignKey("target_machines.id"), nullable=False
+    )
+    os_name: Mapped[str] = mapped_column(String, nullable=False)
+    os_version: Mapped[str] = mapped_column(String, nullable=False)
+    # Running kernel release. A host can have every package updated and still be
+    # running the vulnerable kernel it booted from, which a package-list-only
+    # scan reports as clean.
+    kernel_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Whether a reboot is pending; NULL when the distribution offers no
+    # read-only way to ask.
+    reboot_required: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    collected_at: Mapped[datetime] = mapped_column(nullable=False)
+    sync_status: Mapped[SyncStatus] = mapped_column(
+        SqlEnum(SyncStatus, name="sync_status"), nullable=False
+    )
+
+    machine: Mapped[TargetMachine] = relationship(back_populates="inventories")
+    packages: Mapped[list[Package]] = relationship(
+        back_populates="inventory", cascade="all, delete-orphan"
+    )
+
+
+class Package(Base):
+    """A single installed software package belonging to an Inventory.
+
+    ``ecosystem`` (e.g. PyPI, npm, deb) is optional and refines OSV matching.
+    ``dependencies`` is a comma-separated list of required package names.
+    """
+
+    __tablename__ = "packages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    inventory_id: Mapped[str] = mapped_column(
+        ForeignKey("inventories.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[str] = mapped_column(String, nullable=False)
+    ecosystem: Mapped[str | None] = mapped_column(String, nullable=True)
+    dependencies: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    inventory: Mapped[Inventory] = relationship(back_populates="packages")
+
+
+class DependencyPath(Base):
+    """Future dependency/application-path visualization anchor.
+
+    Present in the schema now so the association survives synchronization
+    (Req 7.2, 7.3). ``parent_path_id`` is a self-reference that lets dependency
+    chains (e.g. app -> libA -> libB) be modeled. Inert until a future
+    visualization consumes it; no restructuring is required to add that feature.
+    """
+
+    __tablename__ = "dependency_paths"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(
+        ForeignKey("target_machines.id"), nullable=False
+    )
+    package_identifier: Mapped[str | None] = mapped_column(String, nullable=True)
+    path_expression: Mapped[str | None] = mapped_column(String, nullable=True)
+    parent_path_id: Mapped[str | None] = mapped_column(
+        ForeignKey("dependency_paths.id"), nullable=True
+    )
+    sync_status: Mapped[SyncStatus] = mapped_column(
+        SqlEnum(SyncStatus, name="sync_status"), nullable=False
+    )
+
+    machine: Mapped[TargetMachine] = relationship(back_populates="dependency_paths")
+    parent_path: Mapped[DependencyPath | None] = relationship(
+        remote_side=[id], back_populates="child_paths"
+    )
+    child_paths: Mapped[list[DependencyPath]] = relationship(
+        back_populates="parent_path"
+    )
+    findings: Mapped[list[CveFinding]] = relationship(
+        back_populates="dependency_path"
+    )
+
+
+class CveFinding(Base):
+    """A CVE matched against a Target_Machine's inventory.
+
+    Associates a CVE with a Target_Machine (Req 5.5). ``package_identifier`` is
+    set for OSV/package-level findings (Req 7.1) and ``dependency_path_id`` links
+    the finding to a ``DependencyPath`` (Req 5.5, 7.2). Both fields are preserved
+    across synchronization (Req 7.3).
+    """
+
+    __tablename__ = "cve_findings"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(
+        ForeignKey("target_machines.id"), nullable=False
+    )
+    # Indexed because enrichment joins the whole finding set against the KEV and
+    # EPSS caches by CVE id after every scan.
+    cve_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    cvss_score: Mapped[float] = mapped_column(Float, nullable=False)
+    severity: Mapped[Severity] = mapped_column(
+        SqlEnum(Severity, name="severity"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(String, nullable=False)  # "nvd" | "osv"
+    package_identifier: Mapped[str | None] = mapped_column(String, nullable=True)
+    dependency_path_id: Mapped[str | None] = mapped_column(
+        ForeignKey("dependency_paths.id"), nullable=True
+    )
+
+    # --- Threat-intel enrichment ------------------------------------------
+    # These three are deliberately nullable rather than defaulted, because
+    # "we did not enrich this finding" and "this finding is not exploited" are
+    # different claims and only one of them is safe to act on. A NULL here is
+    # rendered as unknown, never as absent-from-KEV. See ``FeedStatus``.
+    #
+    # ``kev_listed`` is CISA's Known Exploited Vulnerabilities catalogue: the
+    # vulnerability is being exploited in the wild right now. ``epss_score`` is
+    # FIRST's 0.0-1.0 probability of exploitation in the next 30 days, and
+    # ``epss_percentile`` is that score's rank among all scored CVEs -- the
+    # percentile is what makes the number legible, since a raw EPSS of 0.08 is
+    # meaningless until you know it is above 94% of everything else.
+    kev_listed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    #: CISA's remediation due date for a KEV-listed CVE, when one is published.
+    kev_due_date: Mapped[str | None] = mapped_column(String, nullable=True)
+    epss_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    epss_percentile: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    sync_status: Mapped[SyncStatus] = mapped_column(
+        SqlEnum(SyncStatus, name="sync_status"), nullable=False
+    )
+
+    machine: Mapped[TargetMachine] = relationship(back_populates="findings")
+    dependency_path: Mapped[DependencyPath | None] = relationship(
+        back_populates="findings"
+    )
+
+
+class KevEntry(Base):
+    """One CVE from CISA's Known Exploited Vulnerabilities catalogue.
+
+    A locally cached copy of the whole catalogue rather than a per-CVE lookup:
+    it is a single ~1.5 MB JSON document covering every known-exploited CVE, so
+    downloading it once a day and joining locally is both faster and kinder to
+    CISA than one HTTP request per finding.
+
+    Deliberately *not* carrying a ``sync_status``: this is a public dataset
+    reproducible from its source, not scan data, so propagating it through the
+    Online_Database sync would be copying an upstream file between two of your
+    own databases. Each instance refreshes its own copy.
+    """
+
+    __tablename__ = "kev_entries"
+
+    cve_id: Mapped[str] = mapped_column(String, primary_key=True)
+    vendor_project: Mapped[str | None] = mapped_column(String, nullable=True)
+    product: Mapped[str | None] = mapped_column(String, nullable=True)
+    vulnerability_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: ISO date strings as published by CISA; stored verbatim rather than parsed
+    #: so a format change upstream degrades to a display oddity, not an import
+    #: failure that loses the whole catalogue.
+    date_added: Mapped[str | None] = mapped_column(String, nullable=True)
+    due_date: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: Whether CISA has observed this CVE used in ransomware campaigns. The
+    #: single strongest "drop everything" signal the catalogue carries.
+    known_ransomware_use: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class EpssScore(Base):
+    """One CVE's EPSS exploitation probability, cached from the FIRST feed.
+
+    ``score`` is the modelled probability (0.0-1.0) that the CVE is exploited in
+    the next 30 days; ``percentile`` is its rank against every other scored CVE.
+    Like ``KevEntry`` this is an upstream dataset, so it carries no sync status.
+    """
+
+    __tablename__ = "epss_scores"
+
+    cve_id: Mapped[str] = mapped_column(String, primary_key=True)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    percentile: Mapped[float] = mapped_column(Float, nullable=False)
+    scored_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class FeedRefresh(Base):
+    """The outcome of the most recent refresh of one cached intel feed.
+
+    This table is the reason a stale KEV cache is visible rather than silent.
+    Without it, a refresh that has been failing for a month looks identical to
+    a fleet that genuinely has no known-exploited vulnerabilities -- the same
+    class of false negative that ``target_machines.last_scan_sources_ok``
+    exists to prevent.
+
+    ``error_detail`` keeps the last failure's message even after a later
+    success is recorded elsewhere in the row, so a flapping feed is diagnosable.
+    """
+
+    __tablename__ = "feed_refreshes"
+
+    #: Stable feed identifier: "kev" or "epss".
+    feed_name: Mapped[str] = mapped_column(String, primary_key=True)
+    #: When the feed last refreshed *successfully*. NULL means it never has, so
+    #: a feed that has only ever failed does not report a misleading age.
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    #: When a refresh was last attempted, successful or not.
+    last_attempted_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_status: Mapped[FeedStatus] = mapped_column(
+        SqlEnum(FeedStatus, name="feed_status"), nullable=False
+    )
+    record_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=sa_text("0")
+    )
+    error_detail: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class RemediationRecord(Base):
+    """Manually maintained remediation state for a CVE on a machine.
+
+    Only administrator-initiated; stored locally and synchronized (Req 4, 5.1).
+    """
+
+    __tablename__ = "remediation_records"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(
+        ForeignKey("target_machines.id"), nullable=False
+    )
+    cve_id: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[RemediationStatus] = mapped_column(
+        SqlEnum(RemediationStatus, name="remediation_status"), nullable=False
+    )
+    note: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(nullable=False)
+    sync_status: Mapped[SyncStatus] = mapped_column(
+        SqlEnum(SyncStatus, name="sync_status"), nullable=False
+    )
+
+    machine: Mapped[TargetMachine] = relationship(
+        back_populates="remediation_records"
+    )

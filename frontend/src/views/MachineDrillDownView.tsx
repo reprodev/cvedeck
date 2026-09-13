@@ -1,0 +1,1399 @@
+// MachineDrillDownView renders the CVE findings for a single machine with
+// interactive KPI filter cards, host vulnerability hotspot widgets, search,
+// By-CVE vs By-Package views, and 1-click fix remediation helpers.
+//
+// Requirements:
+//   3.3 - filter the displayed CVEs by severity
+//   3.4 - display the drill-down view listing CVEs for the selected machine
+//   3.5 - display each CVE identifier, its severity, and its CVSS score
+//   4.1 / 4.2 / 4.3 - record and update a remediation status with a note
+//   4.4 - display the current remediation status of each CVE
+
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { exportFindingsCsv } from "../lib/csvExport";
+import { filterBySeverity } from "../lib/severity";
+import {
+  type CveFinding,
+  type Platform,
+  type RemediationStatus,
+  type Severity,
+} from "../types";
+import { EmptyState } from "../components/EmptyState";
+import { useToast } from "../components/Toast";
+import {
+  buildBulkFixScript,
+  findingPackageName,
+  getDistroTooling,
+  hasFix as findingHasFix,
+  parsePackageName,
+} from "../lib/remediation";
+import { useClipboard } from "../lib/useClipboard";
+import { remediationStatusLabel, severityLabel } from "../lib/labels";
+import { RemediationCell } from "../components/RemediationCell";
+import { CveDetailModal } from "../components/CveDetailModal";
+import { Icon } from "../components/Icon";
+import {
+  exploitStatus,
+  isKnownExploited,
+  formatEpssPercentile,
+  formatEpssScore,
+  sortByRisk,
+} from "../lib/intel";
+
+export interface MachineDrillDownViewProps {
+  /** Identifier of the machine whose findings are shown. */
+  machineId: string;
+  /** Optional human-readable hostname for the heading. */
+  hostname?: string;
+  /** Platform of this machine; selects the remediation tooling family. */
+  platform?: Platform;
+  /** Reported OS name, when known; refines the tooling family. */
+  osName?: string;
+  /** CVE findings for the machine. */
+  findings: CveFinding[];
+  /** Called to return to the machine list. Wiring lives in the app shell. */
+  onBack?: () => void;
+  /**
+   * Called to persist a remediation for one CVE. The shell decides whether that
+   * adds a new record or updates the existing one, based on the finding's
+   * remediationRecordId.
+   */
+  onSaveRemediation?: (
+    finding: CveFinding,
+    status: RemediationStatus,
+    note: string,
+  ) => void;
+}
+
+/** Human-readable label for a severity level. */
+/** Fallback label when no remediation record exists for a finding. */
+function remediationLabel(status: string | null): string {
+  return status === null ? "No remediation record" : remediationStatusLabel(status);
+}
+
+/**
+ * Whether a package group has a published fix.
+ *
+ * Groups are assembled in this view from findings and carry an identifier
+ * rather than the backend's structured `hasFix`, so the prose check lives here
+ * once instead of being repeated in each view mode.
+ */
+function groupHasFix(group: { packageIdentifier: string }): boolean {
+  return group.packageIdentifier.includes("fixed in");
+}
+
+export function MachineDrillDownView({
+  machineId,
+  hostname,
+  platform,
+  osName,
+  findings,
+  onBack,
+  onSaveRemediation,
+}: MachineDrillDownViewProps) {
+  const [severityFilter, setSeverityFilter] = useState<Severity | "all">("all");
+  const [patchFilter, setPatchFilter] = useState<"all" | "fixable" | "pending">("all");
+  const [blastFilter, setBlastFilter] = useState<"all" | "high" | "leaf">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  // Risk ordering is the default: it is the ordering the KEV and EPSS signals
+  // were collected to make possible, and a CVSS-sorted list buries the
+  // findings that are actually being exploited.
+  const [riskOrdered, setRiskOrdered] = useState(true);
+  const [viewMode, setViewMode] = useState<"cve" | "package" | "tree">("cve");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [expandedPkg, setExpandedPkg] = useState<string | null>(null);
+  const [selectedFinding, setSelectedFinding] = useState<CveFinding | null>(null);
+  const toast = useToast();
+  // One clipboard implementation with an execCommand fallback. The async
+  // Clipboard API is undefined on plain-http origins -- which is how a LAN
+  // deployment is reached -- and the previous code silently did nothing there.
+  const pkgClipboard = useClipboard(toast.error, 2000);
+  const actionClipboard = useClipboard(toast.error, 2500);
+  const copiedPkg = pkgClipboard.copiedKey;
+  const copiedAction = actionClipboard.copiedKey;
+  const copyPkg = (text: string, key: string) => void pkgClipboard.copy(text, key);
+  const copyAction = (text: string, key: string) =>
+    void actionClipboard.copy(text, key);
+
+  // Summary counts for this machine
+  const counts = useMemo(() => {
+    const tally = { critical: 0, high: 0, medium: 0, low: 0, total: findings.length };
+    for (const f of findings) {
+      if (f.severity in tally) {
+        tally[f.severity]++;
+      }
+    }
+    return tally;
+  }, [findings]);
+
+  /** Share of this host's findings, as a percentage. Zero-safe. */
+  const pct = useCallback(
+    (n: number) => (counts.total > 0 ? (n / counts.total) * 100 : 0),
+    [counts.total],
+  );
+
+  // Patch availability breakdown
+  const patchCounts = useMemo(() => {
+    let fixable = 0;
+    let pending = 0;
+    for (const f of findings) {
+      if (f.packageIdentifier && f.packageIdentifier.includes("fixed in")) {
+        fixable++;
+      } else {
+        pending++;
+      }
+    }
+    return { fixable, pending, total: findings.length };
+  }, [findings]);
+
+  // Remediation posture summary
+  // Derived from the findings rather than threaded down as a prop: a finding
+  // carries its own enrichment state, so this screen can tell "checked and
+  // clear" from "never checked" without also being handed feed health.
+  const exploitedCount = useMemo(
+    () => findings.filter(isKnownExploited).length,
+    [findings],
+  );
+
+  // "unknown" when nothing here was ever checked against the catalogue. Kept
+  // distinct from zero, because a zero is a claim and this is the absence of
+  // one -- the same three-way distinction the findings table renders per row.
+  const exploitState: "exploited" | "clear" | "unknown" = useMemo(() => {
+    if (exploitedCount > 0) return "exploited";
+    const anyChecked = findings.some(
+      (f) => f.kevListed === true || f.kevListed === false,
+    );
+    return anyChecked ? "clear" : "unknown";
+  }, [findings, exploitedCount]);
+
+  const remediationCounts = useMemo(() => {
+    let remediated = 0;
+    let inProgress = 0;
+    let open = 0;
+    for (const f of findings) {
+      if (f.remediationStatus === "remediated") remediated++;
+      else if (f.remediationStatus === "in_progress") inProgress++;
+      else open++;
+    }
+    return { remediated, inProgress, open };
+  }, [findings]);
+
+  // Filter by severity (Requirement 3.3)
+  const severityFilteredFindings = useMemo(
+    () =>
+      severityFilter === "all"
+        ? findings
+        : filterBySeverity(findings, severityFilter),
+    [findings, severityFilter],
+  );
+
+  // Filter by patch readiness
+  const patchFilteredFindings = useMemo(() => {
+    if (patchFilter === "fixable") {
+      return severityFilteredFindings.filter(
+        (f) => f.packageIdentifier && f.packageIdentifier.includes("fixed in"),
+      );
+    }
+    if (patchFilter === "pending") {
+      return severityFilteredFindings.filter(
+        (f) => !f.packageIdentifier || !f.packageIdentifier.includes("fixed in"),
+      );
+    }
+    return severityFilteredFindings;
+  }, [severityFilteredFindings, patchFilter]);
+
+  // Filter by search query
+  const searchedFindings = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return patchFilteredFindings;
+    return patchFilteredFindings.filter(
+      (f) =>
+        f.cveId.toLowerCase().includes(q) ||
+        (f.packageIdentifier && f.packageIdentifier.toLowerCase().includes(q)) ||
+        (f.remediationStatus && f.remediationStatus.toLowerCase().includes(q)) ||
+        (f.remediationNote && f.remediationNote.toLowerCase().includes(q)) ||
+        (f.dependencies && f.dependencies.some((d) => d.toLowerCase().includes(q))) ||
+        (f.dependedOnBy && f.dependedOnBy.some((d) => d.toLowerCase().includes(q))),
+    );
+  }, [patchFilteredFindings, searchQuery]);
+
+  // Order by real-world urgency by default: KEV-listed first, then EPSS, then
+  // CVSS. A CVSS 6.5 that attackers are using today matters more than a CVSS
+  // 9.8 nobody has touched, and a list sorted by score alone cannot say so.
+  // The toggle exists because CVSS order is what a compliance report expects.
+  const visibleFindings = useMemo(
+    () => (riskOrdered ? sortByRisk(searchedFindings) : searchedFindings),
+    [searchedFindings, riskOrdered],
+  );
+
+  // Group findings by package for the "By Package" mode and top hotspot insight
+  const packageGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        packageName: string;
+        packageIdentifier: string;
+        findings: CveFinding[];
+        maxScore: number;
+        highestSeverity: Severity;
+        dependencies: string[];
+        dependedOnBy: string[];
+        blastRadius: "low" | "medium" | "high";
+      }
+    >();
+
+    for (const f of findings) {
+      const pkgName = parsePackageName(f.packageIdentifier) ?? "OS / System";
+      const existing = groups.get(pkgName);
+      if (!existing) {
+        groups.set(pkgName, {
+          packageName: pkgName,
+          packageIdentifier: f.packageIdentifier ?? pkgName,
+          findings: [f],
+          maxScore: f.cvssScore,
+          highestSeverity: f.severity,
+          dependencies: f.dependencies ?? [],
+          dependedOnBy: f.dependedOnBy ?? [],
+          blastRadius: f.blastRadius ?? "low",
+        });
+      } else {
+        existing.findings.push(f);
+        if (f.cvssScore > existing.maxScore) {
+          existing.maxScore = f.cvssScore;
+          existing.highestSeverity = f.severity;
+        }
+        if (f.dependencies && f.dependencies.length > existing.dependencies.length) {
+          existing.dependencies = f.dependencies;
+        }
+        if (f.dependedOnBy && f.dependedOnBy.length > existing.dependedOnBy.length) {
+          existing.dependedOnBy = f.dependedOnBy;
+        }
+        if (f.blastRadius) {
+          existing.blastRadius = f.blastRadius;
+        }
+      }
+    }
+
+    return Array.from(groups.values()).sort((a, b) => b.maxScore - a.maxScore);
+  }, [findings]);
+
+  // Filter package groups by patch readiness and severity
+  const visiblePackageGroups = useMemo(() => {
+    let groups = packageGroups;
+    if (patchFilter === "fixable") {
+      groups = groups.filter((g) =>
+        g.packageIdentifier.includes("fixed in") ||
+        g.findings.some((f) => f.packageIdentifier && f.packageIdentifier.includes("fixed in")),
+      );
+    } else if (patchFilter === "pending") {
+      groups = groups.filter((g) =>
+        !g.packageIdentifier.includes("fixed in") &&
+        g.findings.every((f) => !f.packageIdentifier || !f.packageIdentifier.includes("fixed in")),
+      );
+    }
+    if (severityFilter !== "all") {
+      groups = groups.filter((g) => g.findings.some((f) => f.severity === severityFilter));
+    }
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return groups;
+    return groups.filter(
+      (g) =>
+        g.packageName.toLowerCase().includes(q) ||
+        g.packageIdentifier.toLowerCase().includes(q) ||
+        g.dependencies.some((d) => d.toLowerCase().includes(q)) ||
+        g.dependedOnBy.some((d) => d.toLowerCase().includes(q)) ||
+        g.findings.some((f) => f.cveId.toLowerCase().includes(q)),
+    );
+  }, [packageGroups, patchFilter, severityFilter, searchQuery]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [severityFilter, patchFilter, searchQuery, viewMode]);
+
+  // Pagination for CVEs
+  const totalCvePages = Math.ceil(visibleFindings.length / pageSize) || 1;
+  const safeCvePage = Math.min(Math.max(1, currentPage), totalCvePages);
+  const paginatedFindings = useMemo(() => {
+    const start = (safeCvePage - 1) * pageSize;
+    return visibleFindings.slice(start, start + pageSize);
+  }, [visibleFindings, safeCvePage, pageSize]);
+
+  // Pagination for Packages
+  const totalPkgPages = Math.ceil(visiblePackageGroups.length / pageSize) || 1;
+  const safePkgPage = Math.min(Math.max(1, currentPage), totalPkgPages);
+  const paginatedPackageGroups = useMemo(() => {
+    const start = (safePkgPage - 1) * pageSize;
+    return visiblePackageGroups.slice(start, start + pageSize);
+  }, [visiblePackageGroups, safePkgPage, pageSize]);
+
+  // Dependency Tree Blast Radius Groups
+  const treePackageGroups = useMemo(() => {
+    let list = visiblePackageGroups;
+    if (blastFilter === "high") {
+      list = list.filter((g) => g.dependedOnBy.length > 0);
+    } else if (blastFilter === "leaf") {
+      list = list.filter((g) => g.dependedOnBy.length === 0);
+    }
+    return list;
+  }, [visiblePackageGroups, blastFilter]);
+
+  const totalTreePages = Math.ceil(treePackageGroups.length / pageSize) || 1;
+  const safeTreePage = Math.min(Math.max(1, currentPage), totalTreePages);
+  const paginatedTreeGroups = useMemo(() => {
+    const start = (safeTreePage - 1) * pageSize;
+    return treePackageGroups.slice(start, start + pageSize);
+  }, [treePackageGroups, safeTreePage, pageSize]);
+
+  const inspectorTooling = useMemo(
+    () => getDistroTooling(platform, osName, null),
+    [platform, osName],
+  );
+
+  // One script upgrading every fixable package on this host, deduplicated: a
+  // host commonly has a dozen CVEs against a single openssl.
+  const bulkFixScript = useMemo(
+    () => buildBulkFixScript(findings, platform, osName),
+    [findings, platform, osName],
+  );
+  const fixableCount = useMemo(() => findings.filter(findingHasFix).length, [findings]);
+
+  const handleSave = useCallback(
+    (finding: CveFinding, status: RemediationStatus, note: string) => {
+      if (onSaveRemediation) {
+        onSaveRemediation(finding, status, note);
+      }
+    },
+    [onSaveRemediation],
+  );
+
+  return (
+    <section aria-label="Machine CVE drill-down" className="view-container">
+      {/* Copy confirmations are otherwise a purely visual checkmark swap, which
+          assistive technology never reports. */}
+      <div className="visually-hidden" aria-live="polite">
+        {pkgClipboard.announcement || actionClipboard.announcement}
+      </div>
+      <div className="view-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "1rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          {onBack && (
+            <button
+              type="button"
+              className="back-button"
+              onClick={onBack}
+              aria-label="Back to machines"
+            >
+              <Icon name="arrow-left" /> Back to machines
+            </button>
+          )}
+          <div>
+            <h2 className="view-title">
+              CVE Findings for {hostname ?? machineId}
+            </h2>
+            <span className="view-subtitle">
+              {findings.length} {findings.length === 1 ? "vulnerability" : "vulnerabilities"} detected across installed components
+            </span>
+          </div>
+        </div>
+
+        {fixableCount > 0 && (
+          <button
+            type="button"
+            className="pagination-btn bulk-fix-btn"
+            onClick={() => copyAction(bulkFixScript, "bulk-fix")}
+            title={
+              "Copy one script upgrading every package on this host that has a " +
+              "published fix. Nothing is executed for you."
+            }
+          >
+            {copiedAction === "bulk-fix"
+              ? "Remediation plan copied"
+              : `Copy fix plan (${fixableCount} fixable)`}
+          </button>
+        )}
+
+        {findings.length > 0 && (
+          <button
+            type="button"
+            className="pagination-btn"
+            onClick={() => exportFindingsCsv(hostname ?? machineId, visibleFindings)}
+            style={{
+              padding: "0.55rem 1rem",
+              fontSize: "0.85rem",
+              fontWeight: 600,
+              background: "var(--surface)",
+              color: "var(--text)",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+            }}
+            title="Download RFC 4180 CSV export of visible findings"
+          >
+            <span>
+              <Icon name="file-down" /> Export Findings CSV ({visibleFindings.length})
+            </span>
+          </button>
+        )}
+      </div>
+
+      {/*
+        One strip where five KPI cards and a full-width progress card used to
+        sit, costing roughly 250px before the tabs -- and duplicating the tabs
+        below, which already carry their own counts.
+
+        Ordered by what to act on: whether anything here is being exploited
+        right now, then severity, then how much is already handled. The
+        exploitation half was previously absent from this screen entirely, so
+        the host page never said the thing the fleet page had just flagged.
+      */}
+      <div className="host-summary">
+        <div className="host-summary-exploit" data-state={exploitState}>
+          {exploitState === "unknown" ? (
+            <span title="No threat intel has been loaded, so exploitation status is unknown for every finding here. This is not evidence that none are exploited.">
+              <Icon name="target" /> Exploitation unknown
+            </span>
+          ) : exploitedCount > 0 ? (
+            <span title="Listed in CISA's Known Exploited Vulnerabilities catalogue">
+              <Icon name="target" /> <strong>{exploitedCount}</strong> actively exploited
+            </span>
+          ) : (
+            <span title="No findings on this host appear in CISA's KEV catalogue">
+              <Icon name="target" /> None actively exploited
+            </span>
+          )}
+        </div>
+
+        {/* Same chips as the fleet view, so the two screens read as one product
+            and the severity dropdown that used to sit below is unnecessary. */}
+        <div className="findings-strip-chips">
+          <button
+            type="button"
+            className={`sev-chip ${severityFilter === "all" ? "active" : ""}`}
+            aria-pressed={severityFilter === "all"}
+            onClick={() => setSeverityFilter("all")}
+          >
+            All {counts.total}
+          </button>
+          {(["critical", "high", "medium", "low"] as const).map((sev) => (
+            <button
+              key={sev}
+              type="button"
+              className={`sev-chip ${severityFilter === sev ? "active" : ""}`}
+              data-severity={sev}
+              aria-pressed={severityFilter === sev}
+              onClick={() => setSeverityFilter(severityFilter === sev ? "all" : sev)}
+            >
+              {severityLabel(sev)} {counts[sev]}
+            </button>
+          ))}
+        </div>
+
+        {findings.length > 0 && (
+          <div className="host-summary-progress">
+            <span className="host-summary-progress-label">
+              {remediationCounts.remediated} of {counts.total} resolved
+            </span>
+            <div
+              className="remediation-bar-track"
+              role="img"
+              aria-label={`${remediationCounts.remediated} remediated, ${remediationCounts.inProgress} in progress, ${remediationCounts.open} open`}
+            >
+              <div
+                className="remediation-bar-segment segment-remediated"
+                style={{ width: `${pct(remediationCounts.remediated)}%` }}
+                title={`Remediated: ${remediationCounts.remediated}`}
+              />
+              <div
+                className="remediation-bar-segment segment-in-progress"
+                style={{ width: `${pct(remediationCounts.inProgress)}%` }}
+                title={`In progress: ${remediationCounts.inProgress}`}
+              />
+              <div
+                className="remediation-bar-segment segment-open"
+                style={{ width: `${counts.total > 0 ? pct(remediationCounts.open) : 100}%` }}
+                title={`Open: ${remediationCounts.open}`}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {findings.length === 0 ? (
+        <p>No CVEs identified for this machine.</p>
+      ) : (
+        <>
+          {/* Workspace Tabs */}
+          <div className="workspace-tabs">
+            <button
+              type="button"
+              className={`workspace-tab-btn tab-fixable ${patchFilter === "fixable" && viewMode === "cve" ? "active" : ""}`}
+              onClick={() => {
+                setPatchFilter("fixable");
+                setViewMode("cve");
+              }}
+            >
+              <span>
+                <Icon name="wrench" /> Ready to Fix ({patchCounts.fixable})
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-tab-btn tab-pending ${patchFilter === "pending" && viewMode === "cve" ? "active" : ""}`}
+              onClick={() => {
+                setPatchFilter("pending");
+                setViewMode("cve");
+              }}
+            >
+              <span>
+                <Icon name="clock" /> Pending Vendor Patch ({patchCounts.pending})
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-tab-btn ${patchFilter === "all" && viewMode === "cve" ? "active" : ""}`}
+              onClick={() => {
+                setPatchFilter("all");
+                setViewMode("cve");
+              }}
+            >
+              <span>
+                <Icon name="list" /> All Findings ({counts.total})
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-tab-btn ${viewMode === "package" ? "active" : ""}`}
+              onClick={() => setViewMode("package")}
+            >
+              <span>
+                <Icon name="package" /> By Package ({packageGroups.length})
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-tab-btn ${viewMode === "tree" ? "active" : ""}`}
+              onClick={() => setViewMode("tree")}
+            >
+              <span>
+                <Icon name="branch" /> Dependency Map ({packageGroups.length})
+              </span>
+            </button>
+          </div>
+
+          {/* Controls Bar: Instant Search, Severity Select */}
+          <div className="controls-bar">
+            <div className="search-box">
+              <span className="search-icon">
+                <Icon name="search" />
+              </span>
+              <input
+                type="text"
+                placeholder="Search CVE ID, package, status, notes, or dependencies..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                aria-label="Search CVE findings"
+              />
+            </div>
+
+            {/* The severity dropdown that stood here is now the chip row in the
+                host summary above -- same filter, one control. */}
+          </div>
+
+          {/* Strategic Guidance Banner when viewing pending */}
+          {patchFilter === "pending" && counts.total > 0 && (
+            <div className="recommendations-banner">
+              <div className="recommendations-banner-header">
+                <div className="recommendations-banner-title">
+                  <span>
+                  <Icon name="shield-alert" /> Remediation Strategies for Pending Vendor Patches ({patchCounts.pending} CVEs)</span>
+                </div>
+              </div>
+              <div className="recommendations-grid">
+                <div className="recommendation-option-card">
+                  <div className="recommendation-option-title">
+                    <span>1. Purge Unused Leaf Packages</span>
+                    <span className="badge badge-blast-low">Zero Impact</span>
+                  </div>
+                  <p className="recommendation-option-desc">
+                    Packages like desktop clients or unused tools (e.g. <code>thunderbird</code>, <code>snapd</code>) with 0 dependent apps can be purged to completely eliminate their CVEs.
+                  </p>
+                  <div style={{ marginTop: "auto", paddingTop: "0.5rem" }}>
+                    <span style={{ fontSize: "0.74rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                      {inspectorTooling.purgeCmd("<package>")}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Ubuntu Pro is Canonical-specific. This block used to render
+                    on every host, so RHEL and Alpine users were told to run
+                    `sudo pro enable esm-apps`, which does not exist there. */}
+                {inspectorTooling.isUbuntu && (
+                  <div className="recommendation-option-card">
+                    <div className="recommendation-option-title">
+                      <span>2. Ubuntu Pro (ESM) Security</span>
+                      <span className="badge badge-high">LTS Fixes</span>
+                    </div>
+                    <p className="recommendation-option-desc">
+                      Many universe/multiverse packages receive backported security patches through Canonical's free Ubuntu Pro (ESM) service.
+                    </p>
+                    <div style={{ marginTop: "auto", paddingTop: "0.5rem" }}>
+                      <button
+                        type="button"
+                        className="copy-cmd-btn"
+                        onClick={() => copyAction("sudo pro status && sudo pro enable esm-apps", "pro-check")}
+                      >
+                        {copiedAction === "pro-check" ? <><Icon name="check" /> Copied!</> : <><Icon name="copy" /> Copy: sudo pro status</>}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="recommendation-option-card">
+                  <div className="recommendation-option-title">
+                    <span>{inspectorTooling.isUbuntu ? "3." : "2."} OS Distribution Upgrade</span>
+                    <span className="badge badge-platform">Major Update</span>
+                  </div>
+                  <p className="recommendation-option-desc">
+                    Newer upstream releases pull updated package trees with patched code.
+                  </p>
+                  {inspectorTooling.isUbuntu && (
+                    <div style={{ marginTop: "auto", paddingTop: "0.5rem" }}>
+                      <button
+                        type="button"
+                        className="copy-cmd-btn"
+                        onClick={() => copyAction("sudo do-release-upgrade -c", "upgrade-check")}
+                      >
+                        {copiedAction === "upgrade-check" ? <><Icon name="check" /> Copied!</> : <><Icon name="copy" /> Copy: do-release-upgrade -c</>}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {visibleFindings.length === 0 ? (
+            <EmptyState
+              title={
+                findings.length === 0
+                  ? "No CVE findings recorded for this machine."
+                  : "No findings match the current filters."
+              }
+              filters={[
+                { label: "search", value: searchQuery.trim() },
+                { label: "severity", value: severityFilter === "all" ? "" : severityFilter },
+                { label: "patch state", value: patchFilter === "all" ? "" : patchFilter },
+                { label: "blast radius", value: blastFilter === "all" ? "" : blastFilter },
+              ]}
+              onClearFilters={() => {
+                setSearchQuery("");
+                setSeverityFilter("all");
+                setPatchFilter("all");
+                setBlastFilter("all");
+                setCurrentPage(1);
+              }}
+            >
+              {findings.length === 0
+                ? "A scan that completed with no findings may also mean an advisory source was unreachable -- check the fleet view for a partial-results warning."
+                : undefined}
+            </EmptyState>
+          ) : viewMode === "tree" ? (
+            /* Dependency Map & Blast Radius Visual Explorer */
+            <div>
+              {/* Blast Radius Filter Bar */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.75rem" }}>
+                <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className={`pagination-btn ${blastFilter === "all" ? "active" : ""}`}
+                    style={{
+                      padding: "0.45rem 0.85rem",
+                      fontSize: "0.83rem",
+                      background: blastFilter === "all" ? "var(--accent)" : "var(--surface)",
+                      color: blastFilter === "all" ? "var(--accent-text)" : "var(--text)",
+                      fontWeight: blastFilter === "all" ? 600 : 400,
+                    }}
+                    onClick={() => setBlastFilter("all")}
+                  >
+                    All Components ({visiblePackageGroups.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`pagination-btn ${blastFilter === "high" ? "active" : ""}`}
+                    style={{
+                      padding: "0.45rem 0.85rem",
+                      fontSize: "0.83rem",
+                      background: blastFilter === "high" ? "var(--accent)" : "var(--surface)",
+                      color: blastFilter === "high" ? "var(--accent-text)" : "var(--text)",
+                      fontWeight: blastFilter === "high" ? 600 : 400,
+                    }}
+                    onClick={() => setBlastFilter("high")}
+                  >
+                    🚫 High Blast Radius ({visiblePackageGroups.filter((g) => g.dependedOnBy.length > 0).length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`pagination-btn ${blastFilter === "leaf" ? "active" : ""}`}
+                    style={{
+                      padding: "0.45rem 0.85rem",
+                      fontSize: "0.83rem",
+                      background: blastFilter === "leaf" ? "var(--accent)" : "var(--surface)",
+                      color: blastFilter === "leaf" ? "var(--accent-text)" : "var(--text)",
+                      fontWeight: blastFilter === "leaf" ? 600 : 400,
+                    }}
+                    onClick={() => setBlastFilter("leaf")}
+                  >
+                    <Icon name="check" /> Standalone Leaf Components ({visiblePackageGroups.filter((g) => g.dependedOnBy.length === 0).length})
+                  </button>
+                </div>
+
+                <div className="pagination-nav">
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={safeTreePage <= 1}
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  >
+                    ◀ Prev
+                  </button>
+                  <span style={{ fontSize: "0.82rem" }}>Page {safeTreePage} of {totalTreePages}</span>
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={safeTreePage >= totalTreePages}
+                    onClick={() => setCurrentPage((p) => Math.min(totalTreePages, p + 1))}
+                  >
+                    Next ▶
+                  </button>
+                </div>
+              </div>
+
+              {/* Tree Grid Cards */}
+              <div className="dep-grid">
+                {paginatedTreeGroups.map((group) => {
+                  const pkgName = group.packageName;
+                  const hasFix = groupHasFix(group);
+                  const isLeaf = group.dependedOnBy.length === 0;
+                  const isCopied = copiedPkg === pkgName;
+                  const tooling = getDistroTooling(platform, osName, group.packageIdentifier);
+
+                  return (
+                    <div
+                      key={pkgName}
+                      className="card"
+                      style={{
+                        padding: "1.2rem",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "0.85rem",
+                        borderLeft: isLeaf
+                          ? "4px solid var(--ok-border)"
+                          : "4px solid var(--error-border)",
+                      }}
+                    >
+                      <div className="dep-card-head">
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: "1.05rem" }}>
+                            <Icon name="package" /> {pkgName}
+                          </div>
+                          <div className="package-pill" style={{ marginTop: "0.25rem" }}>
+                            {group.packageIdentifier}
+                          </div>
+                        </div>
+                        <div className="dep-card-meta">
+                          <span className={`badge badge-${group.highestSeverity}`}>
+                            {severityLabel(group.highestSeverity)} • CVSS {group.maxScore}
+                          </span>
+                          <span style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>
+                            {group.findings.length} {group.findings.length === 1 ? "CVE" : "CVEs"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Blast Radius Assessment */}
+                      {!isLeaf ? (
+                        <div className="warning-card-high" style={{ padding: "0.6rem 0.8rem", margin: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--exploit)", marginBottom: "0.3rem" }}>
+                            🚫 HIGH SYSTEM IMPACT — Required by {group.dependedOnBy.length} installed apps:
+                          </div>
+                          <div className="dependency-chips">
+                            {group.dependedOnBy.map((app) => (
+                              <span key={app} className="dependency-chip dependent-app">
+                                {app}
+                              </span>
+                            ))}
+                          </div>
+                          <div style={{ fontSize: "0.74rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
+                            Do not purge. Apply selective package upgrade when patched.
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="warning-card-low" style={{ padding: "0.6rem 0.8rem", margin: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--ok-text)", marginBottom: "0.2rem" }}>
+                            <Icon name="check" /> STANDALONE COMPONENT (0 host dependencies)
+                          </div>
+                          <div style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>
+                            If not in active use, this component can be purged safely without breaking any other installed applications.
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Dependencies */}
+                      {group.dependencies.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: "0.76rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: "0.3rem" }}>
+                            <Icon name="download" /> Requires ({group.dependencies.length} packages):
+                          </div>
+                          <div className="dependency-chips">
+                            {group.dependencies.slice(0, 8).map((req) => (
+                              <span key={req} className="dependency-chip" style={{ fontSize: "0.72rem" }}>
+                                {req}
+                              </span>
+                            ))}
+                            {group.dependencies.length > 8 && (
+                              <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                                +{group.dependencies.length - 8} more
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* CVE Tags */}
+                      <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Linked CVEs:</span>
+                        {group.findings.slice(0, 5).map((f) => (
+                          <button
+                            key={f.cveId}
+                            type="button"
+                            className="badge badge-platform"
+                            style={{ cursor: "pointer", border: "none", fontSize: "0.72rem" }}
+                            onClick={() => setSelectedFinding(f)}
+                            title={`Inspect ${f.cveId}`}
+                          >
+                            {f.cveId} ↗
+                          </button>
+                        ))}
+                        {group.findings.length > 5 && (
+                          <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                            +{group.findings.length - 5} more
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Remediation Action */}
+                      <div style={{ marginTop: "auto", paddingTop: "0.5rem" }}>
+                        {hasFix ? (
+                          <button
+                            type="button"
+                            className="copy-fix-btn"
+                            style={{ width: "100%", justifyContent: "center" }}
+                            onClick={() => copyPkg(tooling.updateCmd(pkgName), pkgName)}
+                          >
+                            {isCopied ? <><Icon name="check" /> Upgrade Command Copied!</> : <><Icon name="copy" /> Copy: {tooling.updateCmd(pkgName)}</>}
+                          </button>
+                        ) : isLeaf ? (
+                          <button
+                            type="button"
+                            className="copy-purge-btn"
+                            style={{ width: "100%", justifyContent: "center" }}
+                            onClick={() => copyPkg(tooling.purgeCmd(pkgName), pkgName)}
+                          >
+                            {isCopied ? <><Icon name="check" /> Purge Command Copied!</> : <><Icon name="trash" /> Copy Purge: {tooling.purgeCmd(pkgName)}</>}
+                          </button>
+                        ) : (
+                          <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", textAlign: "center", padding: "0.35rem" }}>
+                            <Icon name="clock" /> Awaiting Upstream Vendor Security Build
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : viewMode === "package" ? (
+            /* By Package Aggregated View */
+            <div>
+              <div className="pagination-bar" style={{ marginBottom: "1rem" }}>
+                <span>
+                  Showing {(safePkgPage - 1) * pageSize + 1} to {Math.min(safePkgPage * pageSize, visiblePackageGroups.length)} of {visiblePackageGroups.length} packages
+                </span>
+                <div className="pagination-nav">
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={safePkgPage <= 1}
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  >
+                    ◀ Prev
+                  </button>
+                  <span>Page {safePkgPage} of {totalPkgPages}</span>
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={safePkgPage >= totalPkgPages}
+                    onClick={() => setCurrentPage((p) => Math.min(totalPkgPages, p + 1))}
+                  >
+                    Next ▶
+                  </button>
+                  <select
+                    className="page-size-select"
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    aria-label="Packages per page"
+                  >
+                    <option value={25}>25 / page</option>
+                    <option value={50}>50 / page</option>
+                    <option value={100}>100 / page</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Affected Package</th>
+                      <th scope="col">Vulnerabilities</th>
+                      <th scope="col">Max Severity</th>
+                      <th scope="col">Top Score</th>
+                      <th scope="col">Blast Radius (Impact)</th>
+                      <th scope="col">Remediation Fix Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedPackageGroups.map((group) => {
+                      const pkgName = group.packageName;
+                      const tooling = getDistroTooling(
+                        platform,
+                        osName,
+                        group.packageIdentifier,
+                      );
+                      const isCopied = copiedPkg === pkgName;
+                      const isExpanded = expandedPkg === pkgName;
+                      const hasFix = groupHasFix(group);
+                      const isLeaf = group.dependedOnBy.length === 0;
+                      return (
+                        <Fragment key={pkgName}>
+                          <tr>
+                            <td>
+                              <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>
+                                <Icon name="package" /> {pkgName}
+                              </div>
+                              <div className="package-pill">{group.packageIdentifier}</div>
+                              {(group.dependencies.length > 0 || group.dependedOnBy.length > 0 || group.findings.length > 0) && (
+                                <button
+                                  type="button"
+                                  className="drawer-toggle-btn"
+                                  onClick={() => setExpandedPkg(isExpanded ? null : pkgName)}
+                                >
+                                  {isExpanded ? "▲ Hide Details & Dependencies" : `▼ View CVEs (${group.findings.length}) & Dependencies`}
+                                </button>
+                              )}
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className="badge badge-platform"
+                                style={{ cursor: "pointer", border: "none" }}
+                                onClick={() => setSelectedFinding(group.findings[0])}
+                                title={`Inspect ${group.findings.length} CVEs for ${pkgName}`}
+                              >
+                                {group.findings.length}{" "}
+                                {group.findings.length === 1 ? "CVE" : "CVEs"} ↗
+                              </button>
+                            </td>
+                            <td>
+                              <span className={`badge badge-${group.highestSeverity}`}>
+                                {severityLabel(group.highestSeverity)}
+                              </span>
+                            </td>
+                            <td>
+                              <span className="cvss-score-pill">{group.maxScore}</span>
+                            </td>
+                            <td>
+                              <span
+                                className={
+                                  group.blastRadius === "high"
+                                    ? "badge-blast-high"
+                                    : group.blastRadius === "medium"
+                                    ? "badge-blast-medium"
+                                    : "badge-blast-low"
+                                }
+                              >
+                                {group.blastRadius === "high"
+                                  ? `🔴 High (${group.dependedOnBy.length} apps)`
+                                  : group.blastRadius === "medium"
+                                  ? `🟡 Moderate (${group.dependedOnBy.length} apps)`
+                                  : `🟢 Low (${group.dependedOnBy.length} apps)`}
+                              </span>
+                            </td>
+                            <td>
+                              {hasFix ? (
+                                <button
+                                  type="button"
+                                  className="copy-fix-btn"
+                                  onClick={() => copyPkg(tooling.updateCmd(pkgName), pkgName)}
+                                  title={`Copy fix command: sudo apt install --only-upgrade ${pkgName}`}
+                                >
+                                  {isCopied ? <><Icon name="check" /> Command Copied!</> : <><Icon name="copy" /> Copy apt upgrade command</>}
+                                </button>
+                              ) : isLeaf ? (
+                                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                                  <span className="badge badge-platform" style={{ fontSize: "0.78rem" }}>
+                                    <Icon name="clock" /> Pending vendor patch
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="copy-purge-btn"
+                                    onClick={() => copyAction(tooling.purgeCmd(pkgName), `purge-${pkgName}`)}
+                                    title={`Unused leaf package: remove completely to eliminate CVEs`}
+                                  >
+                                    {copiedAction === `purge-${pkgName}` ? <><Icon name="check" /> Copied!</> : <><Icon name="trash" /> Purge: sudo apt purge {pkgName}</>}
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="badge badge-platform" style={{ fontSize: "0.78rem" }}>
+                                  <Icon name="clock" /> Pending vendor patch
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={6} style={{ padding: 0 }}>
+                                <div className="dependency-drawer">
+                                  <div className="dependency-drawer-grid">
+                                    <div>
+                                      <div className="dependency-section-title">
+                                        <span>
+                                          <Icon name="shield-alert" /> Associated Vulnerabilities ({group.findings.length})
+                                        </span>
+                                      </div>
+                                      <div className="dependency-chips">
+                                        {group.findings.map((f) => (
+                                          <button
+                                            key={f.cveId}
+                                            type="button"
+                                            className="clickable-cve-btn"
+                                            style={{
+                                              fontSize: "0.78rem",
+                                              padding: "0.2rem 0.45rem",
+                                              background: "var(--surface-muted)",
+                                              borderRadius: "4px",
+                                              border: "1px solid var(--border)",
+                                            }}
+                                            onClick={() => setSelectedFinding(f)}
+                                            title={`Click to inspect details & advisories for ${f.cveId}`}
+                                          >
+                                            {f.cveId} ↗
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <div className="dependency-section-title">
+                                        <span>🔗 Depended on by Installed Apps ({group.dependedOnBy.length})</span>
+                                      </div>
+                                      {group.dependedOnBy.length > 0 ? (
+                                        <div className="dependency-chips">
+                                          {group.dependedOnBy.map((dep) => (
+                                            <span key={dep} className="dependency-chip dependent-app">
+                                              {dep}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                                          Standalone component — no other packages on this host depend on it.
+                                        </p>
+                                      )}
+                                    </div>
+
+                                    <div>
+                                      <div className="dependency-section-title">
+                                        <span>
+                                          <Icon name="download" /> Requires ({group.dependencies.length})
+                                        </span>
+                                      </div>
+                                      {group.dependencies.length > 0 ? (
+                                        <div className="dependency-chips">
+                                          {group.dependencies.map((req) => (
+                                            <span key={req} className="dependency-chip">
+                                              {req}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                                          No explicit package dependencies listed.
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            /* By CVE Full-Width Findings Table View */
+            <div className="table-full-view">
+              <div className="pagination-bar">
+                <span>
+                  Showing {(safeCvePage - 1) * pageSize + 1} to {Math.min(safeCvePage * pageSize, visibleFindings.length)} of {visibleFindings.length} findings
+                </span>
+                <label
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.4rem",
+                    fontSize: "0.8rem",
+                  }}
+                  title="Rank by observed and predicted exploitation (CISA KEV, then EPSS, then CVSS) instead of by CVSS score alone."
+                >
+                  <input
+                    type="checkbox"
+                    checked={riskOrdered}
+                    onChange={(event) => setRiskOrdered(event.target.checked)}
+                  />
+                  <span>Sort by exploitation risk</span>
+                </label>
+                <div className="pagination-nav">
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={safeCvePage <= 1}
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  >
+                    ◀ Prev
+                  </button>
+                  <span>Page {safeCvePage} of {totalCvePages}</span>
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={safeCvePage >= totalCvePages}
+                    onClick={() => setCurrentPage((p) => Math.min(totalCvePages, p + 1))}
+                  >
+                    Next ▶
+                  </button>
+                  <select
+                    className="page-size-select"
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    aria-label="Findings per page"
+                  >
+                    <option value={25}>25 / page</option>
+                    <option value={50}>50 / page</option>
+                    <option value={100}>100 / page</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col" style={{ minWidth: "220px" }}>CVE ID &amp; Affected Component</th>
+                      <th scope="col" style={{ width: "130px" }}>Exploitation</th>
+                      <th scope="col" style={{ width: "110px" }}>Severity</th>
+                      <th scope="col" style={{ width: "110px" }}>CVSS Score</th>
+                      <th scope="col" style={{ minWidth: "160px" }}>Remediation Status</th>
+                      {onSaveRemediation && <th scope="col" style={{ minWidth: "320px" }}>Update Remediation</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedFindings.map((finding) => {
+                      const pkgName = findingPackageName(finding);
+                      const rowTooling = getDistroTooling(
+                        platform,
+                        osName,
+                        finding.packageIdentifier,
+                      );
+                      const hasFix = findingHasFix(finding);
+                      const isCopied = pkgName && copiedPkg === pkgName;
+                      return (
+                        <tr
+                          key={`${finding.cveId}:${finding.packageIdentifier}`}
+                          className="master-row"
+                        >
+                          <td className="host-col">
+                            <div className="cve-id-cell">
+                              <button
+                                type="button"
+                                className="clickable-cve-btn"
+                                onClick={() => setSelectedFinding(finding)}
+                                title={`Open detailed modal for ${finding.cveId}`}
+                              >
+                                <span>{finding.cveId}</span>
+                                <span style={{ fontSize: "0.75rem", opacity: 0.7 }}><Icon name="search" /> Inspect</span>
+                              </button>
+                            </div>
+                            {finding.packageIdentifier && (
+                              <div className="package-pill">
+                                <span>
+                                  <Icon name="package" /> {finding.packageIdentifier}
+                                </span>
+                                {pkgName && hasFix ? (
+                                  <button
+                                    type="button"
+                                    className="copy-fix-btn"
+                                    onClick={() => copyPkg(rowTooling.updateCmd(pkgName), pkgName)}
+                                    title={`Copy: sudo apt install --only-upgrade ${pkgName}`}
+                                  >
+                                    {isCopied ? <><Icon name="check" /> Copied</> : <><Icon name="copy" /> Copy fix</>}
+                                  </button>
+                                ) : (
+                                  <span style={{ opacity: 0.85, fontSize: "0.75rem", display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                                    <Icon name="clock" /> Pending patch
+                                    {finding.dependedOnBy && finding.dependedOnBy.length > 0 ? (
+                                      <span style={{ color: "var(--exploit)", fontSize: "0.7rem", fontWeight: 600 }}>
+                                        (<Icon name="alert" /> Required by {finding.dependedOnBy.length} apps)
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: "var(--accent)", fontSize: "0.7rem" }}>
+                                        (<Icon name="alert" /> Standalone)
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          {/*
+                            Three visually distinct states, never two. An
+                            unenriched finding shows a muted dash, not the same
+                            "Not exploited" chip a checked-and-clear finding
+                            gets -- collapsing them would present a feed that
+                            never loaded as a clean bill of health.
+                          */}
+                          <td data-label="Exploitation" data-exploitation={exploitStatus(finding)}>
+                            {exploitStatus(finding) === "exploited" ? (
+                              <span
+                                className="badge badge-exploit"
+                                title={
+                                  finding.kevDueDate
+                                    ? `On CISA KEV. Federal remediation due ${finding.kevDueDate}.`
+                                    : "Listed in CISA's Known Exploited Vulnerabilities catalogue."
+                                }
+                              >
+                                <Icon name="target" /> Exploited
+                              </span>
+                            ) : exploitStatus(finding) === "not-exploited" ? (
+                              <span
+                                style={{ fontSize: "0.75rem", opacity: 0.7 }}
+                                title="Checked against CISA KEV and not listed."
+                              >
+                                Not on KEV
+                              </span>
+                            ) : (
+                              <span
+                                style={{ fontSize: "0.75rem", opacity: 0.45 }}
+                                title="Not checked -- threat intel has not been loaded. This is not evidence the CVE is unexploited."
+                              >
+                                — unknown
+                              </span>
+                            )}
+                            <div style={{ fontSize: "0.7rem", opacity: 0.7, marginTop: "0.2rem" }}>
+                              {finding.epssScore !== null && finding.epssScore !== undefined ? (
+                                <span
+                                  title={`EPSS: ${formatEpssScore(finding.epssScore)} probability of exploitation in the next 30 days (${formatEpssPercentile(finding.epssPercentile)} percentile).`}
+                                >
+                                  EPSS {formatEpssScore(finding.epssScore)}
+                                  {finding.epssPercentile !== null &&
+                                  finding.epssPercentile !== undefined
+                                    ? ` · ${formatEpssPercentile(finding.epssPercentile)}`
+                                    : ""}
+                                </span>
+                              ) : (
+                                <span style={{ opacity: 0.6 }}>EPSS --</span>
+                              )}
+                            </div>
+                          </td>
+                          <td data-label="Severity" data-severity={finding.severity}>
+                            <span className={`badge badge-${finding.severity}`}>
+                              {severityLabel(finding.severity)}
+                            </span>
+                          </td>
+                          <td data-label="CVSS">
+                            <span className="cvss-score-pill">{finding.cvssScore}</span>
+                          </td>
+                          <td data-label="Remediation">
+                            <span
+                              className={`badge ${
+                                finding.remediationStatus === "remediated"
+                                  ? "badge-status-success"
+                                  : finding.remediationStatus === "in_progress"
+                                  ? "badge-medium"
+                                  : "badge-platform"
+                              }`}
+                            >
+                              {remediationLabel(finding.remediationStatus)}
+                            </span>
+                          </td>
+                          {onSaveRemediation && (
+                            <td className="remediation-col" data-label="Update">
+                              <RemediationCell
+                                key={`${finding.cveId}:${finding.remediationRecordId ?? "new"}`}
+                                finding={finding}
+                                onSave={handleSave}
+                              />
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="pagination-bar">
+                <span>
+                  Page {safeCvePage} of {totalCvePages} ({visibleFindings.length} total findings)
+                </span>
+                <div className="pagination-nav">
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={safeCvePage <= 1}
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  >
+                    ◀ Prev
+                  </button>
+                  <button
+                    type="button"
+                    className="pagination-btn"
+                    disabled={safeCvePage >= totalCvePages}
+                    onClick={() => setCurrentPage((p) => Math.min(totalCvePages, p + 1))}
+                  >
+                    Next ▶
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {selectedFinding && (
+        <CveDetailModal
+          finding={selectedFinding}
+          hostname={hostname}
+          platform={platform}
+          osName={osName}
+          onClose={() => setSelectedFinding(null)}
+          onSaveRemediation={handleSave}
+        />
+      )}
+    </section>
+  );
+}

@@ -1,0 +1,109 @@
+# Security Policy
+
+CveDeck is given SSH or WinRM access to every host in a fleet, so a vulnerability
+in it is a vulnerability in everything it scans. Reports are taken seriously.
+
+## Reporting a vulnerability
+
+**Please do not open a public issue.**
+
+Use either of these — both are monitored, and neither is a second-class route:
+
+- **GitHub Security Advisories** — the *Security* tab on
+  [github.com/reprodev/cvedeck](https://github.com/reprodev/cvedeck) →
+  *Report a vulnerability*. Opens a private thread visible only to you and the
+  maintainers, and is the better channel if you want to be credited on a CVE:
+  advisories issue CVE IDs directly and give us a private fork to develop the
+  fix in.
+- **security@cvedeck.com** — if you would rather not use GitHub, found the issue
+  by way of the website rather than the repository, or your disclosure process
+  runs on email.
+
+Please include:
+
+- What the issue is and what an attacker could do with it
+- Steps to reproduce, or a proof of concept
+- The version or commit you tested
+- Your deployment shape, if relevant (Docker or systemd, SQLite or PostgreSQL,
+  behind a reverse proxy or not)
+
+### What to expect
+
+| | |
+|---|---|
+| Acknowledgement | within 3 working days |
+| Initial assessment | within 7 days |
+| Fix or mitigation plan | communicated once the assessment is done |
+| Public disclosure | coordinated with you, after a fix ships |
+
+This is a small project, so these are honest targets rather than a contractual
+SLA. If you have not heard back within a week, please chase — it means something
+went wrong, not that the report was ignored.
+
+You will be credited in the advisory and the changelog unless you would rather
+not be.
+
+## Scope
+
+**In scope** — the scanner backend, the dashboard, the collectors, the Docker
+image, the deployment scripts under `deploy/`, and anything that could:
+
+- expose or exfiltrate target-host credentials
+- turn the scanner into a vector against the hosts it scans
+- allow remote code execution, SSRF, SQL injection, or path traversal
+- **cause the scanner to under-report vulnerabilities.** A bug that makes a
+  vulnerable host read as clean is a security issue here, not merely a
+  correctness one, because users act on that answer.
+
+**Out of scope** — the known limitations documented below, findings that require
+an attacker to already have the privileges the report assumes, and issues in
+upstream data sources (report those to CISA, FIRST, OSV, or NVD).
+
+## Known limitations, by design
+
+These are documented rather than hidden, and are **not** vulnerabilities. They
+are also why the deployment guidance is what it is.
+
+**No authentication.** The application performs no authentication or
+authorization on any endpoint. It is designed to be bound to `127.0.0.1` and
+placed behind a reverse proxy that terminates TLS and handles auth, or run on a
+trusted network segment. Do not expose it to the internet as-is. Single-user
+auth and API keys are planned; see
+[AGENTS.md §5](AGENTS.md#5-known-follow-ups--roadmap--research-tracks).
+
+**SSH host keys are accepted on first use.** The Linux collector uses
+paramiko's `AutoAddPolicy`, so a first connection to a host trusts whatever key
+it presents. This is a real man-in-the-middle exposure on an untrusted network.
+Pinned host keys are on the roadmap
+([AGENTS.md §5](AGENTS.md#5-known-follow-ups--roadmap--research-tracks)).
+
+**WinRM defaults to HTTP.** Windows scans are refused in this release, so no
+WinRM connection is made by a scan. When Windows support lands, set
+`CVEDECK_WINRM_SCHEME=https` and `CVEDECK_WINRM_PORT=5986` for anything beyond a
+lab.
+
+**Credentials are held in memory during a scan.** They arrive in the request
+body, are wrapped in `SecretStr` so they are not logged or serialized, and are
+never written to disk — but they are in process memory for the duration of the
+scan, and in the request body in transit. Use TLS.
+
+**The server-managed SSH key is a standing credential.** When
+`CVEDECK_DEFAULT_SSH_KEY_PATH` is set, anyone who can reach the API can
+trigger a scan using that key. Give it a dedicated, unprivileged, read-only
+account on each target — not root.
+
+## Hardening checklist
+
+- Bind to `127.0.0.1` and front it with nginx; TLS, and `auth_basic` at minimum.
+  See `deploy/nginx/cvedeck.conf.example`.
+- Use the hardened systemd unit in `deploy/systemd/`, or run the container as a
+  non-root user with `PUID`/`PGID`.
+- Give the scanner a dedicated read-only account on each target host.
+- Keep the database volume off world-readable storage — it holds your fleet's
+  full software inventory, which is a useful document for an attacker.
+- Keep the image current. Watch releases for security fixes.
+
+## Supported versions
+
+Pre-1.0, only the latest release receives security fixes. Once 1.0 ships, this
+will become a proper support window.

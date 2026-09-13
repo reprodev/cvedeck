@@ -1,0 +1,44 @@
+# ---- Python (backend) ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+*.db
+*.sqlite3
+
+# ---- Node / Vite (frontend) ----
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+*.tsbuildinfo
+
+# ---- Deployment ----
+# Local compose overrides and the default bind-mounted data directory.
+.env
+/data/
+
+# ---- Editors / OS ----
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+.claude/
+
+# ---- Local working context, deliberately not published ----
+# The spec text under .kiro/specs/cvedeck/ IS published -- the source and tests
+# carry `Req X.Y` and `Property N` citations pointing into it, and
+# scripts/check_spec_citations.py verifies they all resolve. Only the two IDE
+# state files are excluded: a spec UUID and a map of task run timestamps, both
+# meaningless outside Kiro.
+.kiro/specs/cvedeck/.config.kiro
+.kiro/specs/cvedeck/tasks.meta.json
+
+# The hooks themselves are tracked and shared; this list of patterns is not.
+# It names the specific hosts and identifiers that must never be published,
+# so publishing the list would publish them.
+.githooks/local-denylist

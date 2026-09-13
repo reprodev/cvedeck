@@ -1,0 +1,50 @@
+# Dependency updates.
+#
+# A vulnerability scanner running on unmaintained dependencies is not a good
+# look, and backend/requirements.txt pins exact versions -- which is correct for
+# reproducible container builds, but means nothing moves without something
+# moving it.
+#
+# Grouped so a quiet week produces one pull request rather than nine. Security
+# updates are deliberately left ungrouped: they should arrive on their own and
+# be mergeable without reading a diff that also bumps a linter.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      backend-minor-and-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      frontend-dev-tooling:
+        applies-to: version-updates
+        dependency-type: development
+        update-types: [minor, patch]
+      frontend-runtime:
+        applies-to: version-updates
+        dependency-type: production
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly

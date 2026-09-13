@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cvedeck"
+version = "0.6.0"
+description = "Agentless CVE scanner dashboard backend"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-only"
+authors = [{ name = "reprodev" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: System Administrators",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "fastapi>=0.110",
+    "pydantic>=2.6",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "paramiko>=3.4",
+    "pywinrm>=0.4",
+    "uvicorn>=0.29",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "hypothesis>=6.100",
+]
+# Driver for pointing CVEDECK_DB_URL at PostgreSQL instead of SQLite.
+postgres = [
+    "psycopg[binary]>=3.2",
+]
+
+# Keep this table last in [project]. A table header captures every key that
+# follows it, so placing it above `dependencies` silently reparents the
+# dependency list into project.urls -- which still parses, and still installs
+# nothing.
+[project.urls]
+Homepage = "https://cvedeck.com"
+Source = "https://github.com/reprodev/cvedeck"
+Changelog = "https://github.com/reprodev/cvedeck/blob/main/CHANGELOG.md"
+Issues = "https://github.com/reprodev/cvedeck/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-ra"
+
+[tool.hypothesis]
+# Minimum 100 iterations for all property-based tests (design testing strategy).
+max_examples = 100

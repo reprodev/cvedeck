@@ -1,0 +1,172 @@
+# Continuous integration: backend tests, frontend tests, and an image build.
+#
+# The matrix runs the backend on the oldest and newest Python this project
+# claims to support (pyproject: requires-python >= 3.11), because "works on my
+# 3.12" is exactly how a 3.11 deployment breaks.
+#
+# No live network calls: every data-source client is tested against recorded
+# fixtures with a mocked transport, so CI does not go red because CISA is having
+# a bad afternoon.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a PR makes the in-flight run irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        working-directory: backend
+        run: pytest -ra
+
+      - name: Check for multiple Alembic heads
+        working-directory: backend
+        # A second head means two migrations claim the same parent, which fails
+        # at deploy time on a real database rather than in the test suite. Cheap
+        # to check here, painful to discover in production.
+        run: |
+          heads=$(python -m alembic heads | grep -c '(head)')
+          if [ "$heads" -ne 1 ]; then
+            echo "Expected exactly 1 Alembic head, found $heads:"
+            python -m alembic heads
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Run tests
+        working-directory: frontend
+        run: npm test
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    # A vulnerability scanner shipping known-vulnerable dependencies would be a
+    # bad joke, so this runs on every PR rather than on a schedule where nobody
+    # would read it.
+    #
+    # Deliberately NOT gating the merge: an advisory can land against a
+    # transitive dependency at any hour, and a red X on unrelated PRs trains
+    # people to ignore red Xs. `continue-on-error` keeps it advisory -- the
+    # summary is still there to read.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Audit Python dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit -r requirements.txt --desc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Audit npm dependencies
+        working-directory: frontend
+        # Production only: the dev tree is vite/vitest/typescript, which never
+        # reaches a user's machine, and its advisories would drown the signal.
+        run: npm audit --omit=dev --audit-level=moderate
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    # The image is the actual distribution channel for this project, so a build
+    # failure is a release failure. Gated on the test jobs so it does not burn
+    # minutes on a branch that is already red.
+    needs: [backend, frontend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: cvedeck:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image
+        # Proves the container actually starts, runs its migrations against an
+        # empty volume, and serves the health endpoint -- the three things a
+        # `docker build` succeeding does not tell you.
+        run: |
+          docker run -d --name cvedeck-ci -p 8000:8000 cvedeck:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/health > /dev/null; then
+              echo "Health check passed after ${i}s"
+              curl -sS http://localhost:8000/api/health
+              docker rm -f cvedeck-ci
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Container failed to become healthy. Logs:"
+          docker logs cvedeck-ci
+          docker rm -f cvedeck-ci
+          exit 1

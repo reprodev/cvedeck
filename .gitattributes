@@ -1,0 +1,14 @@
+# Shell scripts must keep LF endings: they run inside Linux containers and on
+# Linux servers, where a CRLF shebang breaks the interpreter.
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf
+Dockerfile text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+
+# Same reason, and it bites locally rather than in production: git runs hooks
+# through sh even on Windows, so a CRLF shebang here breaks every commit and
+# push with an unhelpful error. The hooks have no .sh suffix, so they need
+# naming explicitly.
+.githooks/pre-commit text eol=lf
+.githooks/pre-push text eol=lf

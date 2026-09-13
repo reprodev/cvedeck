@@ -1,0 +1,20 @@
+[Unit]
+Description=Refresh CveDeck threat-intel feeds daily
+Documentation=https://github.com/reprodev/cvedeck
+
+[Timer]
+# Both upstreams publish once a day, so refreshing more often buys nothing and
+# just adds load to CISA and FIRST. Daily at 03:00 local.
+OnCalendar=*-*-* 03:00:00
+
+# Spread across a 30-minute window. Every CveDeck instance in the world firing
+# at exactly 03:00 would be a self-inflicted thundering herd on two free public
+# services that this project depends on.
+RandomizedDelaySec=30m
+
+# Run on boot if the machine was asleep at 03:00. A laptop or an intermittently
+# powered homelab box would otherwise never refresh at all.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,88 @@
+# Publish a multi-arch image to GHCR on a version tag.
+#
+# The published image is how people actually install CveDeck, so this is the
+# release. arm64 is not optional for this audience: a large share of homelab
+# fleets run on a Raspberry Pi or an ARM mini-PC, and an amd64-only image simply
+# does not run for them.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.5.0)"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Verify the tag matches the application version
+        # A tag that disagrees with what /api/health reports produces a release
+        # nobody can correlate with a bug report. This project has already had
+        # three version strings drift apart once.
+        #
+        # frontend/package.json is checked here too. It was left ungated and
+        # duly drifted -- it sat at 0.0.0 across every release through 0.5.2.
+        # The dashboard's own version badge is deliberately NOT a fourth string:
+        # it renders whatever /api/health reports, so it cannot disagree with the
+        # backend by construction.
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag_version="${tag#v}"
+          app_version=$(sed -n 's/^_VERSION = "\(.*\)"$/\1/p' backend/app/api/app.py)
+          pyproject_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' backend/pyproject.toml)
+          frontend_version=$(node -p "require('./frontend/package.json').version")
+
+          echo "tag=$tag_version app=$app_version pyproject=$pyproject_version frontend=$frontend_version"
+
+          if [ "$tag_version" != "$app_version" ] \
+            || [ "$tag_version" != "$pyproject_version" ] \
+            || [ "$tag_version" != "$frontend_version" ]; then
+            echo "::error::Version mismatch. Tag, app.py, pyproject.toml, and frontend/package.json must agree."
+            exit 1
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

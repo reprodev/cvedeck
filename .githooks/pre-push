@@ -1,0 +1,307 @@
+#!/bin/sh
+# The airlock. What this refuses depends on where it is going.
+#
+#   Any remote          content checks over everything being pushed
+#   The public remote   the above, plus branch policy, no force-push,
+#                       version consistency, spec-citation integrity, and
+#                       both test suites
+#
+# The split is deliberate. Work in progress legitimately has failing tests, and
+# a hook that refuses to back it up is a hook that gets disabled -- so pushing
+# to the private WIP remote stays fast. The push that cannot be undone is the
+# one that earns the slow checks.
+#
+# The public remote is matched on its URL, not its name, so renaming a remote
+# cannot route around the gate.
+#
+# Escape hatch: CVEDECK_SKIP_TESTS=1 skips only the suites, keeping every
+# content and policy check. Prefer it over --no-verify, which skips everything.
+
+. "$(dirname "$0")/_checks.sh"
+
+REMOTE_NAME="$1"
+REMOTE_URL="$2"
+
+# Matches https://github.com/reprodev/cvedeck(.git) and the ssh form, but NOT
+# reprodev/cvedeck-wip -- the anchor is what makes that true.
+case "$REMOTE_URL" in
+    *reprodev/cvedeck|*reprodev/cvedeck.git|*reprodev/cvedeck/|*:reprodev/cvedeck|*:reprodev/cvedeck.git)
+        IS_PUBLIC=1
+        ;;
+    *)
+        IS_PUBLIC=0
+        ;;
+esac
+
+ZERO=$(git hash-object --stdin </dev/null | tr '0-9a-f' '0')
+
+# A private staging folder never publishes. Its commits are deliberately kept
+# off the public history -- only snapshots of them, made in the clean room, go
+# out -- so a push from here to the public repository is always a mistake, even
+# a well-intentioned one.
+if [ "$IS_PUBLIC" -eq 1 ] && [ "$(cvedeck_role)" = "staging" ]; then
+    cvedeck_banner "this is the private staging folder"
+    cat >&2 <<'EOF'
+  This folder's history is private and must not reach the public repository.
+  Only the public clean-room folder publishes. Commit here, run the sync, and
+  push from there.
+
+EOF
+    exit 1
+fi
+
+printf '\n  pre-push: remote "%s"%s\n' "$REMOTE_NAME" \
+    "$([ "$IS_PUBLIC" -eq 1 ] && printf ' -- PUBLIC, full gate' || printf ' -- private, content checks only')"
+printf '  denylist: %s\n' "$(cvedeck_denylist_status)"
+
+FAIL=0
+SAW_REF=0
+
+while read -r LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
+    # A deletion pushes the zero sha as the local side. Nothing to inspect.
+    if [ "$LOCAL_SHA" = "$ZERO" ]; then
+        if [ "$IS_PUBLIC" -eq 1 ]; then
+            cvedeck_banner "deleting a ref on the public remote"
+            printf '    %s\n\n' "$REMOTE_REF"
+            printf '  Deleting a published branch or tag breaks anyone who has it.\n'
+            printf '  Do it in the GitHub UI if you really mean to.\n\n'
+            FAIL=1
+        fi
+        continue
+    fi
+    SAW_REF=1
+
+    # ---- public-only policy, checked before anything expensive ----
+    if [ "$IS_PUBLIC" -eq 1 ]; then
+        case "$REMOTE_REF" in
+            refs/heads/main|refs/tags/v*)
+                ;;
+            *)
+                cvedeck_banner "only main and version tags may reach the public remote"
+                printf '    refusing: %s\n\n' "$REMOTE_REF"
+                cat <<'EOF'
+  This is what keeps unfinished work off the public repository. Keep work in
+  progress in a private folder or on a private remote, and publish only main
+  and release tags.
+
+EOF
+                FAIL=1
+                continue
+                ;;
+        esac
+
+        # A non-fast-forward rewrites published history.
+        if [ "$REMOTE_SHA" != "$ZERO" ] &&
+           ! git merge-base --is-ancestor "$REMOTE_SHA" "$LOCAL_SHA" 2>/dev/null; then
+            cvedeck_banner "this push is not a fast-forward"
+            printf '    %s\n\n' "$REMOTE_REF"
+            cat <<'EOF'
+  It would rewrite history that is already published. Anyone who has pulled it
+  gets a conflict, and a force-push cannot un-publish what was already fetched.
+
+  If you genuinely need this, do it deliberately and consciously:
+
+      git push --no-verify --force-with-lease origin main
+
+EOF
+            FAIL=1
+            continue
+        fi
+    fi
+
+    # ---- content checks, every remote ----
+    if [ "$REMOTE_SHA" = "$ZERO" ]; then
+        BASE="$CVEDECK_EMPTY_TREE"
+    else
+        BASE="$REMOTE_SHA"
+    fi
+
+    # Paths touched anywhere in the range, plus every path in the tree being
+    # published. The first catches a secret added then deleted; the second
+    # catches a forbidden file that predates the range.
+    PATHS=$(
+        { git diff --name-only "$BASE" "$LOCAL_SHA"
+          git ls-tree -r --name-only "$LOCAL_SHA"
+        } | sort -u
+    )
+
+    OFF_PATHS=$(printf '%s\n' "$PATHS" | cvedeck_check_paths) || {
+        cvedeck_banner "files that must not be published"
+        printf '%s\n' "$OFF_PATHS"
+        printf '\n  These are in %s. Remove them from the history you are pushing,\n' "$REMOTE_REF"
+        printf '  not just from the working tree.\n\n'
+        FAIL=1
+    }
+
+    OFF_FORCED=$(cvedeck_check_force_added "$LOCAL_SHA") || {
+        cvedeck_banner "tracked files that an ignore rule says should stay local"
+        printf '%s\n' "$OFF_FORCED"
+        printf '\n  These were added past an ignore rule with git add -f. Remove them\n'
+        printf '  from the commits being pushed, not just from the working tree.\n\n'
+        FAIL=1
+    }
+
+    OFF_LINES=$(git diff --unified=0 "$BASE" "$LOCAL_SHA" | cvedeck_check_added_lines) || {
+        cvedeck_banner "content that must not be published"
+        printf '%s\n' "$OFF_LINES"
+        printf '\n  Found in lines added between %s and %s.\n' "$(git rev-parse --short "$BASE" 2>/dev/null || echo 'the empty tree')" "$(git rev-parse --short "$LOCAL_SHA")"
+        printf '  To locate it:  git log -p -S"<the string>" %s\n\n' "$LOCAL_SHA"
+        FAIL=1
+    }
+
+    # ---- author identity, public remote only ----
+    #
+    # A commit's author email is published and permanent. The archive's history
+    # used the GitHub noreply address throughout, and the whole point of a
+    # noreply is that a personal address never reaches a public commit log. A
+    # tool that quietly rewrites user.email, or a commit made before the local
+    # identity was pinned, would leak one -- so check the commits rather than
+    # trusting the config.
+    if [ "$IS_PUBLIC" -eq 1 ]; then
+        # On a first push BASE is the empty *tree*, not a commit, and
+        # `git log <tree>..<sha>` is an error. With stderr discarded that error
+        # reads as "no offending commits" and the check passes silently -- on
+        # the very push where it matters most. So the range is built from
+        # commits only.
+        if [ "$BASE" = "$CVEDECK_EMPTY_TREE" ]; then
+            IDENT_RANGE="$LOCAL_SHA"
+        else
+            IDENT_RANGE="$BASE..$LOCAL_SHA"
+        fi
+        BAD_IDENT=$(
+            git log --format='%H %ae%n%H %ce' $IDENT_RANGE |
+            grep -vE ' [^ ]+@users\.noreply\.github\.com$' |
+            grep -vE ' noreply@' |
+            sort -u
+        )
+        if [ -n "$BAD_IDENT" ]; then
+            cvedeck_banner "a commit carries a non-noreply email address"
+            printf '%s\n' "$BAD_IDENT" | while IFS=' ' read -r _sha _mail; do
+                printf '    %s  %s\n' "$(git rev-parse --short "$_sha" 2>/dev/null || echo "$_sha")" "$_mail"
+            done
+            cat <<'EOF'
+
+  Author and committer emails are published and cannot be redacted later.
+  This repository's history uses the GitHub noreply address throughout.
+
+  To fix the local identity for future commits:
+
+      git config user.name  "reprodev"
+      git config user.email "8764255+reprodev@users.noreply.github.com"
+
+  To rewrite what is already committed but not yet pushed, amend the commit
+  (or rebase, for several) with --reset-author.
+
+EOF
+            FAIL=1
+        fi
+    fi
+
+    # ---- version consistency ----
+    #
+    # Four strings must agree, and they are read from the commit being pushed,
+    # not the working tree -- an uncommitted bump would otherwise pass here and
+    # fail in CI. The expressions match .github/workflows/release.yml exactly,
+    # so this gate and CI's cannot disagree about what a version is.
+    #
+    # backend/app/api/app.py is the one that matters most and was the one left
+    # out of this check at first: it is what /api/health reports, so it is what
+    # a bug report quotes.
+    APP_VERSION=$(git show "$LOCAL_SHA:backend/app/api/app.py" 2>/dev/null | sed -n 's/^_VERSION = "\(.*\)"$/\1/p' | head -1)
+    PY_VERSION=$(git show "$LOCAL_SHA:backend/pyproject.toml" 2>/dev/null | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+    JS_VERSION=$(git show "$LOCAL_SHA:frontend/package.json" 2>/dev/null | sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+
+    if [ "$APP_VERSION" != "$PY_VERSION" ] || [ "$PY_VERSION" != "$JS_VERSION" ]; then
+        cvedeck_banner "the version strings disagree"
+        printf '    backend/app/api/app.py   %s   (what /api/health reports)\n' "${APP_VERSION:-<missing>}"
+        printf '    backend/pyproject.toml   %s\n' "${PY_VERSION:-<missing>}"
+        printf '    frontend/package.json    %s\n\n' "${JS_VERSION:-<missing>}"
+        printf '  The release workflow refuses a tag unless all of these agree with it.\n'
+        printf '  frontend/package.json has drifted before -- it sat at 0.0.0 for\n'
+        printf '  several releases.\n\n'
+        FAIL=1
+    fi
+
+    case "$REMOTE_REF" in
+        refs/tags/v*)
+            TAG_VERSION=${REMOTE_REF#refs/tags/v}
+            if [ "$TAG_VERSION" != "$APP_VERSION" ] || [ "$TAG_VERSION" != "$PY_VERSION" ]; then
+                cvedeck_banner "the tag does not match the application version"
+                printf '    tag                      v%s\n' "$TAG_VERSION"
+                printf '    backend/app/api/app.py   %s\n' "${APP_VERSION:-<missing>}"
+                printf '    backend/pyproject.toml   %s\n\n' "${PY_VERSION:-<missing>}"
+                printf '  A tag that disagrees with what /api/health reports produces a\n'
+                printf '  release nobody can correlate with a bug report.\n\n'
+                FAIL=1
+            fi
+            ;;
+    esac
+done
+
+if [ "$SAW_REF" -eq 0 ] && [ "$FAIL" -eq 0 ]; then
+    printf '  nothing to push.\n\n'
+    exit 0
+fi
+
+# ---- the slow gate: public remote only ----
+if [ "$IS_PUBLIC" -eq 1 ] && [ "$FAIL" -eq 0 ]; then
+
+    if [ -x "scripts/check_spec_citations.py" ] || [ -f "scripts/check_spec_citations.py" ]; then
+        PY=python
+        [ -x "backend/.venv/Scripts/python.exe" ] && PY="backend/.venv/Scripts/python.exe"
+        [ -x "backend/.venv/bin/python" ] && PY="backend/.venv/bin/python"
+        printf '  checking spec citations ... '
+        if "$PY" scripts/check_spec_citations.py --quiet; then
+            printf 'ok\n'
+        else
+            printf '\n'
+            cvedeck_banner "the spec citation invariant is broken"
+            printf '  AGENTS.md section 0 claims every acceptance criterion is cited and\n'
+            printf '  every citation resolves. Run for detail:\n\n'
+            printf '      %s scripts/check_spec_citations.py\n\n' "$PY"
+            FAIL=1
+        fi
+    fi
+
+    if [ "${CVEDECK_SKIP_TESTS:-0}" = "1" ]; then
+        cvedeck_warn "CVEDECK_SKIP_TESTS=1 -- suites skipped, content checks still ran"
+    elif [ "$FAIL" -eq 0 ]; then
+        PY=python
+        [ -x "backend/.venv/Scripts/python.exe" ] && PY="backend/.venv/Scripts/python.exe"
+        [ -x "backend/.venv/bin/python" ] && PY="backend/.venv/bin/python"
+
+        printf '  backend tests ... '
+        if "$PY" -m pytest -q backend/tests >/tmp/cvedeck-pytest.log 2>&1 ||
+           (cd backend && "../$PY" -m pytest -q >/tmp/cvedeck-pytest.log 2>&1); then
+            printf '%s\n' "$(tail -1 /tmp/cvedeck-pytest.log)"
+        else
+            printf '\n'
+            cvedeck_banner "the backend suite is not green"
+            tail -20 /tmp/cvedeck-pytest.log
+            printf '\n  Full log: /tmp/cvedeck-pytest.log\n\n'
+            FAIL=1
+        fi
+
+        if [ "$FAIL" -eq 0 ]; then
+            printf '  frontend typecheck and tests ... '
+            if (cd frontend && npx tsc --noEmit >/tmp/cvedeck-front.log 2>&1 &&
+                                npm test --silent >>/tmp/cvedeck-front.log 2>&1); then
+                printf '%s\n' "$(grep -E 'Tests +[0-9]+ passed' /tmp/cvedeck-front.log | tail -1 | sed 's/^ *//')"
+            else
+                printf '\n'
+                cvedeck_banner "the frontend typecheck or suite is not green"
+                tail -20 /tmp/cvedeck-front.log
+                printf '\n  Full log: /tmp/cvedeck-front.log\n\n'
+                FAIL=1
+            fi
+        fi
+    fi
+fi
+
+if [ "$FAIL" -ne 0 ]; then
+    printf '  Nothing was pushed.\n\n' >&2
+    exit 1
+fi
+
+printf '  all checks passed -- pushing.\n\n'
+exit 0

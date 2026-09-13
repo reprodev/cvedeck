@@ -1,0 +1,30 @@
+# Keep the build context small and free of host-specific state. Anything the
+# image needs is copied explicitly in the Dockerfile.
+.git
+.gitignore
+.gitattributes
+.kiro
+AGENTS.md
+DEPLOYMENT.md
+deploy
+docker-compose.yml
+.env
+.env.example
+
+# Python
+**/__pycache__
+**/*.py[cod]
+backend/.venv
+backend/.pytest_cache
+backend/.hypothesis
+backend/tests
+
+# Node -- dependencies and the dist/ are rebuilt inside the image.
+**/node_modules
+frontend/dist
+frontend/tsconfig.tsbuildinfo
+
+# Local databases must never be baked into an image.
+*.db
+*.sqlite3
+data

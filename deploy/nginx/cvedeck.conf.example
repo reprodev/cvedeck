@@ -1,0 +1,55 @@
+# Example nginx reverse proxy for the CveDeck.
+#
+# The application has NO AUTHENTICATION of its own. Terminate TLS here and add
+# an access control layer (auth_basic below, or your SSO/identity-aware proxy)
+# before exposing it beyond a trusted network.
+#
+# Copy to /etc/nginx/sites-available/cvedeck, adjust server_name and the
+# certificate paths, then symlink into sites-enabled and reload nginx.
+
+server {
+    listen 80;
+    server_name cvedeck.example.com;
+
+    # Redirect everything to HTTPS.
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name cvedeck.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/cvedeck.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cvedeck.example.com/privkey.pem;
+
+    # Scan requests carry target credentials; do not log request bodies.
+    access_log /var/log/nginx/cvedeck.access.log;
+    error_log  /var/log/nginx/cvedeck.error.log;
+
+    # Inventory payloads from large fleets can be sizeable.
+    client_max_body_size 16m;
+
+    location / {
+        # Add authentication -- the application enforces none.
+        # auth_basic "CVE Scanner";
+        # auth_basic_user_file /etc/nginx/cvedeck.htpasswd;
+
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # POST /api/scans is synchronous: it connects to every target over
+        # SSH/WinRM inline and only responds when the whole batch is done. The
+        # 60s default would cut off any multi-host scan.
+        proxy_connect_timeout 30s;
+        proxy_send_timeout    900s;
+        proxy_read_timeout    900s;
+
+        # Streaming is not used; buffering keeps slow clients off the backend.
+        proxy_buffering on;
+    }
+}

@@ -1,0 +1,40 @@
+[Unit]
+Description=CveDeck
+Documentation=https://github.com/reprodev/cvedeck
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=cvedeck
+Group=cvedeck
+WorkingDirectory=/opt/cvedeck/backend
+EnvironmentFile=/etc/cvedeck/cvedeck.env
+
+# A single worker is deliberate: the SQLAlchemy engine is a process-wide
+# singleton over SQLite, which allows only one writer. Move to PostgreSQL via
+# CVEDECK_DB_URL before raising this.
+ExecStart=/opt/cvedeck/venv/bin/uvicorn app.api.app:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 1
+
+Restart=on-failure
+RestartSec=5s
+
+# Hardening. The service only ever writes to its data directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/cvedeck
+
+[Install]
+WantedBy=multi-user.target
