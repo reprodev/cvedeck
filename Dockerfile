@@ -26,7 +26,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Pinned to 3.12: the project requires >=3.11, and 3.12 has the widest wheel
 # coverage for paramiko/pywinrm/psycopg.
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 # gosu drops privileges in the entrypoint after fixing up /data ownership;
 # curl backs the HEALTHCHECK below.
