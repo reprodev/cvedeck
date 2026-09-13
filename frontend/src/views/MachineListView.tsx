@@ -396,7 +396,16 @@ export function MachineListView({
             <span className="triage-card-label">
               <Icon name="target" /> Actively exploited
             </span>
-            <span className="triage-card-value">{exploitedHostCount}</span>
+            {/*
+              Without usable intel the count is not an answer either way.
+              Findings can still carry kev_listed from an earlier refresh (or
+              from the demo seed), and "6" above "no exploit data loaded"
+              contradicts itself -- so the value goes to a dash, like the
+              Exploited column below.
+            */}
+            <span className="triage-card-value">
+              {intelUsable ? exploitedHostCount : "—"}
+            </span>
             <span className="triage-card-unit">
               {intelUsable
                 ? `${hostUnit(exploitedHostCount)} · ${exploitedFindingCount} on CISA KEV`

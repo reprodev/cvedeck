@@ -76,6 +76,22 @@ describe("MachineListView threat-intel surface", () => {
     expect(within(card).queryByText(/on CISA KEV/i)).not.toBeInTheDocument();
   });
 
+  it("shows a dash, not a stale count, when intel is unusable", () => {
+    // Findings can keep kev_listed from an earlier refresh after the feed stops
+    // being usable. A number next to "no exploit data loaded" contradicts
+    // itself, so the card must not show one.
+    render(
+      <MachineListView
+        machines={[makeMachine({ kevCount: 3 }), makeMachine({ kevCount: 1 })]}
+        feeds={UNLOADED_FEEDS}
+      />,
+    );
+
+    const card = cardByTitle("Actively exploited");
+    expect(within(card).getByText("—")).toBeInTheDocument();
+    expect(within(card).queryByText("2")).not.toBeInTheDocument();
+  });
+
   it("leads the triage row with exploitation, ahead of CVSS-based cards", () => {
     // Ordering is the argument: what is being exploited outranks what merely
     // scores highly.

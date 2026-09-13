@@ -8,6 +8,14 @@ All notable changes to the **CveDeck** project are documented here.
 
 ### Changed
 
+- **The README leads with the product.** A logo, a one-line summary, links to
+  the main documents, and demo-mode screenshots of the fleet overview and a
+  host's findings, in light and dark to match the reader's GitHub theme. The
+  Windows limitation and the no-authentication warning are callouts, source
+  builds and Compose are collapsible, and the documents are listed in a table.
+  The logo lives in `docs/assets/`, with the wordmark drawn from Archivo's
+  letterforms so it renders without the font.
+
 - **The development story reads as one document.** A light edit for voice and
   cohesion: Chapters 6 and 7 are rewritten to match the rest, repeated recaps
   and closing summaries are trimmed, and the intro says what connects the
@@ -17,6 +25,12 @@ All notable changes to the **CveDeck** project are documented here.
   `docs/design/README.md` follows.
 
 ### Fixed
+
+- **The "Actively exploited" card could show a count next to "no exploit data
+  loaded".** Findings keep their KEV flag from an earlier refresh, so once the
+  feed stopped being usable -- or in demo mode, before Refresh intel -- the card
+  showed a number that contradicted its own label. It now shows a dash, like
+  the Exploited column.
 
 - **The interface-structure diagram in the methodology document did not render
   on GitHub.** Its arrows pointed at `Drill-Down Workspace`, a subgraph title
