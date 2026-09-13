@@ -6,6 +6,14 @@ All notable changes to the **CveDeck** project are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The development story reads as one document.** A light edit for voice and
+  cohesion: Chapters 6 and 7 are rewritten to match the rest, repeated recaps
+  and closing summaries are trimmed, and the intro says what connects the
+  chapters. No facts, figures or code references changed. Chapter titles are
+  unchanged apart from 6 and 7, which are shorter.
+
 ### Fixed
 
 - **The interface-structure diagram in the methodology document did not render
