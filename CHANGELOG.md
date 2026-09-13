@@ -11,8 +11,10 @@ All notable changes to the **CveDeck** project are documented here.
 - **The development story reads as one document.** A light edit for voice and
   cohesion: Chapters 6 and 7 are rewritten to match the rest, repeated recaps
   and closing summaries are trimmed, and the intro says what connects the
-  chapters. No facts, figures or code references changed. Chapter titles are
-  unchanged apart from 6 and 7, which are shorter.
+  chapters. It is now written in the first person, since this is a personal
+  project. No facts, figures or code references changed. Chapters 6 and 7 have
+  shorter titles, and Chapter 10's ends "never really mine"; the link to it from
+  `docs/design/README.md` follows.
 
 ### Fixed
 

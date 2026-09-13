@@ -3,7 +3,7 @@
 Three static mockups of the fleet view, made before any component was rebuilt.
 They are kept here as a record of how the current design was chosen, and they
 are the artifacts behind [Chapter 10 of the development
-story](../DEVELOPMENT_STORY.md#chapter-10--the-palette-was-never-really-ours-v052).
+story](../DEVELOPMENT_STORY.md#chapter-10--the-palette-was-never-really-mine-v052).
 
 | | Direction | Structural signature |
 | :--- | :--- | :--- |

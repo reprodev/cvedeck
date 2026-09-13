@@ -115,11 +115,11 @@ failures, then by running the production path against the live OSV.dev API: an
 Ubuntu 22.04 package set that returned 0 findings before the fix returned 160
 after, with correct `fixed in ...` versions.
 
-### What changed in how we work
+### What changed in how I work
 
 `AGENTS.md` gained two invariants: never widen the matcher's handlers back to a
 bare `except Exception`, and keep a test that covers `OsvHttpClient` with no
-injected client. Both record a failure we can't afford to repeat rather than a
+injected client. Both record a failure I can't afford to repeat rather than a
 style preference.
 
 ---
@@ -173,7 +173,7 @@ since a warning that always fires is a warning nobody reads.
 So `unavailable_sources` counts only sources that were actually configured.
 Absent capability is a known limitation, documented once; an outage is a
 per-scan anomaly worth interrupting someone about. Mixing the two up would have
-thrown away the signal we had just built.
+thrown away the signal I had just built.
 
 ### Small things that turned out to matter
 
@@ -228,7 +228,7 @@ distributions. The third one turned up a bug as serious as Chapter 1's.
 ### The ecosystem names nobody validated
 
 Extending distribution coverage meant adding Oracle Linux and Amazon Linux to
-the OSV ecosystem resolver. Before writing the mapping, we checked what OSV
+the OSV ecosystem resolver. Before writing the mapping, I checked what OSV
 actually accepts. It rejects both, with HTTP 400 and "invalid ecosystem".
 
 That prompted checking the names already in the code. Two of the ten entries in
@@ -252,7 +252,7 @@ degradation, and degradations don't get reported.
 
 A third finding came out of the same check. OSV accepts `Red Hat:9` and returns
 zero results for it, while unversioned `Red Hat` returns 23 for the same
-package. Versioning that ecosystem -- which is what we had just written, by
+package. Versioning that ecosystem -- which is what I had just written, by
 analogy with `AlmaLinux:9` and `Rocky Linux:9`, both of which do work -- would
 have silently lost every Red Hat finding while looking entirely reasonable in
 code review.
@@ -354,8 +354,8 @@ Two smaller things fell out of doing this properly:
   are explicitly unsupported on Arch and routinely break the system, so the
   previous `pacman -S <pkg>` was actively harmful advice.
 - **An unknown distribution now emits a `#` comment instead of a command.**
-  Handing someone a confidently wrong command is worse than saying we don't know
-  which package manager applies.
+  Handing someone a confidently wrong command is worse than admitting it doesn't
+  know which package manager applies.
 
 ### The button that never worked on a LAN
 
@@ -397,12 +397,12 @@ The backend now parses that structure once and sends `package_name`,
 `fixed_version`, and `has_fix` as fields. The frontend prefers them and keeps the
 prose check only as a fallback for findings served by an older backend.
 
-### Persisting what we collect
+### Persisting what gets collected
 
 Chapter 3 added kernel and reboot-required collection. This chapter noticed they
 were being collected and thrown away -- the ORM had no column for either. That's
 exactly the missing-last-mile mistake Chapter 2 was about, made again one
-chapter later by the same author. They're now persisted.
+chapter later, by me. They're now persisted.
 
 There's a pattern here, and it isn't a flattering one: this codebase kept
 getting the hard part right and dropping the trivial part straight after. The
@@ -650,7 +650,7 @@ That also settled where enrichment goes. `Matcher.match` is pure and heavily
 property-tested, and enrichment needs only a CVE id — so it runs *after* matching,
 as a separate pass, and the matcher wasn't touched.
 
-### The bug we did not write
+### The bug I did not write
 
 The whole feature turns on a distinction that's very easy to lose:
 
@@ -660,8 +660,8 @@ kev_listed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 Nullable, not `default=False`.
 
-`False` means *we checked CISA's catalogue and this CVE is not in it*. `NULL`
-means *we never checked*. A boolean column with a default would have collapsed
+`False` means *CISA's catalogue was checked and this CVE is not in it*. `NULL`
+means *nobody checked*. A boolean column with a default would have collapsed
 them, and that collapse produces a dashboard reporting "0 actively exploited"
 across an entire fleet, on the authority of a catalogue that was never
 downloaded.
@@ -779,7 +779,7 @@ like a card. Three weak cards — stale, never-scanned, failed — became one
 they answer a question worth asking daily: *whose data can I not trust right
 now?*
 
-### The signal we had just built was not on the table
+### The signal I had just built was not on the table
 
 The second finding from the screenshots was blunter. The fleet table had
 CRITICAL, HIGH, MEDIUM and LOW columns and no exploitation column. The three
@@ -905,7 +905,7 @@ them is to go and look.
 
 ---
 
-## Chapter 10 — The palette was never really ours (v0.5.2)
+## Chapter 10 — The palette was never really mine (v0.5.2)
 
 The dashboard looked like every other AI-generated dashboard. That wasn't a vague
 impression, and checking it took about a minute:
