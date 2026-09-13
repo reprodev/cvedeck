@@ -6,6 +6,15 @@ All notable changes to the **CveDeck** project are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The interface-structure diagram in the methodology document did not render
+  on GitHub.** Its arrows pointed at `Drill-Down Workspace`, a subgraph title
+  containing spaces rather than a node mermaid can link to, so GitHub showed a
+  parse error in its place. The subgraphs now have IDs. All five diagrams in the
+  document were checked with mermaid's own parser, which reproduced GitHub's
+  exact error before the fix and accepts every diagram after it.
+
 ---
 
 ## [0.6.0] - 2026-09-13

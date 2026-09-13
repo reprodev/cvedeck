@@ -766,20 +766,20 @@ functional domains:
 graph TD
     Root[Operator Interface]
     
-    subgraph Workspaces
+    subgraph Workspaces[Workspaces]
         Fleet[📊 Fleet Overview]
         Scan[🚀 New Scan Workspace]
         Disc[🔍 Network Discovery]
     end
     
-    subgraph Fleet Triage Layer
+    subgraph Triage[Fleet Triage Layer]
         T1[🚨 Critical P0 Filter]
         T2[⚠️ High Risk Filter]
         T3[⏳ Stale Scan Detection]
         T4[🆕 Enrolled Baseline Filter]
     end
     
-    subgraph Drill-Down Workspace
+    subgraph DrillDown[Drill-Down Workspace]
         D1[🛡️ Vulnerability Findings & Modal Inspector]
         D2[📋 Overview & 1-Click Fix Plan]
         D3[🌳 Blast Radius & Reverse Dependency Map]
@@ -791,8 +791,8 @@ graph TD
     Root --> Disc
     
     Fleet --> T1 & T2 & T3 & T4
-    Fleet -->|Select Host| Drill-Down Workspace
-    Drill-Down Workspace --> D1 & D2 & D3 & D4
+    Fleet -->|Select Host| DrillDown
+    DrillDown --> D1 & D2 & D3 & D4
 ```
 
 ### A. Triaging Rationale
