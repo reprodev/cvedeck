@@ -10,7 +10,12 @@
 # ---------------------------------------------------------------------------
 # Stage 1: build the frontend
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS frontend
+# Built once, on the build machine's own architecture, whatever platform the
+# image targets. The output is static HTML, CSS and JavaScript -- identical for
+# amd64 and arm64 -- so there is nothing to gain from building it under qemu,
+# and a lot to lose: the v0.7.0 release hung for over an hour when `npm ci`
+# crashed with "Illegal instruction" under arm64 emulation and never exited.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend
 
 WORKDIR /build
 
@@ -36,14 +41,18 @@ RUN apt-get update \
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
 # Install pinned dependencies before the source so code changes do not
 # invalidate the dependency layer.
+# pip itself is pinned, like everything else in the image: the base image
+# ships whatever pip was current when it was built.
 COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir pip==26.2.1 \
+    && pip install --no-cache-dir -r requirements.txt
 
 COPY backend/pyproject.toml backend/README.md backend/alembic.ini ./
 COPY backend/app ./app

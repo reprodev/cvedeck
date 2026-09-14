@@ -8,6 +8,34 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.7.1] - 2026-09-14
+
+The first published image with built-in login. 0.7.0 was tagged, but its image
+build hung and was cancelled, so no 0.7.0 image or release was ever published;
+everything listed under 0.7.0 below ships in this release. Read its
+**Upgrading** notes before moving from 0.6.0.
+
+### Fixed
+
+- **The release image build hung.** Building the arm64 image ran `npm ci` under
+  qemu emulation, where Node crashed with "Illegal instruction" and never
+  exited, so the v0.7.0 release ran for over an hour without publishing
+  anything. The frontend is now built once on the build machine's own
+  architecture -- its output is static files, the same for every platform --
+  and copied into both images. A local arm64 build now takes about three
+  minutes.
+
+### Changed
+
+- **GitHub Actions run on Node 24.** Every action moved to its current major
+  version (`checkout` v7, `setup-python` v7, `setup-node` v7, and the Docker
+  actions to v4/v6/v7), ahead of Node 20 being removed from the runners. CI
+  tests the frontend on Node 24, and the image builds it with `node:24-alpine`.
+- **pip is pinned in the image** (26.2.1) rather than left at whatever the base
+  image shipped, and its update notice is switched off.
+
+---
+
 ## [0.7.0] - 2026-09-14
 
 Login is built in. Every endpoint used to be open to anyone who could reach the
