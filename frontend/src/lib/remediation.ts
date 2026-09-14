@@ -200,15 +200,27 @@ export function getDistroTooling(
 /**
  * Extract the bare package name from an identifier.
  *
- * Prefer the backend's `packageName` field; this exists for findings stored
- * before that field was added.
+ * Prefer the backend's `packageName` field; this exists for findings served
+ * by an older backend, and must agree with backend/app/package_identifier.py.
+ *
+ * Identifiers are `<ecosystem>:<name>@<version>`, and both the ecosystem
+ * (`Debian:13`, `Ubuntu:22.04:LTS`) and the version (an epoch, `1:5.2`) can
+ * contain colons, and the `Red Hat` ecosystem contains a space. So the version is removed first, from the last `@`, and the
+ * name is what follows the last remaining colon. Doing either step the other
+ * way round produced `13:openssl` or `5.2`, and a fix command apt rejects.
  */
 export function parsePackageName(packageIdentifier: string | null): string | null {
   if (!packageIdentifier || !packageIdentifier.trim()) return null;
-  let token = packageIdentifier.trim().split(/\s+/)[0];
-  if (token.includes(":")) token = token.slice(token.lastIndexOf(":") + 1);
-  if (token.includes("@")) token = token.slice(0, token.indexOf("@"));
-  return token.trim() || null;
+  let token = packageIdentifier.trim();
+  // Cut the "(fixed in ...)" note at its marker, not at the first space:
+  // "Red Hat" is an ecosystem, and splitting on whitespace reduced it to "Red".
+  const note = token.indexOf(" (");
+  if (note !== -1) token = token.slice(0, note);
+  const at = token.lastIndexOf("@");
+  // An "@" straight after the ecosystem's colon is an npm scope, not a version.
+  if (at > 0 && token[at - 1] !== ":") token = token.slice(0, at);
+  const name = token.slice(token.lastIndexOf(":") + 1).trim();
+  return name || null;
 }
 
 /** The package a finding affects, preferring the structured field. */

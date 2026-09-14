@@ -135,6 +135,25 @@ describe("parsePackageName", () => {
     ).toBe("openssl");
   });
 
+  // The same cases as backend/tests/test_package_identifier.py, so the two
+  // parsers cannot drift apart. Found on a real Debian 13 host, where every fix
+  // command asked apt for "13:openssl".
+  it.each([
+    ["Debian:13:7zip@25.01+dfsg-1 (fixed in 25.01+dfsg-2)", "7zip"],
+    ["Debian:13:python3.13@3.13.5-2", "python3.13"],
+    ["Debian:13:netplan.io@1.1.2-2", "netplan.io"],
+    ["Ubuntu:22.04:LTS:openssl@3.0.2-0ubuntu1.10", "openssl"],
+    ["Alpine:v3.20:busybox@1.36.1-r29 (fixed in 1.36.1-r30)", "busybox"],
+    ["Debian:13:bash@1:5.2.37-2 (fixed in 1:5.2.37-3)", "bash"],
+    ["Red Hat:openssl@1:3.0.7-27.el9", "openssl"],
+    ["Red Hat:openssl@1:3.0.7-27.el9 (fixed in 1:3.0.7-28.el9)", "openssl"],
+    ["deb:curl@7.81.0", "curl"],
+    ["npm:@scope/pkg@1.0.0", "@scope/pkg"],
+    ["npm:@scope/pkg", "@scope/pkg"],
+  ])("reads %s as %s", (identifier, expected) => {
+    expect(parsePackageName(identifier)).toBe(expected);
+  });
+
   it("returns null for empty input", () => {
     expect(parsePackageName(null)).toBeNull();
     expect(parsePackageName("   ")).toBeNull();
@@ -181,6 +200,25 @@ describe("buildBulkFixScript", () => {
     makeFinding({ cveId: "CVE-3", packageName: "curl", hasFix: true }),
     makeFinding({ cveId: "CVE-4", packageName: "linux", hasFix: false }),
   ];
+
+  it("names real packages for a versioned ecosystem, with or without the backend's name", () => {
+    // The Debian 13 host plan read "apt install --only-upgrade 13:7zip 13:acl ...".
+    const debian = [
+      makeFinding({
+        cveId: "CVE-A",
+        packageIdentifier: "Debian:13:openssl@3.5.1-1 (fixed in 3.5.1-2)",
+        hasFix: true,
+      }),
+      makeFinding({
+        cveId: "CVE-B",
+        packageIdentifier: "Debian:13:bash@1:5.2.37-2 (fixed in 1:5.2.37-3)",
+        hasFix: true,
+      }),
+    ];
+    const script = buildBulkFixScript(debian, "linux", "Debian GNU/Linux 13");
+    expect(script).toContain("sudo apt install --only-upgrade bash openssl");
+    expect(script).not.toMatch(/13:/);
+  });
 
   it("deduplicates packages and sorts them", () => {
     // A host commonly has a dozen CVEs against one openssl; a dozen identical

@@ -25,7 +25,6 @@ import {
   findingPackageName,
   getDistroTooling,
   hasFix as findingHasFix,
-  parsePackageName,
 } from "../lib/remediation";
 import { useClipboard } from "../lib/useClipboard";
 import { remediationStatusLabel, severityLabel } from "../lib/labels";
@@ -244,7 +243,7 @@ export function MachineDrillDownView({
     >();
 
     for (const f of findings) {
-      const pkgName = parsePackageName(f.packageIdentifier) ?? "OS / System";
+      const pkgName = findingPackageName(f) ?? "OS / System";
       const existing = groups.get(pkgName);
       if (!existing) {
         groups.set(pkgName, {

@@ -32,6 +32,7 @@ from ..data.repository import MachineListEntry, Repository
 from ..data.schema import CveFinding, RemediationRecord, TargetMachine
 from ..enums import Severity
 from ..models import Package as DomainPackage
+from ..package_identifier import parse_package_name
 from ..services.enrichment import FindingEnricher
 from .dependencies import get_session
 from .schemas import (
@@ -70,19 +71,9 @@ def _to_machine_summary(entry: MachineListEntry) -> MachineSummary:
     )
 
 
-def _parse_pkg_name(pkg_identifier: str | None) -> str | None:
-    """Extract the base package name from a package_identifier string."""
-    if not pkg_identifier or not pkg_identifier.strip():
-        return None
-    tokens = pkg_identifier.strip().split()
-    if not tokens:
-        return None
-    ident = tokens[0]
-    if ":" in ident:
-        ident = ident.split(":", 1)[1]
-    if "@" in ident:
-        ident = ident.split("@", 1)[0]
-    return ident.strip() if ident.strip() else None
+# One parser for the whole backend; see app/package_identifier.py for why the
+# name is read from the right.
+_parse_pkg_name = parse_package_name
 
 
 def _build_dependency_maps(

@@ -8,6 +8,35 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.7.2] - 2026-09-14
+
+Fix commands name the right packages again. If a copied command or a host's
+remediation plan failed with "Unable to locate package", pull this release; no
+re-scan is needed, because package names are worked out when findings are read,
+not when they are stored.
+
+### Fixed
+
+- **Every fix command on Debian 12/13, Ubuntu, Alpine and RHEL hosts named
+  packages that do not exist.** Findings identify their package as
+  `<ecosystem>:<name>@<version>`, and the name was taken from after the *first*
+  colon. On a Debian 13 host, where the ecosystem is `Debian:13`, that made
+  `openssl` into `13:openssl`, so the host's remediation plan read
+  `sudo apt install --only-upgrade 13:7zip 13:acl ...` and apt refused every
+  package. The same name fed the per-finding **Copy fix** buttons and the CVE
+  detail view, so they were wrong too.
+
+  Two more cases broke the same way. A version with an epoch (`bash@1:5.2.37`)
+  turned the package name into part of the version in the **By Package** view,
+  and the `Red Hat` ecosystem, which contains a space, reduced every RHEL
+  package to `Red`.
+
+  The name is now read from the right: the `(fixed in ...)` note is removed, then
+  the version after the last `@`, and the name is what follows the last colon.
+  The backend and the dashboard share one set of test cases, taken from the
+  failing host, so the two parsers cannot drift apart again.
+
+
 ## [0.7.1] - 2026-09-14
 
 The first published image with built-in login. 0.7.0 was tagged, but its image

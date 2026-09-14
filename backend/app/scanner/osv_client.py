@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from app.models import Package
+from app.package_identifier import parse_package_name
 from app.scanner.matcher import RawAdvisory
 
 _DEFAULT_OSV_API_URL = "https://api.osv.dev/v1"
@@ -149,16 +150,7 @@ def _fixed_from_ranges(ranges: list[Any]) -> str | None:
     return None
 
 
-def _parse_pkg_name(pkg_identifier: str | None) -> str | None:
-    """Extract clean package name from package_identifier."""
-    if not pkg_identifier or not pkg_identifier.strip():
-        return None
-    token = pkg_identifier.strip().split()[0]
-    if ":" in token:
-        token = token.split(":", 1)[1]
-    if "@" in token:
-        token = token.split("@", 1)[0]
-    return token.strip() if token.strip() else None
+_parse_pkg_name = parse_package_name
 
 
 def _extract_fixed_version(

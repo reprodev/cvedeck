@@ -37,7 +37,7 @@ body:
       description: >-
         The badge beside the wordmark in the dashboard header, or
         `curl localhost:3325/api/health`.
-      placeholder: 0.7.1
+      placeholder: 0.7.2
     validations:
       required: true
 
