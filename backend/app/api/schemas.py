@@ -87,6 +87,18 @@ class CveFindingOut(BaseModel):
     #: Whether an actionable fix exists. Clients previously determined this by
     #: searching the identifier for the substring "fixed in".
     has_fix: bool = False
+    #: How the finding can be fixed on this host (Req 14.7, 14.8):
+    #: ``available`` -- the host's own release ships ``fixed_version``;
+    #: ``newer_release`` -- only ``fix_release`` (a newer release, or Ubuntu Pro)
+    #: ships a fix, so upgrading packages cannot clear it;
+    #: ``upstream`` -- ``fix_release`` has a fix, but the host's release could not
+    #: be matched, so availability is unconfirmed;
+    #: ``none`` -- no fix is published.
+    fix_status: str = "none"
+    #: The release that has the fix, for ``newer_release`` and ``upstream``.
+    fix_release: str | None = None
+    #: The fixed version in that release.
+    fix_release_version: str | None = None
     remediation_status: RemediationStatus | None = None
     remediation_record_id: str | None = None
     remediation_note: str | None = None

@@ -127,7 +127,7 @@ offline. Enrichment therefore adds no network dependency to a scan.
 ```
 
 1. **Tier 1: Actionable Security Update:**
-   - **Condition:** An advisory applies to the package version AND the target release's event range contains an explicit `fixed: <version>` that is newer than the installed package.
+   - **Condition:** An advisory applies to the package version AND the entry for the **host's own release** contains an explicit `fixed: <version>`. An entry for any other release -- older, newer, or another product -- never qualifies (Req 14.8).
    - **UI Indicator:** `📦 deb:curl@8.5.0-2ubuntu10 (fixed in 8.5.0-2ubuntu10.6)`
    - **Wire representation:** The API exposes `package_name`, `fixed_version`, and `has_fix` as structured fields. Clients must use those rather than searching the identifier for the substring `"fixed in"` -- doing so made the exact wording of a human-readable display string an unversioned API contract, and it was being done in nine separate places.
    - **Action:** Displays a `[📋 Copy fix]` button whose command is chosen from the **target machine's** platform and OS (`apt`, `dnf`, `apk`, `pacman`, `zypper`, `winget`), never inferred from the package name. A bulk "fix plan" copies one deduplicated script covering every fixable package on the host. Commands are generated for the operator to review and run; CveDeck never executes anything on a target.
@@ -135,6 +135,8 @@ offline. Enrichment therefore adds no network dependency to a scan.
    - **Condition:** An advisory is acknowledged by the OS vendor (e.g. Canonical or Debian), but no fixed build has been released to the repository yet.
    - **UI Indicator:** `⏳ Pending vendor patch`
    - **Action:** Suppresses the upgrade copy button (prevents running commands that would result in `0 upgraded`).
+   - **Fixed only in a newer release (Req 14.8):** when the host's release has no fix but a newer one does -- Debian 14 for a Debian 13 host, or Ubuntu Pro for an Ubuntu LTS -- the finding is labelled `Fixed only in Debian 14`, the drill-down says how many findings are in that position, and the fix plan lists them in a comment rather than in the upgrade command. Upgrading packages cannot clear them; upgrading the distribution does, or the release publishing the fix. Before 0.7.3 such fixes were counted as Tier 1 and put into the plan, where apt had nothing to install and every re-scan found them again.
+   - **Upstream fix, unconfirmed:** when the host's release cannot be matched to the advisory at all (Fedora, Amazon Linux and SUSE, which have no per-release OSV data, or a derivative), a fix elsewhere is shown as `Upstream fix in RHEL 9` and never offered as a command.
 3. **Tier 3: Remediated / Not Vulnerable:**
    - **Condition:** The host package version is equal to or greater than the fixed version.
    - **Action:** The finding is automatically cleared and archived upon re-scan.
@@ -192,6 +194,17 @@ To guarantee comprehensive vulnerability discovery across any Linux flavor (stan
 **Every name in that list must be one OSV actually accepts.** `/querybatch` rejects the *entire batch* with HTTP 400 when a single query names an unknown ecosystem (`error in query at index N: invalid ecosystem`), and the client's error path then falls back to querying each item individually. The failure is therefore invisible: results stay correct while batching -- the whole point of the two-phase design -- silently stops working, turning ~20 batched requests into ~10,000 individual ones on a 1,000-package host.
 
 `Arch Linux` and `Fedora` were both in this list and are both invalid, so the universal fallback never batched successfully until this was found. Distributions with no OSV tracker of their own (Oracle Linux, Amazon Linux, Fedora, Arch) resolve onto the upstream they derive from rather than being queried under a name OSV will reject.
+
+#### Release-specific matching (Req 14.7)
+
+OSV describes a Linux vulnerability once per distribution release, each with its own fix. Asking OSV about a whole distribution compares the installed version against *every* release's fix, so a fully patched Debian 13 `curl` came back "vulnerable" to anything Debian 14 fixed at a higher version number: 49 advisories when asked about `Debian`, 25 when asked about `Debian:13`.
+
+The collector therefore records the release wherever OSV tracks one -- `Debian:13`, `Ubuntu:24.04:LTS` or `Ubuntu:25.10` (including derivatives via `UBUNTU_CODENAME`), `Alpine:v3.20`, `AlmaLinux:9`, `Rocky Linux:9`, `Red Hat:9`, `openSUSE:Leap 15.6` -- and each package is asked about twice in the same batch: the distribution as a whole, which is the superset and never misses anything, and the release on its own (`Red Hat:enterprise_linux:9::baseos`, `appstream` and `crb` for RHEL and its rebuilds). An advisory is then dropped only when:
+
+- it has an entry for the host's release and OSV did not match the installed version there, or
+- it names the host's distribution but none of its releases -- a Debian advisory listing only Debian 14, or a Red Hat advisory for another product -- **and** the release demonstrably appears somewhere in the scan's advisories.
+
+Nothing is dropped when the release query failed, returned a paged (incomplete) answer, or names a release no advisory mentions: an end-of-life Ubuntu interim is answered with silence, and silence must not turn a host clean. `tests/test_release_matching.py` pins those cases, and the advisory shapes it uses are taken from the live entries that exposed the problem.
 
 Note also that `Red Hat` is queried **unversioned**. OSV *accepts* `Red Hat:9` and returns zero results for it, while `Red Hat` returns real findings for the same package -- so a version suffix here succeeds while silently losing every finding. This differs from `AlmaLinux:9` and `Rocky Linux:9`, which are both versioned and both work, which is exactly what makes the mistake easy to make. `tests/test_ecosystem_resolution.py` pins the valid and invalid sets.
 

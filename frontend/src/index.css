@@ -3120,3 +3120,36 @@ th {
     gap: var(--space-2);
   }
 }
+
+
+/* --- Fixes that live in another release (Req 14.8) --------------------------
+   Amber, not red: this is about what a package upgrade can reach, not about
+   exploitation. Worded as a notice, because the finding is real and the plan
+   is not broken -- the fix simply is not in this release yet. */
+.release-fix-notice {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius);
+  color: var(--warn-text);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.release-fix-notice > .icon {
+  flex: none;
+  margin-top: 0.15rem;
+}
+
+.fix-elsewhere {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--warn-text);
+}

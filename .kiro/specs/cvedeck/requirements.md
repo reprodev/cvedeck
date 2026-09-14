@@ -265,6 +265,19 @@ host it is for, so that copying it produces a command that works.
    through the wording of a display string.
 6. THE system SHALL generate remediation commands only, and SHALL NOT execute
    any command on a target (extends Req 4.5).
+7. WHEN matching a package on a host whose distribution release is known THEN
+   the system SHALL judge the vulnerability against that release, and SHALL NOT
+   report an advisory that describes the host's release without affecting the
+   installed version, or that describes the host's distribution but none of its
+   releases -- except WHERE the advisory source does not track that release, or
+   its answer is unavailable or incomplete, in which case the system SHALL NOT
+   drop the advisory on that basis.
+8. THE system SHALL offer a fix as installable, in a copied command or a host's
+   remediation plan, only WHERE the host's own release publishes it. WHERE only a
+   newer release or a subscription stream publishes a fix, the system SHALL name
+   that release and state that upgrading packages cannot clear the finding; WHERE
+   the host's release cannot be matched to the advisory, the system SHALL report
+   the fix as upstream and unconfirmed for the host.
 
 ### Requirement 15: Public demonstration mode
 

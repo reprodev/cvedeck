@@ -18,6 +18,8 @@ so tests never touch a real host.
 
 from __future__ import annotations
 
+import re
+
 import io
 import socket
 from datetime import datetime, timezone
@@ -30,6 +32,7 @@ from app.enums import Platform
 from app.models import Credentials, Inventory, OsInfo, Package, TargetMachine
 
 from .exceptions import AuthError
+from .releases import UBUNTU_CODENAMES, ubuntu_ecosystem
 
 # Default remoting ports.
 _SSH_PORT = 22
@@ -309,12 +312,27 @@ def _parse_os_release(output: str) -> tuple[OsInfo, str]:
     name = fields.get("NAME") or fields.get("PRETTY_NAME") or "unknown"
     version = version_id or fields.get("VERSION") or "unknown"
 
-    # Derive accurate OSV ecosystem from distribution identity
+    # Derive the OSV ecosystem, including the release wherever OSV tracks one
+    # (Req 14.7). Advisories list a separate fix per release, so a host recorded
+    # only as "Debian" is matched against every Debian release's fixes.
     if "ubuntu" in distro_id or "ubuntu" in distro_like:
-        eco = f"Ubuntu:{version_id}:LTS" if version_id in ("20.04", "22.04", "24.04") else "Ubuntu"
-    elif "debian" in distro_id or "debian" in distro_like or "raspbian" in distro_id:
+        # Any YY.04 / YY.10 release, not a fixed list: 26.04 LTS was missing from
+        # the old one and silently fell back to unversioned matching. A
+        # derivative (Linux Mint, elementary OS) has its own VERSION_ID, and
+        # names the Ubuntu release it is built on in UBUNTU_CODENAME instead.
+        ubuntu_version = version_id if distro_id == "ubuntu" else ""
+        if not ubuntu_ecosystem(ubuntu_version):
+            ubuntu_version = UBUNTU_CODENAMES.get(fields.get("UBUNTU_CODENAME", "").lower(), "")
+        if not ubuntu_ecosystem(ubuntu_version) and ubuntu_ecosystem(version_id):
+            ubuntu_version = version_id  # Pop!_OS uses Ubuntu's own numbering
+        eco = ubuntu_ecosystem(ubuntu_version) or "Ubuntu"
+    elif distro_id in ("debian", "raspbian"):
         major = version_id.split(".")[0] if version_id else ""
-        eco = f"Debian:{major}" if major else "Debian"
+        eco = f"Debian:{major}" if major.isdigit() else "Debian"
+    elif "debian" in distro_like:
+        # A Debian derivative's VERSION_ID is its own (Kali's is 2025.2), not a
+        # Debian release, so it is not turned into one.
+        eco = "Debian"
     elif "almalinux" in distro_id:
         major = version_id.split(".")[0] if version_id else "9"
         eco = f"AlmaLinux:{major}"
@@ -340,14 +358,21 @@ def _parse_os_release(output: str) -> tuple[OsInfo, str]:
     # openSUSE must be tested before SLES: "opensuse-leap" contains "suse",
     # so the enterprise branch would otherwise swallow the community distro.
     elif "opensuse" in distro_id:
-        eco = "openSUSE"
+        if "tumbleweed" in distro_id:
+            eco = "openSUSE:Tumbleweed"
+        elif "leap" in distro_id and re.fullmatch(r"\d+\.\d+", version_id):
+            eco = f"openSUSE:Leap {version_id}"
+        else:
+            eco = "openSUSE"
     elif "sles" in distro_id or "sled" in distro_id or "suse" in distro_id:
         eco = f"SUSE:{version_id}" if version_id else "SUSE"
     elif "rhel" in distro_id or "redhat" in distro_id or "centos" in distro_id:
-        # Unversioned on purpose: OSV's Red Hat ecosystem accepts a version
-        # suffix but returns nothing for it, so "Red Hat:9" silently loses
-        # every finding that "Red Hat" would have matched.
-        eco = "Red Hat"
+        # The major version is recorded, but never sent to OSV as "Red Hat:9",
+        # which OSV accepts and answers with nothing. The resolver still queries
+        # "Red Hat"; app.scanner.releases adds the per-release repositories
+        # (Red Hat:enterprise_linux:9::baseos) that OSV does describe.
+        major = version_id.split(".")[0] if version_id else ""
+        eco = f"Red Hat:{major}" if major.isdigit() else "Red Hat"
     elif "wolfi" in distro_id:
         eco = "Wolfi"
     # Deliberately not "deb": silently assuming Debian on an unrecognized

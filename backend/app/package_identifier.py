@@ -22,6 +22,8 @@ unambiguous for every identifier the matcher produces.
 
 from __future__ import annotations
 
+import re
+
 
 def parse_package_name(package_identifier: str | None) -> str | None:
     """The bare package name, or ``None`` when there is none to extract."""
@@ -37,3 +39,31 @@ def parse_package_name(package_identifier: str | None) -> str | None:
         token = token[:at]
     name = token.rsplit(":", 1)[-1].strip()
     return name or None
+
+
+_ELSEWHERE = re.compile(r"\(no fix in (?P<host>.+?); fixed only in (?P<label>.+): (?P<version>\S+)\)\s*$")
+_UPSTREAM = re.compile(r"\(not confirmed for this release; upstream fix in (?P<label>.+): (?P<version>\S+)\)\s*$")
+_AVAILABLE = re.compile(r"\(fixed in (?P<version>[^)\s]+)\)\s*$")
+
+
+def parse_fix(package_identifier: str | None) -> tuple[str, str | None, str | None]:
+    """How a finding can be fixed, from the note the matcher wrote (Req 14.7, 14.8).
+
+    Returns ``(status, release, version)``:
+
+    - ``("available", None, V)`` -- the host's own release ships V.
+    - ``("newer_release", "Debian 14", V)`` -- only a newer release (or a
+      subscription stream such as Ubuntu Pro) ships a fix. Upgrading packages
+      cannot clear it.
+    - ``("upstream", "RHEL 9", V)`` -- a fix exists, but the host's release could
+      not be matched to the advisory, so whether it is available is unconfirmed.
+    - ``("none", None, None)`` -- no fix is published.
+    """
+    text = (package_identifier or "").strip()
+    if m := _AVAILABLE.search(text):
+        return "available", None, m.group("version")
+    if m := _ELSEWHERE.search(text):
+        return "newer_release", m.group("label"), m.group("version")
+    if m := _UPSTREAM.search(text):
+        return "upstream", m.group("label"), m.group("version")
+    return "none", None, None

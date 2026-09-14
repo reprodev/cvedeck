@@ -13,7 +13,10 @@ import { useDialogA11y } from "./Modal";
 import { useToast } from "./Toast";
 import { useClipboard } from "../lib/useClipboard";
 import {
+  findingFix,
   findingPackageName,
+  fixElsewhereExplanation,
+  fixElsewhereLabel,
   getDistroTooling,
   hasFix as findingHasFix,
 } from "../lib/remediation";
@@ -58,6 +61,8 @@ export function CveDetailModal({
   const cveId = finding.cveId;
   const pkgName = findingPackageName(finding) ?? "OS / Component";
   const hasFix = findingHasFix(finding);
+  const fix = findingFix(finding);
+  const elsewhereLabel = fixElsewhereLabel(fix);
   const dependedOnBy = finding.dependedOnBy ?? [];
   const isLeaf = dependedOnBy.length === 0;
   const tooling = getDistroTooling(platform, osName, finding.packageIdentifier);
@@ -90,6 +95,8 @@ export function CveDetailModal({
             </span>
             {hasFix ? (
               <span className="badge badge-status-success"><Icon name="wrench" /> Vendor Patch Available</span>
+            ) : elsewhereLabel ? (
+              <span className="fix-elsewhere"><Icon name="alert" /> {elsewhereLabel}</span>
             ) : (
               <span className="badge badge-platform"><Icon name="clock" /> Awaiting Upstream Vendor Build</span>
             )}
@@ -189,9 +196,16 @@ export function CveDetailModal({
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                  <div style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
-                    No standard package update has been published by the distribution maintainer yet. Choose an alternative mitigation:
-                  </div>
+                  {elsewhereLabel ? (
+                    <div className="release-fix-notice" role="note">
+                      <Icon name="alert" />
+                      <div>{fixElsewhereExplanation(fix)}</div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
+                      No standard package update has been published by the distribution maintainer yet. Choose an alternative mitigation:
+                    </div>
+                  )}
 
                   {isLeaf && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", background: "var(--surface-muted)", padding: "0.5rem 0.75rem", borderRadius: "6px" }}>

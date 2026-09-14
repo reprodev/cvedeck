@@ -98,3 +98,44 @@ def test_the_api_serves_the_real_package_name_for_a_versioned_ecosystem():
     assert by_cve["CVE-2025-0001"]["fixed_version"] == "3.5.1-2"
     assert by_cve["CVE-2025-0002"]["package_name"] == "bash"
     assert by_cve["CVE-2025-0002"]["fixed_version"] == "1:5.2.37-3"
+
+
+def test_the_api_reports_where_a_fix_is_for_each_kind_of_note():
+    """Validates Req 14.7, 14.8: fixable, newer-release-only, upstream, none."""
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    notes = {
+        "CVE-2026-0001": "Debian:13:curl@8.14.1-2+deb13u5 (fixed in 8.14.1-2+deb13u6)",
+        "CVE-2025-10966": "Debian:13:curl@8.14.1-2+deb13u5 (no fix in Debian 13; fixed only in Debian 14: 8.17.0~rc2-1)",
+        "CVE-2026-0002": "Fedora:curl@8.6.0-10.fc40 (not confirmed for this release; upstream fix in RHEL 9: 7.76.1-29.el9)",
+        "CVE-2026-0003": "Debian:13:curl@8.14.1-2+deb13u5",
+    }
+    with Session(engine) as session:
+        session.add(
+            TargetMachine(
+                id="m1", hostname="host.example.com", platform=Platform.LINUX,
+                last_scan_status=ScanStatus.SUCCESS, sync_status=SyncStatus.SYNCED,
+            )
+        )
+        Repository(session).save_findings(
+            "m1",
+            [
+                FindingInput(cve_id=cve, cvss_score=7.5, severity=Severity.HIGH, source="osv", package_identifier=note)
+                for cve, note in notes.items()
+            ],
+        )
+        session.commit()
+        app = override_auth(create_app())
+        app.dependency_overrides[get_session] = lambda: session
+        body = {f["cve_id"]: f for f in TestClient(app).get("/api/machines/m1/cves").json()}
+
+    def fix(cve):
+        f = body[cve]
+        return (f["fix_status"], f["has_fix"], f["fixed_version"], f["fix_release"], f["fix_release_version"], f["package_name"])
+
+    assert fix("CVE-2026-0001") == ("available", True, "8.14.1-2+deb13u6", None, None, "curl")
+    assert fix("CVE-2025-10966") == ("newer_release", False, None, "Debian 14", "8.17.0~rc2-1", "curl")
+    assert fix("CVE-2026-0002") == ("upstream", False, None, "RHEL 9", "7.76.1-29.el9", "curl")
+    assert fix("CVE-2026-0003") == ("none", False, None, None, None, "curl")

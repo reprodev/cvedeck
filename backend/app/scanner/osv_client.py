@@ -19,6 +19,13 @@ import httpx
 from app.models import Package
 from app.package_identifier import parse_package_name
 from app.scanner.matcher import RawAdvisory
+from app.scanner.releases import (
+    Release,
+    host_releases,
+    in_family,
+    parse_release,
+    release_query_ecosystems,
+)
 
 _DEFAULT_OSV_API_URL = "https://api.osv.dev/v1"
 _DEFAULT_TIMEOUT = 15.0
@@ -153,64 +160,129 @@ def _fixed_from_ranges(ranges: list[Any]) -> str | None:
 _parse_pkg_name = parse_package_name
 
 
-def _extract_fixed_version(
-    vuln: dict[str, Any], package: Package, ecosystem: str
-) -> str | None:
-    """Find the package fix version for the target ecosystem."""
-    affected_list = vuln.get("affected") or []
-    if not isinstance(affected_list, list):
-        return None
-
-    target_eco = (ecosystem or package.ecosystem or "").lower()
-    pkg_name = package.name.lower()
-    pkg_version = package.version
-
-    # Filter affected records matching package name and ecosystem
-    matching_affs: list[dict[str, Any]] = []
-    for aff in affected_list:
+def _package_blocks(vuln: dict[str, Any], package: Package) -> list[dict[str, Any]]:
+    """The advisory's affected entries for this package, whatever the release."""
+    name = package.name.lower()
+    blocks = []
+    for aff in vuln.get("affected") or []:
         if not isinstance(aff, dict):
             continue
-        aff_pkg_name = str(aff.get("package", {}).get("name", "")).lower()
-        if aff_pkg_name and aff_pkg_name != pkg_name:
+        aff_name = str((aff.get("package") or {}).get("name", "")).lower()
+        if aff_name and aff_name != name:
             continue
-        aff_eco = str(aff.get("package", {}).get("ecosystem", "")).lower()
-        if (
-            not target_eco
-            or not aff_eco
-            or target_eco in aff_eco
-            or aff_eco in target_eco
-            or (target_eco.startswith("deb") and ("ubuntu" in aff_eco or "debian" in aff_eco))
-            or (target_eco.startswith("ubuntu") and "ubuntu" in aff_eco)
-            or (target_eco.startswith("debian") and "debian" in aff_eco)
-            or (target_eco.startswith("alpine") and "alpine" in aff_eco)
-            or (target_eco.startswith("almalinux") and ("almalinux" in aff_eco or "red hat" in aff_eco or "rhel" in aff_eco))
-            or (target_eco.startswith("rocky") and ("rocky" in aff_eco or "red hat" in aff_eco or "rhel" in aff_eco))
-            or (target_eco.startswith("oracle") and ("oracle" in aff_eco or "red hat" in aff_eco or "rhel" in aff_eco))
-            or (target_eco.startswith("amazon") and ("amazon" in aff_eco or "red hat" in aff_eco or "rhel" in aff_eco))
-            or (target_eco.startswith("suse") and ("suse" in aff_eco or "opensuse" in aff_eco))
-            or (target_eco.startswith("red hat") and ("red hat" in aff_eco or "almalinux" in aff_eco or "rocky" in aff_eco or "oracle" in aff_eco or "rhel" in aff_eco))
-            or (target_eco.startswith("fedora") and ("fedora" in aff_eco or "red hat" in aff_eco))
-            or (target_eco.startswith("opensuse") and ("opensuse" in aff_eco or "suse" in aff_eco))
-        ):
-            matching_affs.append(aff)
+        blocks.append(aff)
+    return blocks
 
-    # 1. Best match: where installed version is explicitly in versions
-    for aff in matching_affs:
-        versions = aff.get("versions") or []
-        if pkg_version in versions:
-            fixed = _fixed_from_ranges(aff.get("ranges") or [])
+
+def _block_ecosystem(block: dict[str, Any]) -> str:
+    return str((block.get("package") or {}).get("ecosystem", ""))
+
+
+def describes_release(
+    vuln: dict[str, Any], package: Package, release_ecosystems: set[str]
+) -> bool:
+    """Whether the advisory has an entry for one of the host's queried releases."""
+    return any(
+        _block_ecosystem(b).lower() in release_ecosystems for b in _package_blocks(vuln, package)
+    )
+
+
+def _covers_family_but_not_release(
+    vuln: dict[str, Any], package: Package, host: list[Release]
+) -> bool:
+    """Whether the advisory names the host's distribution but none of its releases."""
+    blocks = [_block_ecosystem(b) for b in _package_blocks(vuln, package)]
+    families = {h.family for h in host}
+    covers = any(in_family(eco, family) for eco in blocks for family in families)
+    if not covers:
+        return False
+    for eco in blocks:
+        release = parse_release(eco)
+        if release and any(release.family == h.family and release.key == h.key for h in host):
+            return False
+    return True
+
+
+# Marker text written after a package identifier. None of the three "elsewhere"
+# forms contain the words "fixed in", which older dashboards still search for to
+# decide that a fix is available. Parsed back by app/package_identifier.py.
+ELSEWHERE_MARKER = "; fixed only in "
+UPSTREAM_MARKER = "(not confirmed for this release; upstream fix in "
+
+
+def fix_suffix(
+    vuln: dict[str, Any],
+    package: Package,
+    queried_ecosystem: str,
+    release_ecosystems: set[str],
+) -> str:
+    """What to say about a fix for this package on this host (Req 14.7, 14.8).
+
+    - `` (fixed in V)`` -- the host's own release has a fix. Only this form is
+      offered as an upgrade command.
+    - `` (no fix in Debian 13; fixed only in Debian 14: V)`` -- the host's
+      release is tracked and has no fix, but a newer release (or Ubuntu Pro)
+      does. Upgrading the distribution, or waiting, is the only way to clear it.
+    - `` (not confirmed for this release; upstream fix in RHEL 9: V)`` -- the
+      host's release cannot be matched to the advisory (Fedora, Amazon Linux,
+      SUSE, a derivative), so a fix exists somewhere but may not be available.
+    - nothing -- no fix is published anywhere.
+
+    A fix from a release other than the host's own is never presented as
+    installable: that is what put Debian 14 fixes into a Debian 13 host's plan.
+    """
+    blocks = _package_blocks(vuln, package)
+    fixes = [(b, _fixed_from_ranges(b.get("ranges") or [])) for b in blocks]
+    host = host_releases(package.ecosystem or "")
+
+    def same_release(block_eco: str) -> bool:
+        if block_eco.lower() in release_ecosystems:
+            return True
+        release = parse_release(block_eco)
+        return bool(
+            release
+            and not release.subscription
+            and any(release.family == h.family and release.key == h.key for h in host)
+        )
+
+    own = [(b, f) for b, f in fixes if same_release(_block_ecosystem(b))]
+    if own:
+        for _b, fixed in own:
             if fixed:
-                return fixed
-            # If the matching version block has no fixed event, no fix has been released
-            return None
+                return f" (fixed in {fixed})"
+        # The host's release is described and unfixed. A newer release, or a
+        # subscription stream for the same release, may still have the fix.
+        newer = []
+        for b, fixed in fixes:
+            release = parse_release(_block_ecosystem(b))
+            if not (fixed and release):
+                continue
+            for h in host:
+                if release.family != h.family:
+                    continue
+                if release.subscription and release.key == h.key:
+                    newer.append(((1, release.key), release.label, fixed))
+                elif not release.subscription and release.key > h.key:
+                    newer.append(((0, release.key), release.label, fixed))
+        if newer:
+            _order, label, fixed = min(newer)
+            return f" (no fix in {host[0].label}{ELSEWHERE_MARKER}{label}: {fixed})"
+        return ""
 
-    # 2. Match first matching package block with a fix
-    for aff in matching_affs:
-        fixed = _fixed_from_ranges(aff.get("ranges") or [])
+    if not host:
+        # No release to reason about. A rolling distribution's entry names the
+        # ecosystem exactly ("Wolfi"), and its fix is the host's fix.
+        for b, fixed in fixes:
+            if fixed and _block_ecosystem(b).lower() == queried_ecosystem.lower():
+                return f" (fixed in {fixed})"
+
+    for b, fixed in fixes:
         if fixed:
-            return fixed
-
-    return None
+            eco = _block_ecosystem(b)
+            release = parse_release(eco)
+            label = release.label if release else (eco or queried_ecosystem)
+            return f" {UPSTREAM_MARKER}{label}: {fixed})"
+    return ""
 
 
 # Ecosystem names OSV.dev actually accepts. Verified against the live API:
@@ -238,6 +310,43 @@ _ALL_LINUX_ECOSYSTEMS: list[str] = [
     "Chainguard",
     "Wolfi",
 ]
+
+
+def _cache_key(pkg: Package) -> str:
+    return f"{pkg.ecosystem}:{pkg.name}:{pkg.version}"
+
+
+def _pair_key(item: tuple[Package, str]) -> tuple[str, str]:
+    return (_cache_key(item[0]), item[1])
+
+
+def _release_ids(
+    packages: list[Package],
+    items: list[tuple[Package, str]],
+    matched: dict[tuple[str, str], set[str] | None],
+) -> dict[str, tuple[set[str], set[str] | None]]:
+    """Per package: its release-specific ecosystems, and the ids matched there.
+
+    A query ecosystem counts as release-specific when it names a release
+    (``Debian:13``, ``AlmaLinux:9``, ``Alpine:v3.20``). If any of those queries
+    failed, the matched ids are ``None``, so nothing is dropped for that package.
+    """
+    out: dict[str, tuple[set[str], set[str] | None]] = {}
+    by_key = {_cache_key(p): p for p in packages}
+    for pkg_key in by_key:
+        ecos: set[str] = set()
+        ids: set[str] | None = set()
+        for pkg, eco in items:
+            if _cache_key(pkg) != pkg_key or parse_release(eco) is None:
+                continue
+            ecos.add(eco.lower())
+            found = matched.get((pkg_key, eco))
+            if found is None or ids is None:
+                ids = None
+            else:
+                ids |= found
+        out[pkg_key] = (ecos, ids if ecos else None)
+    return out
 
 
 class OsvUnavailableError(RuntimeError):
@@ -293,12 +402,20 @@ class OsvHttpClient:
         if not uncached_packages:
             return self._deduplicate_findings(cached_results)
 
-        # Build candidate queries for uncached packages
+        # Build candidate queries for uncached packages. Each package is asked
+        # about its distribution as a whole (the superset, which never misses a
+        # vulnerability) and, where its release is known, about that release
+        # alone. The second answer is what removes advisories the host's own
+        # release already fixed (Req 14.7).
         query_items: list[tuple[Package, str]] = []
+        release_items: list[tuple[Package, str]] = []
         for pkg in uncached_packages:
             ecosystems = self._resolve_ecosystems(pkg)
             for eco in ecosystems:
                 query_items.append((pkg, eco))
+            for eco in release_query_ecosystems(pkg.ecosystem or ""):
+                if eco not in ecosystems:
+                    release_items.append((pkg, eco))
 
         if not query_items:
             return self._deduplicate_findings(cached_results)
@@ -318,14 +435,23 @@ class OsvHttpClient:
             should_close = True
 
         try:
-            vulnerable_queries = self._filter_vulnerable_queries(client, query_items)
+            vulnerable_all, matched_ids = self._filter_vulnerable_queries(
+                client, query_items + release_items
+            )
+            release_pairs = set(map(_pair_key, release_items))
+            vulnerable_queries = [
+                item for item in vulnerable_all if _pair_key(item) not in release_pairs
+            ]
+            release_ids = _release_ids(uncached_packages, query_items + release_items, matched_ids)
             if not vulnerable_queries:
                 # Cache negative matches to avoid re-querying safe packages
                 for p in uncached_packages:
                     self._advisory_cache[f"{p.ecosystem}:{p.name}:{p.version}"] = []
                 return self._deduplicate_findings(cached_results)
 
-            fetched = self._fetch_advisories(client, vulnerable_queries, uncached_packages)
+            fetched = self._fetch_advisories(
+                client, vulnerable_queries, uncached_packages, release_ids
+            )
             all_results = cached_results + fetched
             return self._deduplicate_findings(all_results)
         finally:
@@ -366,7 +492,11 @@ class OsvHttpClient:
             return _ALL_LINUX_ECOSYSTEMS
         if eco.startswith("SUSE"):
             return ["SUSE", "openSUSE"]
-        if eco in ("openSUSE", "Wolfi", "Chainguard"):
+        if eco.startswith("openSUSE"):
+            # Tumbleweed is rolling: its own entries are the host's. Leap is
+            # queried family-wide, with the release added by app.scanner.releases.
+            return [eco] if eco == "openSUSE:Tumbleweed" else ["openSUSE"]
+        if eco in ("Wolfi", "Chainguard"):
             return [eco]
         if eco.lower() == "windows":
             return ["Windows"]
@@ -411,9 +541,15 @@ class OsvHttpClient:
         self,
         client: httpx.Client,
         query_items: list[tuple[Package, str]],
-    ) -> list[tuple[Package, str]]:
-        """Batch query OSV to find which (package, ecosystem) pairs have findings."""
+    ) -> tuple[list[tuple[Package, str]], dict[tuple[str, str], set[str] | None]]:
+        """Batch query OSV to find which (package, ecosystem) pairs have findings.
+
+        Also returns the advisory ids each pair matched, keyed by
+        ``(package cache key, ecosystem)``. ``None`` means the batch failed and
+        the ids are unknown -- which must never be read as "matched nothing".
+        """
         vulnerable: list[tuple[Package, str]] = []
+        ids: dict[tuple[str, str], set[str] | None] = {}
         batch_url = f"{self._base_url}/querybatch"
 
         for i in range(0, len(query_items), _BATCH_CHUNK_SIZE):
@@ -432,31 +568,46 @@ class OsvHttpClient:
                 resp.raise_for_status()
                 data = resp.json()
                 results = data.get("results", [])
-                for idx, result in enumerate(results):
-                    if idx < len(chunk) and result.get("vulns"):
-                        vulnerable.append(chunk[idx])
+                for idx, item in enumerate(chunk):
+                    result = results[idx] if idx < len(results) else {}
+                    found = {
+                        str(v.get("id")) for v in (result or {}).get("vulns") or [] if v.get("id")
+                    }
+                    # A paged answer lists only some ids; treat the rest as
+                    # unknown rather than as "not matched".
+                    complete = not (result or {}).get("next_page_token")
+                    ids[(_cache_key(item[0]), item[1])] = found if complete else None
+                    if found:
+                        vulnerable.append(item)
             except Exception:
                 # If batch endpoint fails, fallback to querying the chunk items directly
                 for item in chunk:
+                    ids[(_cache_key(item[0]), item[1])] = None
                     vulnerable.append(item)
 
-        return vulnerable
+        return vulnerable, ids
 
     def _fetch_advisories(
         self,
         client: httpx.Client,
         vulnerable_queries: list[tuple[Package, str]],
         uncached_packages: list[Package],
+        release_ids: dict[str, tuple[set[str], set[str] | None]] | None = None,
     ) -> list[RawAdvisory]:
-        """Fetch full advisory details for vulnerable packages and populate cache."""
+        """Fetch full advisory details for vulnerable packages and populate cache.
+
+        ``release_ids`` maps a package to the release-specific ecosystems it was
+        asked about and the advisory ids OSV matched there (``None`` if unknown).
+        An advisory that describes one of those releases but was not matched in
+        it does not affect this host, and is dropped.
+        """
         query_url = f"{self._base_url}/query"
         package_advisories_map: dict[str, list[RawAdvisory]] = {
             f"{p.ecosystem}:{p.name}:{p.version}": [] for p in uncached_packages
         }
 
-        def _fetch_one(item: tuple[Package, str]) -> tuple[str, list[RawAdvisory]]:
+        def _fetch_one(item: tuple[Package, str]) -> tuple[tuple[Package, str], Any]:
             pkg, eco = item
-            cache_key = f"{pkg.ecosystem}:{pkg.name}:{pkg.version}"
             payload = {
                 "package": {"name": pkg.name, "ecosystem": eco},
                 "version": pkg.version,
@@ -465,44 +616,40 @@ class OsvHttpClient:
                 resp = client.post(query_url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-                vulns = data.get("vulns", [])
+                return item, data.get("vulns", [])
             except (httpx.HTTPError, ValueError) as exc:
                 # Transport failures, non-2xx responses (including OSV's 400 for
                 # an ecosystem it does not recognise) and unparseable bodies.
                 # Reported, never converted into "no vulnerabilities".
-                return cache_key, exc
-
-            base_pkg_id = f"{pkg.ecosystem or eco}:{pkg.name}@{pkg.version}"
-            advisories: list[RawAdvisory] = []
-            for vuln in vulns:
-                cve_id = _resolve_cve_id(vuln)
-                score = _parse_cvss_score(vuln)
-                fixed_ver = _extract_fixed_version(vuln, pkg, eco)
-                pkg_id = (
-                    f"{base_pkg_id} (fixed in {fixed_ver})"
-                    if fixed_ver
-                    else base_pkg_id
-                )
-                advisories.append(
-                    RawAdvisory(
-                        cve_id=cve_id,
-                        cvss_score=score,
-                        package_identifier=pkg_id,
-                    )
-                )
-            return cache_key, advisories
+                return item, exc
 
         failures: list[tuple[str, BaseException]] = []
+        answered: list[tuple[Package, str, list[dict[str, Any]]]] = []
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
-            chunk_results = pool.map(_fetch_one, vulnerable_queries)
-            for cache_key, result in chunk_results:
+            for (pkg, eco), result in pool.map(_fetch_one, vulnerable_queries):
                 if isinstance(result, BaseException):
-                    failures.append((cache_key, result))
-                    continue
-                if cache_key in package_advisories_map:
-                    package_advisories_map[cache_key].extend(result)
+                    failures.append((_cache_key(pkg), result))
                 else:
-                    package_advisories_map[cache_key] = result
+                    answered.append((pkg, eco, result))
+
+        # Which releases OSV describes anywhere in this scan's advisories. A
+        # release that appears nowhere (an end-of-life Ubuntu interim) is one OSV
+        # does not track, and silence about it must not read as "not affected".
+        described: set[tuple[str, tuple[int, ...]]] = set()
+        for _pkg, _eco, vulns in answered:
+            for vuln in vulns:
+                for aff in vuln.get("affected") or []:
+                    if isinstance(aff, dict):
+                        release = parse_release(_block_ecosystem(aff))
+                        if release:
+                            described.add((release.family, release.key))
+
+        for pkg, eco, vulns in answered:
+            cache_key = _cache_key(pkg)
+            advisories = self._advisories_for_host(
+                pkg, eco, vulns, (release_ids or {}).get(cache_key, (set(), None)), described
+            )
+            package_advisories_map.setdefault(cache_key, []).extend(advisories)
 
         if failures:
             # Nothing from this call is cached: a package whose lookup failed
@@ -523,6 +670,48 @@ class OsvHttpClient:
             all_fetched.extend(adv_list)
 
         return all_fetched
+
+    @staticmethod
+    def _advisories_for_host(
+        pkg: Package,
+        eco: str,
+        vulns: list[dict[str, Any]],
+        release_match: tuple[set[str], set[str] | None],
+        described: set[tuple[str, tuple[int, ...]]],
+    ) -> list[RawAdvisory]:
+        """Keep the advisories that affect this host's release, and label their fix.
+
+        Two kinds of advisory are dropped, both only when OSV demonstrably tracks
+        the host's release (Req 14.7):
+
+        - it has an entry for the host's release, and OSV did not match the
+          installed version there -- the release already fixed it, or was never
+          affected;
+        - it covers the host's distribution but has no entry for the host's
+          release at all. Distribution trackers list every release a
+          vulnerability affects, so a Debian advisory naming only Debian 14 does
+          not affect Debian 13, and a Red Hat advisory for another product does
+          not affect RHEL 9.
+        """
+        release_ecos, matched = release_match
+        host = host_releases(pkg.ecosystem or "")
+        tracked = [h for h in host if (h.family, h.key) in described]
+        base_pkg_id = f"{pkg.ecosystem or eco}:{pkg.name}@{pkg.version}"
+        advisories: list[RawAdvisory] = []
+        for vuln in vulns:
+            if matched is not None and str(vuln.get("id")) not in matched:
+                if describes_release(vuln, pkg, release_ecos):
+                    continue
+            if tracked and _covers_family_but_not_release(vuln, pkg, tracked):
+                continue
+            advisories.append(
+                RawAdvisory(
+                    cve_id=_resolve_cve_id(vuln),
+                    cvss_score=_parse_cvss_score(vuln),
+                    package_identifier=base_pkg_id + fix_suffix(vuln, pkg, eco, release_ecos),
+                )
+            )
+        return advisories
 
     def _deduplicate_findings(self, advisories: list[RawAdvisory]) -> list[RawAdvisory]:
         """Deduplicate findings by (cve_id, pkg_name), prioritizing records with fix versions."""

@@ -23,7 +23,7 @@
 // Nothing here executes anything. Commands are generated for the user to
 // review and run themselves; remediation is manual by design (AGENTS.md).
 
-import type { CveFinding, Platform } from "../types";
+import type { CveFinding, FixStatus, Platform } from "../types";
 
 export type DistroFamily =
   | "debian"
@@ -228,16 +228,88 @@ export function findingPackageName(finding: CveFinding): string | null {
   return finding.packageName ?? parsePackageName(finding.packageIdentifier);
 }
 
+/** Where a finding's fix is, and which release has it (Req 14.7, 14.8). */
+export interface FixInfo {
+  status: FixStatus;
+  /** The release with the fix, for "newer_release" and "upstream". */
+  release: string | null;
+  version: string | null;
+}
+
+const ELSEWHERE_NOTE = /\(no fix in (.+?); fixed only in (.+): (\S+)\)\s*$/;
+const UPSTREAM_NOTE = /\(not confirmed for this release; upstream fix in (.+): (\S+)\)\s*$/;
+const AVAILABLE_NOTE = /\(fixed in ([^)\s]+)\)\s*$/;
+
 /**
- * Whether an actionable fix exists for a finding.
+ * Where the fix for a finding is.
  *
- * Uses the backend's structured `hasFix` field rather than the wording of a
- * display string (Req 14.5), falling back to the legacy prose check only for
- * findings served by an older backend.
+ * Prefers the backend's structured fields; reads the matcher's note for findings
+ * served by an older backend. Must agree with parse_fix in
+ * backend/app/package_identifier.py.
+ */
+export function findingFix(finding: CveFinding): FixInfo {
+  if (finding.fixStatus) {
+    return {
+      status: finding.fixStatus,
+      release: finding.fixRelease ?? null,
+      version:
+        finding.fixStatus === "available"
+          ? finding.fixedVersion ?? null
+          : finding.fixReleaseVersion ?? null,
+    };
+  }
+  const text = finding.packageIdentifier ?? "";
+  let m = AVAILABLE_NOTE.exec(text);
+  if (m) return { status: "available", release: null, version: m[1] };
+  m = ELSEWHERE_NOTE.exec(text);
+  if (m) return { status: "newer_release", release: m[2], version: m[3] };
+  m = UPSTREAM_NOTE.exec(text);
+  if (m) return { status: "upstream", release: m[1], version: m[2] };
+  if (typeof finding.hasFix === "boolean" && finding.hasFix) {
+    return { status: "available", release: null, version: finding.fixedVersion ?? null };
+  }
+  return { status: "none", release: null, version: null };
+}
+
+/**
+ * Whether an actionable fix exists for a finding: one this host's own release
+ * ships, so a package upgrade installs it.
+ *
+ * Uses the backend's structured fields rather than the wording of a display
+ * string (Req 14.5). A fix that only a newer release has is not actionable, and
+ * treating it as one is what put Debian 14 fixes into a Debian 13 host's plan.
  */
 export function hasFix(finding: CveFinding): boolean {
+  if (finding.fixStatus) return finding.fixStatus === "available";
   if (typeof finding.hasFix === "boolean") return finding.hasFix;
-  return Boolean(finding.packageIdentifier?.includes("fixed in"));
+  return findingFix(finding).status === "available";
+}
+
+/** A short label for a fix that is not installable here, or null. */
+export function fixElsewhereLabel(fix: FixInfo): string | null {
+  if (fix.status === "newer_release" && fix.release) return `Fixed only in ${fix.release}`;
+  if (fix.status === "upstream" && fix.release) return `Upstream fix in ${fix.release}`;
+  return null;
+}
+
+/** The longer explanation for the same, for a tooltip or a detail view. */
+export function fixElsewhereExplanation(fix: FixInfo): string | null {
+  const version = fix.version ? ` (${fix.version})` : "";
+  if (fix.status === "newer_release" && fix.release) {
+    return (
+      `${fix.release} has a fix${version}, but this host's release does not. ` +
+      `No package upgrade here can install it: upgrading the distribution will, ` +
+      `or a future update to this release.`
+    );
+  }
+  if (fix.status === "upstream" && fix.release) {
+    return (
+      `${fix.release} has a fix${version}, but this host's release could not be ` +
+      `matched to the advisory, so it is not known whether your distribution ` +
+      `ships it yet. Check with your package manager, and re-scan after updating.`
+    );
+  }
+  return null;
 }
 
 /**
@@ -264,33 +336,76 @@ export function buildBulkFixScript(
   const tooling = getDistroTooling(platform, osName, fixable[0]?.packageIdentifier);
   const header = [
     `# Remediation plan for ${osName ?? "this host"}`,
-    `# ${packages.length} package(s) with published fixes, ` +
+    `# ${packages.length} package(s) with fixes in this host's release, ` +
       `covering ${fixable.length} CVE(s).`,
     "# Review before running. Nothing here has been executed for you.",
     "",
   ];
 
+  // What the plan cannot fix, said up front, so re-running it and re-scanning
+  // does not look like the plan failed (Req 14.8).
+  const elsewhere = elsewhereSummary(findings);
+  const commands: string[] = [];
   if (packages.length === 0) {
-    return [
-      ...header,
-      "# No findings on this host have a published fix yet.",
-    ].join("\n");
-  }
-
-  if (tooling.family === "arch") {
+    commands.push("# No findings on this host have a fix in its own release yet.");
+  } else if (tooling.family === "arch") {
     // Partial upgrades are unsupported on Arch, so listing packages
     // individually would be actively harmful advice.
-    return [...header, tooling.updateCmd(""), ""].join("\n");
+    commands.push(tooling.updateCmd(""));
+  } else if (tooling.family === "debian") {
+    commands.push("sudo apt update", `sudo apt install --only-upgrade ${packages.join(" ")}`);
+  } else {
+    commands.push(...packages.map((pkg) => tooling.updateCmd(pkg)));
   }
 
-  if (tooling.family === "debian") {
-    return [
-      ...header,
-      "sudo apt update",
-      `sudo apt install --only-upgrade ${packages.join(" ")}`,
-      "",
-    ].join("\n");
-  }
+  return [...header, ...commands, ...elsewhere, ""].join("\n");
+}
 
-  return [...header, ...packages.map((pkg) => tooling.updateCmd(pkg)), ""].join("\n");
+/** Comment lines describing the findings a package upgrade cannot clear. */
+function elsewhereSummary(findings: CveFinding[]): string[] {
+  const byRelease = (status: FixStatus) => {
+    const groups = new Map<string, { cves: number; packages: Set<string> }>();
+    for (const finding of findings) {
+      const fix = findingFix(finding);
+      if (fix.status !== status || !fix.release) continue;
+      const group = groups.get(fix.release) ?? { cves: 0, packages: new Set<string>() };
+      group.cves += 1;
+      const pkg = findingPackageName(finding);
+      if (pkg) group.packages.add(pkg);
+      groups.set(fix.release, group);
+    }
+    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+  };
+
+  const lines: string[] = [];
+  const newer = byRelease("newer_release");
+  if (newer.length > 0) {
+    lines.push("", "# Not fixable on this release:");
+    for (const [release, group] of newer) {
+      lines.push(
+        `# ${group.cves} CVE(s) in ${group.packages.size} package(s) are fixed only in ${release}.`,
+        `#   ${[...group.packages].sort().join(" ")}`,
+      );
+    }
+    lines.push(
+      "# The commands above cannot install those fixes, and re-scanning will still",
+      "# show them. Upgrading the distribution clears them, or they clear when this",
+      "# release publishes the fix.",
+    );
+  }
+  const upstream = byRelease("upstream");
+  if (upstream.length > 0) {
+    lines.push("", "# Fixed upstream, not confirmed for this release:");
+    for (const [release, group] of upstream) {
+      lines.push(
+        `# ${group.cves} CVE(s) in ${group.packages.size} package(s) have a fix in ${release}.`,
+        `#   ${[...group.packages].sort().join(" ")}`,
+      );
+    }
+    lines.push(
+      "# Your distribution may not ship those fixes yet. Update normally, then",
+      "# re-scan to see which cleared.",
+    );
+  }
+  return lines;
 }

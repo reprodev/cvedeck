@@ -173,6 +173,11 @@ _FINDING_KEYS = {
     "package_name": (str, type(None)),
     "fixed_version": (str, type(None)),
     "has_fix": bool,
+    # Where the fix is (Req 14.7, 14.8): "available" on the host's own release,
+    # "newer_release" or "upstream" naming the release that has it, or "none".
+    "fix_status": str,
+    "fix_release": (str, type(None)),
+    "fix_release_version": (str, type(None)),
     "remediation_status": (str, type(None)),
     # The record id lets a client update an existing remediation record rather
     # than only add new ones; the note carries its free-text detail (Req 4.2).

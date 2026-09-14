@@ -22,7 +22,10 @@ import { EmptyState } from "../components/EmptyState";
 import { useToast } from "../components/Toast";
 import {
   buildBulkFixScript,
+  findingFix,
   findingPackageName,
+  fixElsewhereExplanation,
+  fixElsewhereLabel,
   getDistroTooling,
   hasFix as findingHasFix,
 } from "../lib/remediation";
@@ -71,14 +74,41 @@ function remediationLabel(status: string | null): string {
 }
 
 /**
- * Whether a package group has a published fix.
+ * Whether any finding in a package group has a fix in this host's own release.
  *
- * Groups are assembled in this view from findings and carry an identifier
- * rather than the backend's structured `hasFix`, so the prose check lives here
- * once instead of being repeated in each view mode.
+ * Decided from the findings' structured fix status, never from the text of the
+ * identifier: searching it for "fixed in" once counted fixes that only a newer
+ * release had (Req 14.7).
  */
-function groupHasFix(group: { packageIdentifier: string }): boolean {
-  return group.packageIdentifier.includes("fixed in");
+function groupHasFix(group: { findings: CveFinding[] }): boolean {
+  return group.findings.some(findingHasFix);
+}
+
+/** The label for a group whose fix lives in another release, if any. */
+function groupElsewhere(group: { findings: CveFinding[] }) {
+  for (const finding of group.findings) {
+    const fix = findingFix(finding);
+    const label = fixElsewhereLabel(fix);
+    if (label) return { label, explanation: fixElsewhereExplanation(fix) ?? label };
+  }
+  return null;
+}
+
+/** "Pending vendor patch", or which release already has the fix. */
+function PendingBadge({ group }: { group: { findings: CveFinding[] } }) {
+  const elsewhere = groupElsewhere(group);
+  if (elsewhere) {
+    return (
+      <span className="fix-elsewhere" title={elsewhere.explanation}>
+        <Icon name="alert" /> {elsewhere.label}
+      </span>
+    );
+  }
+  return (
+    <span className="badge badge-platform" style={{ fontSize: "0.78rem" }}>
+      <Icon name="clock" /> Pending vendor patch
+    </span>
+  );
 }
 
 export function MachineDrillDownView({
@@ -136,14 +166,22 @@ export function MachineDrillDownView({
   const patchCounts = useMemo(() => {
     let fixable = 0;
     let pending = 0;
+    // Findings a package upgrade cannot clear because only a newer release has
+    // the fix, by release -- surfaced on its own, since re-running the fix plan
+    // and re-scanning would otherwise look like the plan failed (Req 14.8).
+    const newerRelease = new Map<string, number>();
     for (const f of findings) {
-      if (f.packageIdentifier && f.packageIdentifier.includes("fixed in")) {
+      if (findingHasFix(f)) {
         fixable++;
       } else {
         pending++;
+        const fix = findingFix(f);
+        if (fix.status === "newer_release" && fix.release) {
+          newerRelease.set(fix.release, (newerRelease.get(fix.release) ?? 0) + 1);
+        }
       }
     }
-    return { fixable, pending, total: findings.length };
+    return { fixable, pending, newerRelease, total: findings.length };
   }, [findings]);
 
   // Remediation posture summary
@@ -190,14 +228,10 @@ export function MachineDrillDownView({
   // Filter by patch readiness
   const patchFilteredFindings = useMemo(() => {
     if (patchFilter === "fixable") {
-      return severityFilteredFindings.filter(
-        (f) => f.packageIdentifier && f.packageIdentifier.includes("fixed in"),
-      );
+      return severityFilteredFindings.filter(findingHasFix);
     }
     if (patchFilter === "pending") {
-      return severityFilteredFindings.filter(
-        (f) => !f.packageIdentifier || !f.packageIdentifier.includes("fixed in"),
-      );
+      return severityFilteredFindings.filter((f) => !findingHasFix(f));
     }
     return severityFilteredFindings;
   }, [severityFilteredFindings, patchFilter]);
@@ -281,15 +315,9 @@ export function MachineDrillDownView({
   const visiblePackageGroups = useMemo(() => {
     let groups = packageGroups;
     if (patchFilter === "fixable") {
-      groups = groups.filter((g) =>
-        g.packageIdentifier.includes("fixed in") ||
-        g.findings.some((f) => f.packageIdentifier && f.packageIdentifier.includes("fixed in")),
-      );
+      groups = groups.filter(groupHasFix);
     } else if (patchFilter === "pending") {
-      groups = groups.filter((g) =>
-        !g.packageIdentifier.includes("fixed in") &&
-        g.findings.every((f) => !f.packageIdentifier || !f.packageIdentifier.includes("fixed in")),
-      );
+      groups = groups.filter((g) => !groupHasFix(g));
     }
     if (severityFilter !== "all") {
       groups = groups.filter((g) => g.findings.some((f) => f.severity === severityFilter));
@@ -522,6 +550,23 @@ export function MachineDrillDownView({
         <p>No CVEs identified for this machine.</p>
       ) : (
         <>
+          {patchCounts.newerRelease.size > 0 && (
+            <div className="release-fix-notice" role="note" data-testid="newer-release-notice">
+              <Icon name="alert" />
+              <div>
+                <strong>
+                  {[...patchCounts.newerRelease.values()].reduce((a, b) => a + b, 0)} finding(s)
+                  are fixed only in{" "}
+                  {[...patchCounts.newerRelease.keys()].sort().join(", ")}, not in this
+                  host&apos;s release.
+                </strong>{" "}
+                Upgrading packages cannot clear them, so they stay after the fix plan
+                runs and the host is re-scanned. Upgrading the distribution clears them,
+                or they clear once this release publishes the fix.
+              </div>
+            </div>
+          )}
+
           {/* Workspace Tabs */}
           <div className="workspace-tabs">
             <button
@@ -1041,9 +1086,7 @@ export function MachineDrillDownView({
                                 </button>
                               ) : isLeaf ? (
                                 <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                                  <span className="badge badge-platform" style={{ fontSize: "0.78rem" }}>
-                                    <Icon name="clock" /> Pending vendor patch
-                                  </span>
+                                  <PendingBadge group={group} />
                                   <button
                                     type="button"
                                     className="copy-purge-btn"
@@ -1054,9 +1097,7 @@ export function MachineDrillDownView({
                                   </button>
                                 </div>
                               ) : (
-                                <span className="badge badge-platform" style={{ fontSize: "0.78rem" }}>
-                                  <Icon name="clock" /> Pending vendor patch
-                                </span>
+                                <PendingBadge group={group} />
                               )}
                             </td>
                           </tr>
@@ -1251,6 +1292,13 @@ export function MachineDrillDownView({
                                   >
                                     {isCopied ? <><Icon name="check" /> Copied</> : <><Icon name="copy" /> Copy fix</>}
                                   </button>
+                                ) : fixElsewhereLabel(findingFix(finding)) ? (
+                                  <span
+                                    className="fix-elsewhere"
+                                    title={fixElsewhereExplanation(findingFix(finding)) ?? undefined}
+                                  >
+                                    <Icon name="alert" /> {fixElsewhereLabel(findingFix(finding))}
+                                  </span>
                                 ) : (
                                   <span style={{ opacity: 0.85, fontSize: "0.75rem", display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
                                     <Icon name="clock" /> Pending patch

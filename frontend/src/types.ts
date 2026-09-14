@@ -50,6 +50,9 @@ export interface MachineSummary {
   kevCount: number;
 }
 
+/** How a finding can be fixed on the host it was found on. */
+export type FixStatus = "available" | "newer_release" | "upstream" | "none";
+
 /** A single CVE finding for a machine, as shown in the drill-down view. */
 export interface CveFinding {
   cveId: string;
@@ -64,6 +67,17 @@ export interface CveFinding {
    * the substring "fixed in", which made the exact prose an API contract.
    */
   hasFix?: boolean;
+  /**
+   * Where the fix is (Req 14.7, 14.8): "available" on this host's own release;
+   * "newer_release" when only a newer release (or Ubuntu Pro) has it, so no
+   * package upgrade can clear it; "upstream" when a fix exists but could not be
+   * confirmed for this release; "none" when nothing is published.
+   */
+  fixStatus?: FixStatus;
+  /** The release that has the fix, for "newer_release" and "upstream". */
+  fixRelease?: string | null;
+  /** The fixed version in that release. */
+  fixReleaseVersion?: string | null;
   packageIdentifier: string | null;
   remediationStatus: string | null;
   /**

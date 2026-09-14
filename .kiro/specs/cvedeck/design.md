@@ -507,6 +507,25 @@ without their own tracker (Oracle Linux, Amazon Linux, Fedora, Arch) map onto
 the upstream they derive from. `Red Hat` is queried unversioned: OSV accepts
 `Red Hat:9` and returns nothing for it.
 
+### Release-specific matching
+
+OSV advisories carry one affected entry per distribution release, each with its
+own fix (Req 14.7, 14.8). `app/scanner/releases.py` names releases in OSV's
+forms, and each package is queried both family-wide (the superset) and
+release-specific in the same `/querybatch`. The family-wide advisories are
+fetched in full; one is dropped when it describes the host's release and was
+not matched there, or describes the family but no release of the host's, and
+only when that release appears somewhere in the scan -- so an untracked release,
+a failed batch, or a paged answer never removes a finding.
+
+The fix note appended to the identifier says where the fix is:
+`(fixed in V)` for the host's own release, `(no fix in Debian 13; fixed only in
+Debian 14: V)`, or `(not confirmed for this release; upstream fix in RHEL 9: V)`.
+Only the first contains "fixed in", which older dashboards read as installable.
+`parse_fix` turns the note into `fix_status`, `fix_release` and
+`fix_release_version`; `has_fix` is true only for `available`. Fix notes are
+written at scan time, so a host needs a re-scan to pick up the change.
+
 ### Migrations
 
 Alembic replaces `Base.metadata.create_all` as the schema story.

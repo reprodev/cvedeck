@@ -166,6 +166,9 @@ interface CveFindingWire {
   package_name?: string | null;
   fixed_version?: string | null;
   has_fix?: boolean;
+  fix_status?: CveFinding["fixStatus"];
+  fix_release?: string | null;
+  fix_release_version?: string | null;
   remediation_status: string | null;
   remediation_record_id: string | null;
   remediation_note: string | null;
@@ -301,6 +304,9 @@ function toCveFinding(wire: CveFindingWire): CveFinding {
     packageName: wire.package_name ?? null,
     fixedVersion: wire.fixed_version ?? null,
     hasFix: wire.has_fix ?? undefined,
+    fixStatus: wire.fix_status ?? undefined,
+    fixRelease: wire.fix_release ?? null,
+    fixReleaseVersion: wire.fix_release_version ?? null,
     remediationStatus: wire.remediation_status ?? null,
     remediationRecordId: wire.remediation_record_id ?? null,
     remediationNote: wire.remediation_note ?? null,

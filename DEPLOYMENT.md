@@ -493,6 +493,14 @@ very large one.
   endpoint returns HTTP 503.
 - **No scheduled scanning.** Every scan and every remediation update is manual
   and API-driven, by design.
+- **Fixes are judged per distribution release.** A finding counts as fixable only
+  when the host's own release ships the fix. When only a newer release does
+  (Debian 14 for a Debian 13 host), the dashboard labels it "Fixed only in
+  Debian 14" and the fix plan leaves it out: upgrading packages cannot clear it.
+  Fedora, Amazon Linux and SUSE have no per-release data in OSV, so fixes for them
+  are shown as "upstream fix, unconfirmed". An end-of-life release that OSV no
+  longer tracks (an old Ubuntu interim) may return no findings at all -- upgrade
+  to a supported release.
 - **One account, no roles.** Anyone signed in, and any API token, can do
   everything except manage the account. Multiple users and read-only tokens are
   not implemented.

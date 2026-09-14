@@ -252,7 +252,7 @@ describe("buildBulkFixScript", () => {
       "linux",
       "Ubuntu",
     );
-    expect(script).toContain("No findings on this host have a published fix");
+    expect(script).toContain("No findings on this host have a fix in its own release yet");
   });
 
   it("states that nothing has been executed", () => {

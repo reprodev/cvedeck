@@ -8,6 +8,53 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.7.3] - 2026-09-14
+
+Findings and fixes are now judged against each host's own distribution release.
+**Re-scan your hosts after upgrading**: what is fixable is recorded at scan time.
+Expect fewer findings on Debian and Red Hat family hosts, and findings that only
+a newer release fixes moved out of "Ready to Fix".
+
+### Fixed
+
+- **Hosts were reported vulnerable to issues their release had already fixed.**
+  OSV lists a vulnerability once per distribution release, each with its own
+  fix. CveDeck asked about the distribution as a whole -- `Debian` rather than
+  `Debian:13` -- so a package was compared against every release's fix, and a
+  fully patched Debian 13 `curl` was "vulnerable" to anything Debian 14 fixed at
+  a higher version number. For that one package OSV returned 49 advisories asked
+  one way and 25 the other. Red Hat hosts were also matched against advisories
+  for other Red Hat products. Each package is now also asked about its own
+  release, and advisories that do not affect that release are dropped.
+
+  Nothing is dropped when CveDeck cannot be sure: if the release query fails,
+  returns only part of its answer, or names a release OSV does not track (an
+  end-of-life Ubuntu interim), every advisory is kept.
+
+- **The fix plan listed fixes the host could not install.** A fix was taken from
+  whichever release listed one first, so a Debian 13 host was told to upgrade
+  packages whose only fix was in Debian 14. apt had nothing newer to install, the
+  plan appeared to work, and every re-scan found the same findings. A fix is now
+  offered -- in the plan, a **Copy fix** button or the CVE detail view -- only
+  when the host's own release ships it.
+
+### Added
+
+- **Findings that need a newer release say so.** They are labelled with the
+  release that has the fix ("Fixed only in Debian 14"), the host's page states
+  how many there are and that upgrading packages cannot clear them, and the fix
+  plan lists them in a comment explaining that a distribution upgrade -- or the
+  release publishing the fix -- is what clears them. An Ubuntu Pro-only fix is
+  named the same way.
+- **Fixes that cannot be confirmed for the host are marked as upstream.**
+  Fedora, Amazon Linux and SUSE have no per-release data in OSV; a fix found for
+  them is shown as "Upstream fix in RHEL 9" rather than offered as a command.
+- **Every Ubuntu release is recognised**, including 26.04 LTS and interim
+  releases, and derivatives such as Linux Mint are matched through the Ubuntu
+  release they are built on. RHEL, CentOS and openSUSE Leap hosts now record
+  their release too.
+
+
 ## [0.7.2] - 2026-09-14
 
 Fix commands name the right packages again. If a copied command or a host's

@@ -32,7 +32,7 @@ from ..data.repository import MachineListEntry, Repository
 from ..data.schema import CveFinding, RemediationRecord, TargetMachine
 from ..enums import Severity
 from ..models import Package as DomainPackage
-from ..package_identifier import parse_package_name
+from ..package_identifier import parse_fix, parse_package_name
 from ..services.enrichment import FindingEnricher
 from .dependencies import get_session
 from .schemas import (
@@ -103,6 +103,13 @@ def _to_finding_out(
     record = remediation_by_cve.get(finding.cve_id)
     pkg_name = _parse_pkg_name(finding.package_identifier)
     fixed_version = _parse_fixed_version(finding.package_identifier)
+    fix_status, fix_release, fix_release_version = parse_fix(finding.package_identifier)
+    if fix_status == "available":
+        # The host's own fix travels in fixed_version; the release fields are
+        # only for a fix that lives somewhere else.
+        fix_release = fix_release_version = None
+        if fixed_version is None:
+            fix_status = "none"
 
     deps = (direct_deps or {}).get(pkg_name, []) if pkg_name else []
     dependents = (depended_on_by or {}).get(pkg_name, []) if pkg_name else []
@@ -119,7 +126,10 @@ def _to_finding_out(
         package_identifier=finding.package_identifier,
         package_name=pkg_name,
         fixed_version=fixed_version,
-        has_fix=fixed_version is not None,
+        has_fix=fix_status == "available",
+        fix_status=fix_status,
+        fix_release=fix_release,
+        fix_release_version=fix_release_version,
         remediation_status=record.status if record is not None else None,
         remediation_record_id=record.id if record is not None else None,
         remediation_note=record.note if record is not None else None,

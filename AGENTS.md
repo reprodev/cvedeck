@@ -187,6 +187,15 @@ environment the app reads, so no alembic.ini edit is needed.
   A fragment never reaches the server. `parseHash` must also stay total: it falls back to
   the fleet view for anything unrecognised, and guards `decodeURIComponent`, which throws
   on a malformed escape -- a shared link is exactly the thing that arrives truncated.
+- **Vulnerabilities and fixes are judged against the host's own distribution release
+  (Req 14.7, 14.8).** OSV lists one entry per release, each with its own fix. Never take
+  a fix from another release's entry and call it installable -- that put Debian 14 fixes
+  into a Debian 13 host's apt plan, where they could never clear. And never *drop* an
+  advisory unless the release-specific answer is complete and the release is known to
+  OSV (it appears in the scan's advisories): an untracked release answers with silence,
+  and silence must not turn a host clean. `app/scanner/releases.py` holds the release
+  names, verified against the live API; `tests/test_release_matching.py` pins the drop
+  and no-drop cases. Only the "(fixed in V)" note contains the words "fixed in".
 - **Every route is protected unless it is on the public allowlist (Req 16.1).**
   `require_principal` is attached to whole routers in `create_app`, never per route, so
   a new route is protected by default. The allowlist is five routes -- health, and auth

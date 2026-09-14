@@ -277,7 +277,7 @@ def test_linux_ssh_collection_rhel_full_normalization():
         ("kernel", "5.14.0"),
     ]
     # Every package carries the collector's detected ecosystem tag.
-    assert all(p.ecosystem == "Red Hat" for p in inv.packages)
+    assert all(p.ecosystem == "Red Hat:9" for p in inv.packages)
 
 
 def test_linux_ssh_issued_commands_are_read_only():

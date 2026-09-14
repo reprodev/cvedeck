@@ -150,13 +150,28 @@ def _os_release(**fields: str) -> str:
         ({"ID": "almalinux", "VERSION_ID": "9.3"}, "AlmaLinux:9"),
         ({"ID": "rocky", "VERSION_ID": "9.3"}, "Rocky Linux:9"),
         ({"ID": "alpine", "VERSION_ID": "3.20.1"}, "Alpine:v3.20"),
-        ({"ID": "rhel", "VERSION_ID": "9.3"}, "Red Hat"),
+        # The RHEL major is recorded for release-specific matching (Req 14.7);
+        # the resolver still queries "Red Hat" unversioned, per the test below.
+        ({"ID": "rhel", "VERSION_ID": "9.3"}, "Red Hat:9"),
+        ({"ID": "centos", "VERSION_ID": "9"}, "Red Hat:9"),
         # Newly covered distributions.
         ({"ID": "ol", "VERSION_ID": "9.3"}, "Oracle Linux:9"),
         ({"ID": "amzn", "VERSION_ID": "2023"}, "Amazon Linux:2023"),
         ({"ID": "sles", "VERSION_ID": "15.5"}, "SUSE:15.5"),
-        ({"ID": "opensuse-leap", "VERSION_ID": "15.5"}, "openSUSE"),
+        ({"ID": "opensuse-leap", "VERSION_ID": "15.5"}, "openSUSE:Leap 15.5"),
+        ({"ID": "opensuse-tumbleweed", "VERSION_ID": "20260910"}, "openSUSE:Tumbleweed"),
         ({"ID": "raspbian", "VERSION_ID": "12"}, "Debian:12"),
+        # Every Ubuntu release, not a fixed list: 26.04 was missing.
+        ({"ID": "ubuntu", "VERSION_ID": "26.04"}, "Ubuntu:26.04:LTS"),
+        ({"ID": "ubuntu", "VERSION_ID": "25.10"}, "Ubuntu:25.10"),
+        # Derivatives: Mint's VERSION_ID is its own, its base is in UBUNTU_CODENAME.
+        (
+            {"ID": "linuxmint", "ID_LIKE": "ubuntu debian", "VERSION_ID": "22.1",
+             "UBUNTU_CODENAME": "noble"},
+            "Ubuntu:24.04:LTS",
+        ),
+        # A Debian derivative's own version is not a Debian release.
+        ({"ID": "kali", "ID_LIKE": "debian", "VERSION_ID": "2025.2"}, "Debian"),
     ],
 )
 def test_os_release_maps_distributions_to_ecosystems(fields, expected_eco):
