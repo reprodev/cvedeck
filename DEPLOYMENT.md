@@ -4,9 +4,10 @@ The CveDeck ships as a single container image that serves both the
 API and the dashboard on one port, with all state in one mounted directory. A
 native systemd installation is also supported for hosts without Docker.
 
-> **Read the [Security](#security) section before exposing this anywhere.** The
-> application has no authentication, and the scan endpoint accepts credentials
-> for the machines it scans.
+> **Read [Authentication](#authentication) and [Security](#security) before
+> exposing this anywhere.** Login is built in and on by default, but the scan
+> endpoint accepts credentials for the machines it scans, so use HTTPS for
+> anything beyond a trusted network.
 
 ## Quick start (Docker)
 
@@ -23,6 +24,16 @@ docker run -d \
 The dashboard is then at `http://<host>:3325` and the API at
 `http://<host>:3325/api`. The database is written to `/srv/cvedeck/cvedeck.db`
 on the host and survives container replacement.
+
+On first start there is no account. The log prints a one-time setup code:
+
+```bash
+docker logs cvedeck
+```
+
+Open the dashboard, enter the code, and choose a username and password. See
+[Authentication](#authentication) for creating the account without the setup
+page, and for API tokens.
 
 To build from source instead -- for an architecture that is not published, or
 when developing -- run `docker build -t cvedeck:latest .` from a checkout and
@@ -62,6 +73,11 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_DEFAULT_SSH_USER` | _(unset)_ | Username paired with the server-managed key when a target supplies none. |
 | `CVEDECK_DEMO_MODE` | `false` | Run as a public demo: seed a fictional fleet into an empty database and **refuse** scans, discovery sweeps, and connection tests. See "Demo mode" below. Leave off on any instance you actually scan with. |
 | `CVEDECK_CORS_ORIGINS` | unset | Comma-separated origins. Only needed if the dashboard is served from a different host than the API. |
+| `CVEDECK_AUTH` | `enabled` | Set to `disabled` to serve the dashboard and API without login, for an instance already behind an authenticating proxy. Any other value, including a typo, leaves login on. A warning is logged on every start while it is off. |
+| `CVEDECK_ADMIN_USERNAME` | unset | With a password, creates this account on start-up if none exists. Never changes an existing account. |
+| `CVEDECK_ADMIN_PASSWORD` | unset | Password for the account above, at least 12 characters. |
+| `CVEDECK_ADMIN_PASSWORD_FILE` | unset | Read the password from this file instead, for Docker secrets. Takes precedence over `CVEDECK_ADMIN_PASSWORD`. |
+| `CVEDECK_COOKIE_SECURE` | `auto` | Mark the session cookie `Secure`: `auto` does so when the request arrived over HTTPS, `true` always, `false` never. Set `true` behind a TLS proxy that uvicorn does not trust for `X-Forwarded-Proto`. |
 
 Container-only extras: `PUID` / `PGID` (default `1000`) set the ownership of
 files written to the data volume, and `TZ` sets the timezone.
@@ -134,6 +150,12 @@ systemctl status cvedeck
 journalctl -u cvedeck -f
 ```
 
+The first start logs a setup code for creating the account:
+
+```bash
+journalctl -u cvedeck | grep -A4 'no account yet'
+```
+
 Re-running `install.sh` upgrades in place and leaves the database and
 environment file alone.
 
@@ -152,10 +174,12 @@ then joined offline. Enrichment therefore adds no network dependency to a scan.
 ### Refreshing
 
 There is no scheduler in the application yet, so the refresh is triggered
-externally:
+externally. The API requires a login, so a script uses an API token (create one
+under **Settings** in the dashboard):
 
 ```bash
-curl -fsS -X POST http://localhost:3325/api/feeds/refresh
+curl -fsS -X POST -H "Authorization: Bearer $CVEDECK_TOKEN" \
+  http://localhost:3325/api/feeds/refresh
 ```
 
 ```json
@@ -172,7 +196,9 @@ the other's update — `ok` is `false` if either failed, with the reason in
 
 The systemd installer (`deploy/install.sh`) sets this up for you as
 `cvedeck-feeds.timer`, which runs at 03:00 with a 30-minute randomised
-delay and `Persistent=true` so a machine that was asleep still catches up:
+delay and `Persistent=true` so a machine that was asleep still catches up. It
+runs `cvedeck-admin refresh-feeds` on the host, against the database directly,
+so it needs no token:
 
 ```bash
 systemctl list-timers cvedeck-feeds.timer     # when it next runs
@@ -180,16 +206,23 @@ systemctl start cvedeck-feeds.service         # refresh right now
 journalctl -u cvedeck-feeds.service           # why a refresh failed
 ```
 
-For Docker, add a cron entry on the host:
+For Docker, add a cron entry on the host. Either run the same command inside the
+container, which needs no token:
 
 ```cron
-17 3 * * * curl -fsS -X POST http://localhost:3325/api/feeds/refresh >/dev/null
+17 3 * * * docker exec --user 1000:1000 cvedeck cvedeck-admin refresh-feeds >/dev/null
+```
+
+or call the API with a token kept in a file only root can read:
+
+```cron
+17 3 * * * curl -fsS -X POST -H "Authorization: Bearer $(cat /root/.cvedeck-token)" http://localhost:3325/api/feeds/refresh >/dev/null
 ```
 
 ### Checking cache health
 
 ```bash
-curl -fsS http://localhost:3325/api/feeds
+curl -fsS -H "Authorization: Bearer $CVEDECK_TOKEN" http://localhost:3325/api/feeds
 ```
 
 Each feed reports `last_refreshed_at`, `record_count`, `stale`, and `usable`.
@@ -228,6 +261,101 @@ either gzipped or plain, sniffing the magic bytes rather than trusting a
 `Content-Encoding` header.
 
 ---
+
+## Authentication
+
+Login is built in and required by default. There is one account, with a
+password, and any number of API tokens for scripts.
+
+### First run
+
+With no account, CveDeck prints a one-time setup code to its log at start-up:
+
+```text
+WARNING [app.api.dependencies] CveDeck has no account yet.
+WARNING [app.api.dependencies] Open the dashboard and enter this setup code to create one:
+WARNING [app.api.dependencies]     TFMA-FS53-U7RC
+```
+
+The dashboard shows a **Create your account** page that asks for it. The code
+works once, for 24 hours or until the next restart, which prints a new one.
+There is no default password: whoever reaches a new instance first cannot claim
+it without also being able to read its logs.
+
+Upgrading from 0.6.0 or earlier follows the same path. The fleet, findings and
+remediation notes are untouched; the first start after upgrading prints a setup
+code.
+
+### Creating the account without the setup page
+
+Set both of these, and the account is created on start-up if none exists:
+
+```bash
+-e CVEDECK_ADMIN_USERNAME=admin \
+-e CVEDECK_ADMIN_PASSWORD_FILE=/run/secrets/cvedeck_admin_password
+```
+
+`CVEDECK_ADMIN_PASSWORD` works too, but puts the password in your compose file
+and in `docker inspect`. Neither variable ever changes an existing account, so
+leaving them set does not undo a password changed later in the dashboard.
+
+### Passwords and sessions
+
+- Passwords need at least 12 characters, with no other rules. They are stored as
+  salted scrypt hashes.
+- Signing in sets an `HttpOnly`, `SameSite=Strict` cookie. A session ends after
+  7 days unused, or 30 days after sign-in, whichever comes first.
+- Changing the password in **Settings** signs out every other browser.
+- After 5 failed attempts from one address for one username, further attempts
+  are refused for 30 seconds, doubling up to 15 minutes. The count is kept in
+  memory, so a restart clears it.
+
+### API tokens
+
+Create tokens under **Settings** in the dashboard. A token is shown once, when it
+is created; CveDeck keeps only a hash. Send it as a bearer token:
+
+```bash
+curl -H "Authorization: Bearer cvd_..." http://localhost:3325/api/machines
+```
+
+A token can do anything the account can, except change the password or manage
+tokens. Revoke one in **Settings** and it stops working immediately.
+
+### Locked out
+
+Reset the password from the host. Run it as the user that owns the data
+directory, so SQLite does not leave a root-owned file behind:
+
+```bash
+docker exec -it --user 1000:1000 cvedeck cvedeck-admin reset-password
+```
+
+It prompts for the new password (or reads it from stdin with
+`--password-stdin`) and signs out every session. For a native install, run
+`/opt/cvedeck/venv/bin/cvedeck-admin reset-password` as the `cvedeck` user with
+`/etc/cvedeck/cvedeck.env` loaded.
+
+### Turning login off
+
+If CveDeck already sits behind something that authenticates people -- Authelia,
+Authentik, oauth2-proxy, a VPN you trust -- you can switch the built-in login
+off with `CVEDECK_AUTH=disabled`. Everything is then open to anyone who can
+reach the port, and the log says so on every start. Only `disabled`, `off`,
+`false`, `no` or `0` turn it off; anything else leaves login on.
+
+Demo mode (`CVEDECK_DEMO_MODE=true`) never asks for a login.
+
+### Behind a reverse proxy
+
+- Pass the original `Host` header through (`proxy_set_header Host $host;` in
+  nginx). Requests that change something must come from the dashboard's own
+  origin, and that check compares the browser's `Origin` with `Host`.
+- For the `Secure` cookie flag and accurate client addresses in the throttle and
+  logs, uvicorn has to trust the proxy's `X-Forwarded-*` headers. It trusts
+  `127.0.0.1` by default, which covers the systemd install with nginx on the same
+  host. For a proxy in another container, set `FORWARDED_ALLOW_IPS` to its
+  address, or set `CVEDECK_COOKIE_SECURE=true`.
 
 ## Reverse proxies
 
@@ -287,10 +415,20 @@ with the traffic originating from your server rather than theirs.
 The dashboard shows a banner while demo mode is on, and
 `GET /api/health` reports it under `capabilities.demo_mode`.
 
+**It needs no login.** A demo is meant to be clicked around by strangers, and
+the routes that could do harm are already refused.
+
 ## Security
 
-The application performs **no authentication or authorization on any endpoint**.
-Anyone who can reach the port can read every finding and initiate scans.
+Login is required by default (see [Authentication](#authentication)). Every API
+route except the health check and the sign-in routes refuses a request without a
+session or an API token, and the API documentation at `/api/docs` is behind
+sign-in too. `GET /api/health` stays public for container health checks and
+proxies, and reports only status, version, demo mode and whether login is
+required until you sign in.
+
+There is a single account, and everyone signed in can do everything: scan,
+sweep a subnet, edit remediation notes, and manage tokens.
 
 `POST /api/scans` accepts the username and password for each target machine in
 the request body. Those credentials are held in memory for the duration of the
@@ -299,8 +437,11 @@ over the wire to this service.
 
 Therefore:
 
-- Do not publish the port to the internet. Keep it on an internal network, or
-  behind a reverse proxy that enforces authentication and TLS.
+- Prefer not to publish the port to the internet at all. If you do, put a TLS
+  reverse proxy in front: over plain HTTP, the password, the session cookie and
+  target credentials all cross the network readable.
+- If you set `CVEDECK_AUTH=disabled`, the login protection above no longer
+  applies. Only do that behind something that authenticates people.
 - Use TLS end to end if scan requests cross any untrusted network — otherwise
   target credentials are sent in plaintext.
 - Give the scanner accounts the least privilege that still allows reading
@@ -352,6 +493,9 @@ very large one.
   endpoint returns HTTP 503.
 - **No scheduled scanning.** Every scan and every remediation update is manual
   and API-driven, by design.
+- **One account, no roles.** Anyone signed in, and any API token, can do
+  everything except manage the account. Multiple users and read-only tokens are
+  not implemented.
 - **Upgrades migrate automatically.** The schema is brought to head on first
   engine use. A database created by v0.3.0 or earlier (tables, but no
   `alembic_version`) is adopted at the baseline revision and migrated forward on
@@ -369,11 +513,17 @@ curl -fsS http://localhost:3325/api/health
 # Dashboard is being served
 curl -fsS http://localhost:3325/ | grep -q 'id="root"' && echo "dashboard ok"
 
-# API responds
-curl -fsS http://localhost:3325/api/machines
+# The API refuses anonymous requests...
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3325/api/machines
+# -> 401
+
+# ...and answers with a token created under Settings
+export CVEDECK_TOKEN=cvd_...
+curl -fsS -H "Authorization: Bearer $CVEDECK_TOKEN" http://localhost:3325/api/machines
 
 # Scans reach the engine (an unreachable host is recorded, not an error)
 curl -fsS -X POST http://localhost:3325/api/scans \
+  -H "Authorization: Bearer $CVEDECK_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"targets":[{"id":"m1","hostname":"192.0.2.1","platform":"linux",
        "username":"scanner","password":"unused"}]}'
@@ -385,7 +535,7 @@ persisted to the mounted database.
 
 ```bash
 # Threat-intel caches are populated and fresh
-curl -fsS http://localhost:3325/api/feeds
+curl -fsS -H "Authorization: Bearer $CVEDECK_TOKEN" http://localhost:3325/api/feeds
 # -> [{"feed_name":"kev","status":"ok","usable":true,"stale":false,...},
 #     {"feed_name":"epss","status":"ok","usable":true,"stale":false,...}]
 ```

@@ -37,6 +37,13 @@ services:
       # CVEDECK_DEMO_MODE: "true"
       # Threat-intel feeds (CISA KEV, FIRST EPSS) need no configuration to work.
       # Refresh them daily -- see DEPLOYMENT.md "Keeping threat intel fresh".
+      # Login is on. The first start logs a setup code (docker compose logs).
+      # To create the account here instead, set both of these; they never
+      # change an account that already exists:
+      # CVEDECK_ADMIN_USERNAME: "admin"
+      # CVEDECK_ADMIN_PASSWORD_FILE: "/run/secrets/cvedeck_admin_password"
+      # Only behind a proxy that already authenticates people:
+      # CVEDECK_AUTH: "disabled"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
       interval: 30s

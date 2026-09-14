@@ -64,12 +64,24 @@ upstream data sources (report those to CISA, FIRST, OSV, or NVD).
 These are documented rather than hidden, and are **not** vulnerabilities. They
 are also why the deployment guidance is what it is.
 
-**No authentication.** The application performs no authentication or
-authorization on any endpoint. It is designed to be bound to `127.0.0.1` and
-placed behind a reverse proxy that terminates TLS and handles auth, or run on a
-trusted network segment. Do not expose it to the internet as-is. Single-user
-auth and API keys are planned; see
-[AGENTS.md §5](AGENTS.md#5-known-follow-ups--roadmap--research-tracks).
+**One account, no roles.** Login is required by default, but there is a single
+account, and anyone signed in -- or holding an API token -- can scan, sweep
+subnets and edit remediation records. Tokens cannot change the password or
+manage tokens, and nothing finer-grained exists. A bypass of the login itself
+*is* in scope.
+
+**Login can be switched off.** `CVEDECK_AUTH=disabled` serves everything without
+authentication, for instances behind an authenticating proxy. An instance
+configured that way and exposed directly is a deployment choice, not a
+vulnerability.
+
+**Plain HTTP exposes credentials.** CveDeck does not terminate TLS itself. Over
+HTTP, the password, the session cookie and scan credentials are readable on the
+network; put a TLS reverse proxy in front anywhere beyond a trusted network.
+
+**Failed-login throttling is in memory.** It resets on restart and is per
+process, which fits the single-worker deployment. Behind a proxy that uvicorn
+does not trust, every client shares the proxy's address.
 
 **SSH host keys are accepted on first use.** The Linux collector uses
 paramiko's `AutoAddPolicy`, so a first connection to a host trusts whatever key

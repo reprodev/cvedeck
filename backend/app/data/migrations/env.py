@@ -25,7 +25,11 @@ from pathlib import Path
 config = context.config
 
 if config.config_file_name is not None and Path(config.config_file_name).is_file():
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: the default silences every logger that
+    # already exists -- which, when migrations run inside the application,
+    # is all of app.*, including the start-up message that prints the
+    # first-run setup code.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", app_config.database_url())
 

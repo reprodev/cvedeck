@@ -18,17 +18,23 @@ behavior from the default ``create_app()``.
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import config
-from . import actions, routes
-from .dependencies import get_scanner_engine, get_sync_service
+from ..auth.dependencies import login_required, require_principal, resolve_principal
+from . import actions, auth_routes, routes
+from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.6.0"
+_VERSION = "0.7.0"
 
 
 def create_app(*, wire_production: bool = False) -> FastAPI:
@@ -46,12 +52,19 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
             directory. Left false, the application behaves exactly as it always
             has and the scan/sync dependencies remain unconfigured.
     """
+    lifespan = _open_database_at_startup if wire_production else None
     app = FastAPI(
+        lifespan=lifespan,
         title="CveDeck API",
         version=_VERSION,
         description=(
             "Outward-facing API exposing scanned machines and CVE findings."
         ),
+        # FastAPI's defaults serve /docs, /redoc and /openapi.json to anyone.
+        # They are re-served below under /api, behind sign-in (Req 16.1).
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
 
     origins = config.cors_origins() if wire_production else []
@@ -67,7 +80,7 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
         )
 
     @app.get("/api/health", tags=["health"])
-    def health() -> dict[str, object]:
+    def health(request: Request) -> dict[str, object]:
         """Liveness probe for container orchestrators and reverse proxies.
 
         Also reports deployment capabilities the dashboard needs in order to
@@ -75,24 +88,40 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
         controls (Req 13.2, 13.3): without a server-managed key those scans
         have no credentials, so the UI hides the buttons rather than showing
         them and failing. ``demo_mode`` is reported per Req 15.4.
+
+        Public, because container health checks and proxies call it without
+        credentials. So it only describes the server's configuration to a
+        caller who has signed in; everyone else gets status, version, demo mode
+        and whether login is required (Req 16.1).
         """
-        from .. import config
-
-        return {
-            "status": "ok",
-            "version": _VERSION,
-            "capabilities": {
-                "server_ssh_key": config.default_ssh_key_path() is not None,
-                "default_ssh_user": config.default_ssh_user() is not None,
-                # The UI uses this to say so plainly and to stop offering
-                # controls the server will refuse -- better than letting
-                # someone fill in a scan form that always 403s.
-                "demo_mode": config.demo_mode(),
-            },
+        capabilities: dict[str, object] = {
+            # The UI uses this to say so plainly and to stop offering
+            # controls the server will refuse -- better than letting
+            # someone fill in a scan form that always 403s.
+            "demo_mode": config.demo_mode(),
+            "login_required": login_required(),
         }
+        if not login_required() or resolve_principal(request) is not None:
+            capabilities["server_ssh_key"] = config.default_ssh_key_path() is not None
+            capabilities["default_ssh_user"] = config.default_ssh_user() is not None
+        return {"status": "ok", "version": _VERSION, "capabilities": capabilities}
 
-    app.include_router(routes.router)
-    app.include_router(actions.router)
+    # Every router except the public auth routes is protected here, at include
+    # time, so a route added to any of them later is protected without anyone
+    # remembering to ask (Req 16.1, Property 12).
+    protected = [Depends(require_principal)]
+    app.include_router(auth_routes.public_router)
+    app.include_router(auth_routes.account_router)
+    app.include_router(routes.router, dependencies=protected)
+    app.include_router(actions.router, dependencies=protected)
+
+    @app.get("/api/openapi.json", include_in_schema=False, dependencies=protected)
+    def openapi_schema() -> JSONResponse:
+        return JSONResponse(app.openapi())
+
+    @app.get("/api/docs", include_in_schema=False, dependencies=protected)
+    def api_docs():
+        return get_swagger_ui_html(openapi_url="/api/openapi.json", title="CveDeck API")
 
     if wire_production:
         # Imported here so the bare application never pulls in deployment-only
@@ -101,9 +130,37 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
 
         app.dependency_overrides[get_scanner_engine] = wiring.build_scanner_engine
         app.dependency_overrides[get_sync_service] = wiring.build_sync_service
+        _configure_logging()
         _mount_frontend(app)
 
     return app
+
+
+@asynccontextmanager
+async def _open_database_at_startup(_: FastAPI):
+    """Open the database when the process starts, not on the first request.
+
+    Migrations run and the first-run setup code is printed as soon as the
+    container starts, rather than when someone first loads the page.
+    """
+    get_engine()
+    yield
+
+
+def _configure_logging() -> None:
+    """Send the application's own log records to stderr, at INFO.
+
+    uvicorn configures only its own loggers, so without this ``app.*`` records
+    below WARNING -- sign-ins, token changes, demo seeding -- went nowhere.
+    """
+    app_logger = logging.getLogger("app")
+    if app_logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)-7s [%(name)s] %(message)s"))
+    app_logger.addHandler(handler)
+    app_logger.setLevel(logging.INFO)
+    app_logger.propagate = False
 
 
 class _CacheControlledStatic(StaticFiles):

@@ -248,6 +248,57 @@ def demo_mode() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def auth_enabled() -> bool:
+    """Whether the dashboard and API require a login (Req 16.9).
+
+    On unless ``CVEDECK_AUTH`` is explicitly one of the "off" spellings. Every
+    other value -- including a typo such as ``disable`` or ``flase`` -- leaves
+    login on. This is the opposite default to :func:`demo_mode`, and for the
+    same reason: each setting fails towards the safe state, and for access
+    control the safe state is locked.
+    """
+    raw = os.environ.get("CVEDECK_AUTH", "").strip().lower()
+    return raw not in {"disabled", "off", "false", "0", "no"}
+
+
+def cookie_secure() -> str:
+    """When to mark the session cookie ``Secure``: ``auto``, ``true`` or ``false``.
+
+    ``auto`` (the default) sets it when the request arrived over HTTPS. Behind a
+    TLS-terminating proxy that only works if uvicorn trusts the proxy's
+    ``X-Forwarded-Proto`` (``--proxy-headers``); ``true`` forces it regardless.
+    An unrecognised value is treated as ``auto``.
+    """
+    raw = os.environ.get("CVEDECK_COOKIE_SECURE", "").strip().lower()
+    if raw in {"true", "1", "yes", "on"}:
+        return "true"
+    if raw in {"false", "0", "no", "off"}:
+        return "false"
+    return "auto"
+
+
+def admin_username() -> str | None:
+    """Username to pre-create on first start, or ``None`` (Req 16.4)."""
+    raw = os.environ.get("CVEDECK_ADMIN_USERNAME", "").strip()
+    return raw or None
+
+
+def admin_password() -> str | None:
+    """Password to pre-create on first start, or ``None`` (Req 16.4).
+
+    ``CVEDECK_ADMIN_PASSWORD_FILE`` wins when set, so the password can come from
+    a Docker secret rather than sitting in a compose file. A trailing newline in
+    the file is removed, since editors add one. A file that cannot be read is an
+    error rather than a silent fall-through, because falling through would start
+    the instance with no account and a setup code nobody expected.
+    """
+    path = os.environ.get("CVEDECK_ADMIN_PASSWORD_FILE", "").strip()
+    if path:
+        return Path(path).read_text(encoding="utf-8").rstrip("\r\n") or None
+    raw = os.environ.get("CVEDECK_ADMIN_PASSWORD", "")
+    return raw or None
+
+
 def _int_env(name: str, default: int) -> int:
     """Read an integer environment variable, failing loudly on a bad value."""
     raw = os.environ.get(name)

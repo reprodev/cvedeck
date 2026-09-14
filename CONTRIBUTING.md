@@ -59,9 +59,14 @@ default, so without it you would be testing the last release rather than your
 checkout. (Uncommenting `build: .` in that file has the same effect
 permanently.)
 
+The first local start prints a setup code to the terminal, and the dashboard
+asks for it. To skip that in development, start the backend with
+`CVEDECK_ADMIN_USERNAME` and `CVEDECK_ADMIN_PASSWORD` set, or with
+`CVEDECK_AUTH=disabled`.
+
 To see a populated dashboard without enrolling any hosts, run the backend with
-`CVEDECK_DEMO_MODE=true`. It seeds a fictional fleet and disables scanning --
-see DEPLOYMENT.md "Demo mode".
+`CVEDECK_DEMO_MODE=true`. It seeds a fictional fleet, disables scanning and
+needs no login -- see DEPLOYMENT.md "Demo mode".
 
 Or run the two halves separately — the Vite dev server proxies `/api` to
 `localhost:8000`:
@@ -119,6 +124,11 @@ redirecting. Do not loosen that guard to make a command pass.
 `parse_private_key`, before a client is allocated, so a bad key is reported as a
 key problem rather than a connection failure.
 
+**Routes are protected by default.** Login is enforced on whole routers, so a
+new route needs no auth code. Making a route public is a security change: it
+goes on the allowlist in `tests/test_auth_enforcement.py`, in the spec and in
+DEPLOYMENT.md, and it will be asked about in review.
+
 **Per-target fault isolation.** A `ConnectionError` becomes
 `CONNECTION_FAILURE`, an `AuthError` becomes `AUTH_FAILURE`, and neither ever
 aborts the batch or produces an HTTP 500. One unreachable host must not cost you
@@ -145,6 +155,12 @@ Every behaviour change needs a test. The split is deliberate:
   fast-check on the frontend, minimum 100 iterations.
 - **I/O layers** (SSH/WinRM, API contracts, UI) get example and integration
   tests.
+
+**API tests sign in explicitly.** Build the app with
+`override_auth(create_app())` from `tests/auth_helpers.py`. Don't disable login
+for the whole suite: `tests/test_auth_enforcement.py` relies on the real gate,
+and a new route that answers without signing in will fail it -- which is the
+point.
 
 **Never make a live network call in a test.** Feed clients and API clients are
 tested against recorded fixture payloads with a mocked transport

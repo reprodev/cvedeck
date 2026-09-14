@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.api.app import create_app
+from tests.auth_helpers import override_auth
 from app.api.dependencies import get_scanner_engine, get_session
 from app.api.schemas import CveFindingOut, MachineSummary
 from app.data.repository import FindingInput, RemediationInput, Repository
@@ -95,7 +96,7 @@ def client(session):
     malformed scan bodies are rejected by validation (422) rather than by the
     unconfigured default engine provider.
     """
-    app = create_app()
+    app = override_auth(create_app())
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_scanner_engine] = lambda: _UnusedScannerEngine()
     return TestClient(app)

@@ -79,6 +79,15 @@ CVEDECK_STATIC_DIR=${APP_DIR}/static
 #   https://nvd.nist.gov/developers/request-an-api-key
 # CVEDECK_NVD_ENABLED=true
 # CVEDECK_NVD_API_KEY=your-key-here
+
+# Login is on. On first start the log prints a one-time setup code for the
+# dashboard's "Create your account" page. To create the account here instead:
+# CVEDECK_ADMIN_USERNAME=admin
+# CVEDECK_ADMIN_PASSWORD_FILE=/etc/cvedeck/admin-password
+#
+# Behind a TLS reverse proxy on this host, the session cookie is marked Secure
+# automatically. Set this if the proxy is elsewhere:
+# CVEDECK_COOKIE_SECURE=true
 EOF
     chmod 0640 "$ENV_FILE"
     chown root:"$SERVICE_USER" "$ENV_FILE"
@@ -117,6 +126,8 @@ fi
 echo
 echo "Done. The service listens on 127.0.0.1:8000."
 echo "Put a TLS reverse proxy in front of it -- see deploy/nginx/cvedeck.conf.example."
+echo "Account: open the dashboard and enter the setup code from the log:"
+echo "           journalctl -u cvedeck | grep -A4 'no account yet'"
 echo "Status:  systemctl status cvedeck"
 echo "Logs:    journalctl -u cvedeck -f"
 echo "Feeds:   systemctl list-timers cvedeck-feeds.timer"

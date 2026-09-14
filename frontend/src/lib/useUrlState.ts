@@ -17,8 +17,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-/** Which top-level workspace is showing. */
-export type Workspace = "fleet" | "scan" | "discovery";
+/**
+ * Which top-level screen is showing. `settings` is the account screen
+ * (password and API tokens, Req 16.6, 16.7); it has no tab of its own.
+ */
+export type Workspace = "fleet" | "scan" | "discovery" | "settings";
 
 export interface Route {
   workspace: Workspace;
@@ -28,7 +31,7 @@ export interface Route {
 
 export const DEFAULT_ROUTE: Route = { workspace: "fleet", machineId: null };
 
-const WORKSPACES: readonly Workspace[] = ["fleet", "scan", "discovery"];
+const WORKSPACES: readonly Workspace[] = ["fleet", "scan", "discovery", "settings"];
 
 function isWorkspace(value: string): value is Workspace {
   return (WORKSPACES as readonly string[]).includes(value);

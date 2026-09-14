@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.app import create_app
+from tests.auth_helpers import override_auth
 from app.api.dependencies import (
     get_scanner_engine,
     get_session,
@@ -62,7 +63,7 @@ def session():
 @pytest.fixture()
 def app(session):
     """App with the session dependency overridden to the test session."""
-    application = create_app()
+    application = override_auth(create_app())
     application.dependency_overrides[get_session] = lambda: session
     return application
 

@@ -45,7 +45,60 @@ def get_engine() -> Engine:
     engine = create_engine(url, connect_args=connect_args)
     upgrade_to_head(engine)
     _seed_demo_if_requested(engine)
+    _prepare_access_control(engine)
     return engine
+
+
+def _prepare_access_control(engine: Engine) -> None:
+    """Make sure someone can sign in, and say how (Req 16.3, 16.4, 16.9).
+
+    - Login disabled: log a warning, because the instance is open to anyone who
+      can reach it, and that should be visible in the logs of every start.
+    - Demo mode: nothing to do; the demo is public by design.
+    - Otherwise, create the account from ``CVEDECK_ADMIN_USERNAME`` /
+      ``CVEDECK_ADMIN_PASSWORD`` if both are set and none exists. If there is
+      still no account, issue a setup code and print it where only someone with
+      access to the host's logs will see it.
+
+    Unlike demo seeding, a failure here is allowed to stop start-up: an
+    instance that cannot tell anyone how to sign in is not usable, and one that
+    silently came up without its configured account would be a surprise.
+    """
+    from ..auth.service import AuthService
+
+    if not config.auth_enabled():
+        logger.warning(
+            "CVEDECK_AUTH is disabled: the dashboard and API are open to anyone "
+            "who can reach this port. Only do this behind an authenticating "
+            "proxy or on a network you trust."
+        )
+        return
+    if config.demo_mode():
+        return
+
+    with Session(engine) as session:
+        service = AuthService(session)
+        if service.bootstrap_from_env(config.admin_username(), config.admin_password()):
+            logger.info(
+                "Created the account %r from CVEDECK_ADMIN_USERNAME.",
+                config.admin_username(),
+            )
+        code = service.issue_setup_code()
+        session.commit()
+
+    if code is not None:
+        rule = "=" * 64
+        for line in (
+            rule,
+            "CveDeck has no account yet.",
+            "Open the dashboard and enter this setup code to create one:",
+            "",
+            f"    {code}",
+            "",
+            "It works once, for 24 hours or until the next restart.",
+            rule,
+        ):
+            logger.warning(line)
 
 
 def _seed_demo_if_requested(engine: Engine) -> None:

@@ -187,6 +187,28 @@ environment the app reads, so no alembic.ini edit is needed.
   A fragment never reaches the server. `parseHash` must also stay total: it falls back to
   the fleet view for anything unrecognised, and guards `decodeURIComponent`, which throws
   on a malformed escape -- a shared link is exactly the thing that arrives truncated.
+- **Every route is protected unless it is on the public allowlist (Req 16.1).**
+  `require_principal` is attached to whole routers in `create_app`, never per route, so
+  a new route is protected by default. The allowlist is five routes -- health, and auth
+  state/setup/login/logout -- pinned in `tests/test_auth_enforcement.py`, which
+  discovers routes from the app and fails if anything else answers an anonymous caller
+  (Property 12). Adding to the allowlist is a security decision: update the spec, the
+  test and DEPLOYMENT.md in the same change.
+- **Passwords, session tokens and API tokens are stored only as hashes and never
+  logged.** Passwords use scrypt (`app/auth/passwords.py`); tokens use SHA-256
+  (`app/auth/tokens.py`), which is right only because they carry 256 random bits. The
+  first-run setup code is the one secret deliberately written to the log: whoever can
+  read the log can already read the database. Auth tables are outside `_SYNC_ORDER`
+  and must stay there.
+- **Login fails closed.** `config.auth_enabled()` is true for every value of
+  `CVEDECK_AUTH` except the explicit "off" spellings, so a typo leaves login on; this
+  is the opposite default to demo mode, for the same reason. A cookie-authenticated
+  request that changes state must carry a same-origin `Origin`/`Referer`; bearer
+  tokens are exempt because browsers never send them on their own.
+- **Tests that are not about auth sign in with `override_auth(create_app())`**
+  (`tests/auth_helpers.py`). Never make the gate optional in `create_app` or disable it
+  globally in `conftest.py` -- that is exactly the injected-seam coverage hole CHANGELOG
+  0.3.1 records.
 - **Never write a colour literal outside the palette blocks.** Not in CSS rules,
   not in a JSX `style` prop. A hardcoded colour cannot be reached by the token
   layer and therefore cannot be reached by the theme toggle, which is how light
@@ -463,9 +485,11 @@ environment the app reads, so no alembic.ini edit is needed.
 - Deployment runs a single uvicorn worker because the engine is a process-wide
   singleton over SQLite (one writer). Multiple workers require PostgreSQL via
   CVEDECK_DB_URL.
-- No authentication on any endpoint (deliberate for v1, documented in DEPLOYMENT.md).
-  POST /api/scans accepts target credentials in the request body, so the service must
-  not be exposed on an untrusted network.
+- Single account, no roles (Req 16). Any signed-in session or API token can do
+  everything except manage the account. Multiple users and scoped or read-only tokens
+  are follow-ups; the `users` table already allows more than one row.
+- POST /api/scans accepts target credentials in the request body, so an instance
+  beyond a trusted network needs TLS in front of it, login or not.
 
 ## 6. Workflow expectations
 

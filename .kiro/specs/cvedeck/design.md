@@ -439,12 +439,18 @@ A dual approach is used. Property-based tests (minimum 100 iterations each, tagg
 
 **Validates: Requirements 5.5, 7.2**
 
+### Property 12: Every API route outside the public allowlist refuses an anonymous caller
+
+*For any* route the application serves under `/api`, other than the health check and the auth state, setup, sign-in and sign-out routes, a request carrying neither a current session nor a current API token SHALL be refused with HTTP 401 while login is required. The route set is discovered from the application itself, so a route added later is covered without being listed.
+
+**Validates: Requirements 16.1**
+
 
 ---
 
 ## Addendum: design changes after the initial implementation
 
-Covers Requirements 12-16 (see requirements.md addendum).
+Covers Requirements 10-16 (see requirements.md addendum).
 
 ### Scan result reporting
 
@@ -602,3 +608,40 @@ reserved for exploitation. The "Actively exploited" triage card carries
 `data-tone="exploit"`, distinct from the amber severity ramp used by the cards
 beside it — and drops to a neutral tone when the KEV feed has never loaded,
 because a zero there is an absence of an answer rather than an all-clear.
+
+### Access control
+
+Login is built in and on by default (Req 16). The shape follows from who runs
+CveDeck: one person, one container, often on a home network, frequently without
+a reverse proxy.
+
+- **Protected by default.** `require_principal` (`app/auth/dependencies.py`) is
+  attached to whole routers when `create_app` includes them, never to single
+  routes. The public allowlist is five routes and lives in
+  `tests/test_auth_enforcement.py`, which discovers every route from the
+  application and asserts each one outside the list returns 401 (Property 12).
+- **Two credentials.** A browser gets an `HttpOnly`, `SameSite=Strict` session
+  cookie; a script sends `Authorization: Bearer cvd_...`. Both are 32 random
+  bytes stored as SHA-256. Because a browser attaches cookies automatically, a
+  cookie-authenticated request that changes state must also carry an `Origin`
+  (or `Referer`) matching the request host. Tokens are exempt, and cannot manage
+  the account.
+- **Passwords** are hashed with the standard library's scrypt (n=2^15, r=8, p=1),
+  in a self-describing `scrypt$n$r$p$salt$hash` form so the cost can rise later.
+  An unknown username still spends one verification.
+- **First run** needs no default password. With no account, start-up issues a
+  setup code, stores its hash in `auth_setup`, and prints it to the log; the
+  dashboard's setup page asks for it. Whoever can read the container logs can
+  already read the database, so the log is the right trust boundary.
+  `CVEDECK_ADMIN_USERNAME` / `CVEDECK_ADMIN_PASSWORD` pre-create the account
+  instead, and `cvedeck-admin` recovers a lost password from a shell.
+- **State.** Accounts, sessions, tokens and the setup code are four tables
+  outside `_SYNC_ORDER`: credentials never leave the instance. Failed-attempt
+  throttling is in memory, which fits the single-worker process.
+- **Opting out.** `CVEDECK_AUTH=disabled` serves everything without login, for
+  deployments behind an authenticating proxy, and logs a warning on every
+  start. Anything else, including a typo, leaves login on. Demo mode is open.
+- **Frontend.** `AuthGate` asks `GET /api/auth/state` before rendering and
+  shows the setup page, the sign-in page, or the dashboard. The API client
+  reports any 401 so an expired session returns to sign-in. Account settings
+  (password, tokens) live at `#/settings`.

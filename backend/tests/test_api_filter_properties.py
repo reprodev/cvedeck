@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.api.app import create_app
+from tests.auth_helpers import override_auth
 from app.api.dependencies import get_session
 from app.data.repository import FindingInput, Repository
 from app.data.schema import Base, TargetMachine
@@ -112,7 +113,7 @@ def test_property_7_api_severity_filtering_sound_and_complete(findings, selected
             )
             session.commit()
 
-            app = create_app()
+            app = override_auth(create_app())
             app.dependency_overrides[get_session] = lambda: session
             client = TestClient(app)
 
@@ -181,7 +182,7 @@ def test_property_7_api_partitions_by_severity(findings):
             )
             session.commit()
 
-            app = create_app()
+            app = override_auth(create_app())
             app.dependency_overrides[get_session] = lambda: session
             client = TestClient(app)
 

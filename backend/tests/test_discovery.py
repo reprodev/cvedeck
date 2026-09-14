@@ -333,8 +333,9 @@ class TestDiscoveryAPI:
         from fastapi.testclient import TestClient
 
         from app.api.app import create_app
+        from tests.auth_helpers import override_auth
 
-        app = create_app()
+        app = override_auth(create_app())
         client = TestClient(app)
 
         def fake_scan_host(ip, ports, *, do_ping=True, grab_banners=True):
@@ -362,8 +363,9 @@ class TestDiscoveryAPI:
         from fastapi.testclient import TestClient
 
         from app.api.app import create_app
+        from tests.auth_helpers import override_auth
 
-        app = create_app()
+        app = override_auth(create_app())
         client = TestClient(app)
 
         resp = client.post("/api/discovery/sweep", json={"cidr": "garbage"})
@@ -373,8 +375,9 @@ class TestDiscoveryAPI:
         from fastapi.testclient import TestClient
 
         from app.api.app import create_app
+        from tests.auth_helpers import override_auth
 
-        app = create_app()
+        app = override_auth(create_app())
         client = TestClient(app)
 
         resp = client.post("/api/discovery/sweep", json={"cidr": "10.0.0.0/16"})
@@ -388,6 +391,7 @@ class TestDiscoveryAPI:
         from sqlalchemy.pool import StaticPool
 
         from app.api.app import create_app
+        from tests.auth_helpers import override_auth
         from app.api.dependencies import get_session
         from app.data.schema import Base
 
@@ -398,7 +402,7 @@ class TestDiscoveryAPI:
         )
         Base.metadata.create_all(engine)
 
-        app = create_app()
+        app = override_auth(create_app())
 
         def override_get_session():
             with Session(engine) as session:

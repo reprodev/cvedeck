@@ -6,7 +6,74 @@ All notable changes to the **CveDeck** project are documented here.
 
 ## [Unreleased]
 
+---
+
+## [0.7.0] - 2026-09-14
+
+Login is built in. Every endpoint used to be open to anyone who could reach the
+port; now a new or upgraded instance asks you to create an account first.
+
+### Upgrading
+
+- **Every instance now asks for a login.** The first start after upgrading logs
+  a one-time setup code (`docker logs cvedeck`); the dashboard asks for it to
+  create the account. The fleet, findings and remediation notes are untouched.
+  To create the account from configuration instead, set
+  `CVEDECK_ADMIN_USERNAME` and `CVEDECK_ADMIN_PASSWORD` (or `_PASSWORD_FILE`).
+- **Scripts calling the API need a token.** A cron job that `curl`s
+  `POST /api/feeds/refresh` now gets 401. Create a token under **Settings** and
+  send it as `Authorization: Bearer ...`, or run
+  `docker exec --user 1000:1000 cvedeck cvedeck-admin refresh-feeds`, which
+  needs none. The systemd timer installed by `deploy/install.sh` now uses the
+  latter; re-run the installer to pick it up.
+- **Behind a proxy on another host or container**, set
+  `CVEDECK_COOKIE_SECURE=true` (or let uvicorn trust the proxy with
+  `FORWARDED_ALLOW_IPS`), and make sure the proxy passes the original `Host`
+  header.
+
+### Added
+
+- **Built-in login (Req 16).** Until now every endpoint was open to anyone who
+  could reach the port, and the only advice was to put a proxy in front, which
+  most self-hosted installs don't have. Now:
+  - A single account, with no default password. A fresh instance prints a
+    one-time setup code to its log, and the dashboard's setup page needs it, so
+    whoever reaches the instance first cannot claim it without also being able
+    to read its logs. Passwords are at least 12 characters and stored as scrypt
+    hashes.
+  - Sessions in an `HttpOnly`, `SameSite=Strict` cookie that end after 7 days
+    unused or 30 days in total. Changing the password signs out every other
+    session. A cookie-authenticated request that changes something must come
+    from the dashboard's own origin.
+  - API tokens for scripts, created, listed and revoked under **Settings**,
+    shown once and stored as hashes. Tokens cannot manage the account.
+  - Failed sign-ins and setup attempts back off per client address and
+    username, from 30 seconds doubling to 15 minutes.
+  - `cvedeck-admin`, run on the host: `reset-password` for a lost password,
+    `create-user`, and `refresh-feeds`.
+  - `CVEDECK_AUTH=disabled` for instances already behind an authenticating
+    proxy; any other value leaves login on, and a warning is logged while it is
+    off. Demo mode needs no login.
+
+  Protection is attached to whole routers, so a route added later is protected
+  without asking. `tests/test_auth_enforcement.py` discovers every route from
+  the application and fails if one outside the five-route public allowlist
+  answers an anonymous request (Property 12); it was run against the app with
+  the protection removed and failed as it should.
+
 ### Changed
+
+- **`GET /api/health` describes the server's configuration only to a signed-in
+  caller.** Anonymously it reports status, version, demo mode and whether login
+  is required -- enough for health checks and the sign-in page -- and no longer
+  whether a server SSH key is configured.
+- **The API documentation moved behind sign-in**, from FastAPI's default public
+  `/docs`, `/redoc` and `/openapi.json` to `/api/docs` and `/api/openapi.json`.
+- **Application log lines now appear.** Alembic's logging setup silenced every
+  `app.*` logger when migrations ran, so messages such as "Demo mode: seeded 12
+  machines" had never been printed. Sign-ins, token changes and the setup code
+  depend on them.
+
 
 - **The README leads with the product.** A logo, a one-line summary, links to
   the main documents, and demo-mode screenshots of the fleet overview and a

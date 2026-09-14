@@ -26,6 +26,11 @@ describe("parseHash", () => {
     expect(parseHash("#/")).toEqual(DEFAULT_ROUTE);
   });
 
+  it("parses the account settings screen", () => {
+    expect(parseHash("#/settings")).toEqual({ workspace: "settings", machineId: null });
+    expect(formatHash({ workspace: "settings", machineId: null })).toBe("#/settings");
+  });
+
   it("parses each workspace", () => {
     expect(parseHash("#/fleet")).toEqual({ workspace: "fleet", machineId: null });
     expect(parseHash("#/scan")).toEqual({ workspace: "scan", machineId: null });

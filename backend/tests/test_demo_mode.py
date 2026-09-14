@@ -15,18 +15,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import create_app
+from tests.auth_helpers import override_auth
 
 
 @pytest.fixture()
 def demo(monkeypatch):
     monkeypatch.setenv("CVEDECK_DEMO_MODE", "true")
-    return TestClient(create_app())
+    return TestClient(override_auth(create_app()))
 
 
 @pytest.fixture()
 def normal(monkeypatch):
     monkeypatch.delenv("CVEDECK_DEMO_MODE", raising=False)
-    return TestClient(create_app())
+    return TestClient(override_auth(create_app()))
 
 
 def test_health_advertises_demo_mode(demo):

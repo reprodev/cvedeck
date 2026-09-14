@@ -141,7 +141,8 @@ def test_threat_intel_migration_round_trips(tmp_path):
     with engine.begin() as connection:
         cfg = alembic_config()
         cfg.attributes["connection"] = connection
-        command.downgrade(cfg, "-1")
+        # Named, not "-1": later revisions sit on top of this one.
+        command.downgrade(cfg, "e451e20b58e2")
 
     tables = set(inspect(engine).get_table_names())
     assert not {"kev_entries", "epss_scores", "feed_refreshes"} & tables
@@ -269,3 +270,52 @@ def test_backfilled_rows_load_through_the_orm(tmp_path):
         row = session.get(TargetMachineRow, "m")
         assert row.last_scan_status is ScanStatus.NEVER_SCANNED
         assert row.last_scan_sources_ok is True
+
+
+def test_a_0_6_0_database_upgrades_to_access_control_with_its_data(tmp_path):
+    """Validates Req 16.3: an upgraded instance keeps its fleet and asks for setup."""
+    url = f"sqlite:///{(tmp_path / 'v060.db').as_posix()}"
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "a1c7f3e9d204")
+        connection.execute(
+            text(
+                "INSERT INTO target_machines "
+                "(id, hostname, platform, last_scan_status, last_scan_sources_ok, sync_status) "
+                "VALUES ('m1', 'web-01', 'LINUX', 'SUCCESS', 1, 'SYNCED')"
+            )
+        )
+
+    upgrade_to_head(engine)
+
+    assert _revision(engine) == _head()
+    tables = set(inspect(engine).get_table_names())
+    assert {"users", "auth_sessions", "api_tokens", "auth_setup"} <= tables
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT hostname FROM target_machines")).scalar() == "web-01"
+        assert connection.execute(text("SELECT COUNT(*) FROM users")).scalar() == 0
+
+
+def test_the_access_control_migration_round_trips(tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'auth.db').as_posix()}")
+    upgrade_to_head(engine)
+
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.downgrade(cfg, "a1c7f3e9d204")
+    assert not {"users", "auth_sessions", "api_tokens", "auth_setup"} & set(
+        inspect(engine).get_table_names()
+    )
+
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "head")
+    assert _revision(engine) == _head()
+
+
+def test_there_is_exactly_one_head():
+    assert len(ScriptDirectory.from_config(alembic_config()).get_heads()) == 1

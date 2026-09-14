@@ -371,7 +371,7 @@ flowchart LR
 
 ## 9. Target Architecture Roadmap: Linux-First Execution & Windows Research Tracks
 
-> **Status in 0.6.0: Windows scans are refused.** Windows hosts can be discovered
+> **Status since 0.6.0: Windows scans are refused.** Windows hosts can be discovered
 > and enrolled, and the WinRM collector exists, but none of the three tracks below
 > is built, so nothing can match what the collector gathers. OSV has no Windows
 > ecosystem and rejects the query; OS-level exposure lives in cumulative updates

@@ -29,6 +29,7 @@ import { themeAffordance, useTheme } from "./lib/useTheme";
 import { useUrlState } from "./lib/useUrlState";
 import type { Workspace } from "./lib/useUrlState";
 import { ScanFormView } from "./views/ScanFormView";
+import { SettingsView } from "./views/SettingsView";
 import { useToast } from "./components/Toast";
 import { buildKnownHostMap, isScannable } from "./lib/platform";
 import { statusLabel } from "./lib/labels";
@@ -36,6 +37,13 @@ import { statusLabel } from "./lib/labels";
 export interface AppProps {
   /** Injectable API client, primarily for testing. Defaults to a real client. */
   client?: CveScannerApiClient;
+  /**
+   * The signed-in account, or null when login is not required here (disabled,
+   * or demo mode). The account controls only appear when there is one.
+   */
+  account?: { username: string } | null;
+  /** Sign out. Supplied by the auth gate alongside `account`. */
+  onSignOut?: () => void;
 }
 
 /** Extract a displayable message from a rejected API call. */
@@ -43,7 +51,7 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export function App({ client }: AppProps = {}) {
+export function App({ client, account = null, onSignOut }: AppProps = {}) {
   const api = useMemo(() => client ?? new CveScannerApiClient(), [client]);
 
   const [machines, setMachines] = useState<MachineSummary[]>([]);
@@ -227,6 +235,7 @@ export function App({ client }: AppProps = {}) {
             defaultSshUser: false,
             version: null,
             demoMode: false,
+            loginRequired: false,
           });
         }
       });
@@ -461,15 +470,35 @@ export function App({ client }: AppProps = {}) {
           value. The label carries the current state for screen readers, since
           the icon alone does not.
         */}
-        <button
-          type="button"
-          className="theme-toggle"
-          onClick={cycleTheme}
-          title={`${themeLabel} — click to change`}
-          aria-label={`${themeLabel}. Click to change theme.`}
-        >
-          <Icon name={themeIcon} />
-        </button>
+        <div className="header-actions">
+          {account && (
+            <nav className="account-menu" aria-label="Account">
+              <span className="account-name">
+                <Icon name="user" /> {account.username}
+              </span>
+              <button
+                type="button"
+                className={`secondary account-btn ${activeNav === "settings" ? "active" : ""}`}
+                onClick={() => handleNavigate("settings")}
+                aria-current={activeNav === "settings" ? "page" : undefined}
+              >
+                <Icon name="key" /> Settings
+              </button>
+              <button type="button" className="secondary account-btn" onClick={onSignOut}>
+                <Icon name="log-out" /> Sign out
+              </button>
+            </nav>
+          )}
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={cycleTheme}
+            title={`${themeLabel} — click to change`}
+            aria-label={`${themeLabel}. Click to change theme.`}
+          >
+            <Icon name={themeIcon} />
+          </button>
+        </div>
       </div>
 
       {/* A public demo has to say so. Without this the fleet reads as a real
@@ -548,6 +577,15 @@ export function App({ client }: AppProps = {}) {
           findings={findings}
           onBack={handleBack}
           onSaveRemediation={handleSaveRemediation}
+        />
+      ) : activeNav === "settings" && account ? (
+        <SettingsView
+          username={account.username}
+          onChangePassword={(current, next) => api.changePassword(current, next)}
+          onListTokens={() => api.listApiTokens()}
+          onCreateToken={(name) => api.createApiToken(name)}
+          onRevokeToken={(tokenId) => api.revokeApiToken(tokenId)}
+          onBack={() => handleNavigate("fleet")}
         />
       ) : activeNav === "discovery" ? (
         <DiscoveryView

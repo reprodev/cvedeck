@@ -379,3 +379,58 @@ class TestConnectionResponse(BaseModel):
     os_banner: str = ""
 
 
+# --------------------------------------------------------------------------- #
+# Access control (Req 16)
+# --------------------------------------------------------------------------- #
+
+
+class AuthStateOut(BaseModel):
+    """What the dashboard should show before anything else (Req 16.3).
+
+    ``state`` is one of ``setup_required`` (no account yet), ``signed_out``,
+    ``signed_in``, or ``open`` (login is not required: disabled, or demo mode).
+    """
+
+    state: str
+    username: str | None = None
+    #: ``session`` or ``token`` when signed in.
+    via: str | None = None
+
+
+class LoginIn(BaseModel):
+    username: str = Field(max_length=256)
+    password: str = Field(max_length=2048)
+
+
+class SetupIn(BaseModel):
+    setup_code: str = Field(max_length=64)
+    username: str = Field(max_length=256)
+    password: str = Field(max_length=2048)
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(max_length=2048)
+    new_password: str = Field(max_length=2048)
+
+
+class ApiTokenIn(BaseModel):
+    name: str = Field(max_length=256)
+
+
+class ApiTokenOut(BaseModel):
+    """An API token as listed. Never carries the token itself."""
+
+    token_id: str
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class ApiTokenCreatedOut(ApiTokenOut):
+    """The one response that includes the token. It is not retrievable later."""
+
+    token: str
+
+

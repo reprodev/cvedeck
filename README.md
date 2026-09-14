@@ -60,6 +60,10 @@ Everything is manual for now: no scheduled scans, and no automated remediation.
 
 ## What it does
 
+- **Signs you in.** Login is built in and on from the first start, with no
+  default password: a one-time setup code in the container log creates the
+  account. Scripts use API tokens you create and revoke in Settings.
+
 - **Scans without agents.** SSH (`paramiko`), with a password or an
   Ed25519/ECDSA/RSA key that is parsed in memory and never written to disk. A
   pre-flight connection test reports reachability, credentials and the OS banner
@@ -124,10 +128,18 @@ dashboard on a single port, with the database in a directory you mount. No
 checkout needed:
 
 ```bash
-docker run -d -p 3325:8000 -v /srv/cvedeck:/data ghcr.io/reprodev/cvedeck:latest
+docker run -d --name cvedeck -p 3325:8000 -v /srv/cvedeck:/data ghcr.io/reprodev/cvedeck:latest
 ```
 
-Then open <http://localhost:3325>.
+Then open <http://localhost:3325>. The first time, it asks for a setup code to
+create your account. Find it in the log:
+
+```bash
+docker logs cvedeck
+```
+
+To create the account from configuration instead, see
+[Authentication](DEPLOYMENT.md#authentication).
 
 <details>
 <summary><strong>Or with Docker Compose</strong></summary>
@@ -154,9 +166,10 @@ services:
 </details>
 
 > [!WARNING]
-> CveDeck has **no authentication of its own**. Don't expose it to the internet
-> without a reverse proxy and access control in front of it. See
-> [DEPLOYMENT.md](DEPLOYMENT.md).
+> Login keeps strangers out, but over plain HTTP the password, the session and
+> the SSH credentials you scan with all cross the network readable. Put a TLS
+> reverse proxy in front before exposing CveDeck beyond a network you trust. See
+> [DEPLOYMENT.md](DEPLOYMENT.md#security).
 
 ### Try it with demo data
 
@@ -172,7 +185,7 @@ scanned, one whose credentials failed, one scanned while an advisory source was
 down, and findings whose exploitation status was never checked. It also
 **disables scanning, discovery and connection tests**. The threat-intel feeds
 start empty, so press **Refresh intel** to download them and see the ranking in
-the screenshots above.
+the screenshots above. Demo mode needs no login.
 
 Leave demo mode off on any instance you actually scan with. A public instance
 with scanning enabled is an SSH/WinRM client and port scanner that any visitor
@@ -236,8 +249,8 @@ change. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 ## Security
 
 Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md). CveDeck
-performs **no authentication on any endpoint** by default and is designed to run
-behind a reverse proxy or on a trusted network segment.
+requires a login by default, has a single account with no roles, and should sit
+behind TLS anywhere beyond a trusted network.
 
 ## Credits
 

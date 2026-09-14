@@ -320,6 +320,78 @@ class FeedRefresh(Base):
     error_detail: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+class User(Base):
+    """An account that can sign in to the dashboard and API (Req 16).
+
+    Like the intel caches, auth rows carry no ``sync_status`` and are absent
+    from the sync order: credentials belong to this instance and must never be
+    copied to the Online_Database.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    username: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    #: ``scrypt$n$r$p$salt$hash`` -- see ``app.auth.passwords``. Never the
+    #: password itself.
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(nullable=False)
+    password_changed_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class AuthSession(Base):
+    """A signed-in browser session (Req 16.5, 16.6).
+
+    Keyed by the SHA-256 of the cookie value, so a copy of this table cannot be
+    replayed as a login.
+    """
+
+    __tablename__ = "auth_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(nullable=False)
+    #: Absolute expiry. Idle expiry is computed from ``last_seen_at``.
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class ApiToken(Base):
+    """A named bearer token for scripts and other applications (Req 16.7).
+
+    Only the hash is stored; the token is shown once, when created. ``prefix``
+    is the first few characters, kept so a token can be recognised in the list
+    without being recoverable from it. A revoked token keeps its row, so the
+    list can still show what it was and when it stopped working.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    prefix: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class AuthSetup(Base):
+    """The outstanding first-run setup code, while no account exists (Req 16.3).
+
+    At most one row. Holds a hash, not the code: the code itself only ever
+    appears in the start-up log.
+    """
+
+    __tablename__ = "auth_setup"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
 class RemediationRecord(Base):
     """Manually maintained remediation state for a CVE on a machine.
 

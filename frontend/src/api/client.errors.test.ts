@@ -90,3 +90,48 @@ describe("ApiClient error reporting", () => {
     await expect(client.listMachines()).rejects.toBeInstanceOf(ApiTimeoutError);
   });
 });
+
+describe("ApiClient session handling (Req 16.5)", () => {
+  it("reports a refused session so the app can return to sign-in", async () => {
+    const onUnauthorized = vi.fn();
+    const client = new CveScannerApiClient({
+      fetchImpl: respondWith(401, JSON.stringify({ detail: "Sign in to use CveDeck." })),
+      onUnauthorized,
+    });
+
+    await expect(client.listMachines()).rejects.toThrow("Sign in to use CveDeck.");
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat a wrong password on the sign-in form as an expired session", async () => {
+    const onUnauthorized = vi.fn();
+    const client = new CveScannerApiClient({
+      fetchImpl: respondWith(401, JSON.stringify({ detail: "Incorrect username or password." })),
+      onUnauthorized,
+    });
+
+    await expect(client.login("admin", "wrong")).rejects.toThrow("Incorrect username or password.");
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it("reports a refused session on account routes too", async () => {
+    const onUnauthorized = vi.fn();
+    const client = new CveScannerApiClient({
+      fetchImpl: respondWith(401, JSON.stringify({ detail: "Sign in to use CveDeck." })),
+      onUnauthorized,
+    });
+
+    await expect(client.listApiTokens()).rejects.toThrow();
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends the session cookie with every request", async () => {
+    const fetchImpl = respondWith(200, "[]");
+    await new CveScannerApiClient({ fetchImpl }).listMachines();
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/machines",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+});

@@ -52,6 +52,12 @@ def test_create_all_creates_every_table(engine):
         "kev_entries",
         "epss_scores",
         "feed_refreshes",
+        # Access control (Req 16). Not syncable either: credentials belong to
+        # this instance and must never be copied to the Online_Database.
+        "users",
+        "auth_sessions",
+        "api_tokens",
+        "auth_setup",
     }
 
 

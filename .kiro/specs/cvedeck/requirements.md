@@ -294,3 +294,53 @@ want it to be safe to expose.
    others are not (extends Req 10 and the enrichment invariant).
 7. THE system SHALL default to demonstration mode being disabled, and SHALL
    treat an unrecognised setting as disabled.
+
+### Requirement 16: Access control
+
+**User story:** As the operator of a CveDeck instance, I want it to require a
+login by default, so that someone who can reach the port cannot read my fleet's
+vulnerabilities or use the instance to connect to other hosts. As someone
+scripting against the API, I want a token that does not depend on a browser.
+
+#### Acceptance criteria
+
+1. WHERE login is required THEN the system SHALL refuse every API request that
+   carries neither a current session nor a current API token, except the health
+   check and the routes that report the auth state, complete setup, sign in and
+   sign out; SHALL NOT serve its API documentation without one; and SHALL report
+   through the health check only its status, version, demonstration mode and
+   whether login is required to a caller who is not signed in.
+2. WHEN a user signs in THEN the system SHALL verify the password against a
+   salted, memory-hard hash; SHALL give the same response for an unknown username
+   as for a wrong password, taking comparable time; and SHALL refuse to set a
+   password shorter than 12 characters, stating why.
+3. WHERE login is required AND no account exists THEN the system SHALL issue a
+   single-use setup code, record only its hash, write the code to its log, and
+   SHALL create the first account only for a request presenting that code before
+   it expires; a restart SHALL replace the code.
+4. WHERE an administrator username and password are configured AND no account
+   exists THEN the system SHALL create that account at start-up, and SHALL NOT
+   change an account that already exists.
+5. WHEN a user signs in THEN the system SHALL issue a new random session token,
+   store only its hash, send it in a cookie that scripts cannot read and other
+   sites do not send, and SHALL end the session 30 days after sign-in or 7 days
+   after its last use, whichever is sooner.
+6. WHEN a user changes their password THEN the system SHALL require the current
+   password and SHALL end every other session of that account.
+7. THE system SHALL let a signed-in user create, list and revoke named API
+   tokens; SHALL show a token only in the response that creates it and store only
+   its hash; SHALL accept a current token as a bearer credential; and SHALL NOT
+   let a token manage the account.
+8. WHEN sign-in or setup attempts from one client address for one username
+   repeatedly fail THEN the system SHALL refuse further attempts for an interval
+   that grows with each failure, and SHALL report how long to wait.
+9. THE system SHALL require login unless it is explicitly disabled, SHALL treat
+   any unrecognised setting as enabled, and SHALL log a warning at start-up
+   whenever login is disabled.
+10. WHEN a request authenticated by session cookie would change state AND it does
+    not come from the dashboard's own origin or a configured CORS origin THEN the
+    system SHALL refuse it and say that scripts should use an API token.
+11. WHERE demonstration mode is enabled THEN the system SHALL NOT require login
+    (extends Req 15).
+12. THE system SHALL provide a command, run on the host, that resets the account
+    password, ending every session, or creates the account when none exists.

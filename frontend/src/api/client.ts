@@ -34,6 +34,9 @@ import type {
   FeedHealth,
   FeedRefreshOutcome,
   FeedStatus,
+  ApiToken,
+  AuthState,
+  CreatedApiToken,
 } from "../types";
 
 /** Error thrown when the backend returns a non-2xx response. */
@@ -123,6 +126,13 @@ export interface ApiClientOptions {
    * Set to 0 to disable.
    */
   timeoutMs?: number;
+  /**
+   * Called when a request is refused for want of a session (HTTP 401), other
+   * than the sign-in routes themselves. The auth gate uses it to return to the
+   * sign-in page when a session expires mid-use, rather than leaving every
+   * panel to show its own error (Req 16.5).
+   */
+  onUnauthorized?: () => void;
 }
 
 // --------------------------------------------------------------------------- //
@@ -188,6 +198,32 @@ interface HealthWire {
     server_ssh_key?: boolean;
     default_ssh_user?: boolean;
     demo_mode?: boolean;
+    login_required?: boolean;
+  };
+}
+
+interface AuthStateWire {
+  state: AuthState["state"];
+  username?: string | null;
+}
+
+interface ApiTokenWire {
+  token_id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at?: string | null;
+  revoked_at?: string | null;
+}
+
+function toApiToken(wire: ApiTokenWire): ApiToken {
+  return {
+    tokenId: wire.token_id,
+    name: wire.name,
+    prefix: wire.prefix,
+    createdAt: wire.created_at,
+    lastUsedAt: wire.last_used_at ?? null,
+    revokedAt: wire.revoked_at ?? null,
   };
 }
 
@@ -391,10 +427,22 @@ function toDiscoverySweepResult(wire: DiscoverySweepResponseWire): DiscoverySwee
   };
 }
 
+/**
+ * Routes whose 401 is an answer about the form, not an expired session: a wrong
+ * password on the sign-in page must show an error there, not bounce to it.
+ */
+const PUBLIC_AUTH_PATHS = new Set([
+  "/api/auth/state",
+  "/api/auth/login",
+  "/api/auth/setup",
+  "/api/auth/logout",
+]);
+
 export class CveScannerApiClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly onUnauthorized: (() => void) | undefined;
 
   constructor(options: ApiClientOptions = {}) {
     // Strip any trailing slash so path joins are predictable.
@@ -404,6 +452,77 @@ export class CveScannerApiClient {
     // receiver. Browsers reject that with "Illegal invocation".
     this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.onUnauthorized = options.onUnauthorized;
+  }
+
+  // ------------------------------------------------------------------------ //
+  // Access control (Req 16)
+  // ------------------------------------------------------------------------ //
+
+  /** GET /api/auth/state -- setup, sign-in, or straight to the dashboard. */
+  async getAuthState(): Promise<AuthState> {
+    const wire = await this.request<AuthStateWire>("GET", "/api/auth/state");
+    return { state: wire.state, username: wire.username ?? null };
+  }
+
+  /** POST /api/auth/login -- the response sets the session cookie. */
+  async login(username: string, password: string): Promise<AuthState> {
+    const wire = await this.request<AuthStateWire>("POST", "/api/auth/login", {
+      username,
+      password,
+    });
+    return { state: wire.state, username: wire.username ?? null };
+  }
+
+  /** POST /api/auth/setup -- create the first account with the logged code. */
+  async completeSetup(
+    setupCode: string,
+    username: string,
+    password: string,
+  ): Promise<AuthState> {
+    const wire = await this.request<AuthStateWire>("POST", "/api/auth/setup", {
+      setup_code: setupCode,
+      username,
+      password,
+    });
+    return { state: wire.state, username: wire.username ?? null };
+  }
+
+  /** POST /api/auth/logout */
+  async logout(): Promise<void> {
+    await this.request<void>("POST", "/api/auth/logout");
+  }
+
+  /** PUT /api/auth/password -- signs out every other session. */
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    await this.request<void>("PUT", "/api/auth/password", {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
+  }
+
+  /** GET /api/auth/tokens */
+  async listApiTokens(): Promise<ApiToken[]> {
+    const wire = await this.request<ApiTokenWire[]>("GET", "/api/auth/tokens");
+    return (wire ?? []).map(toApiToken);
+  }
+
+  /** POST /api/auth/tokens -- the only response that carries the token. */
+  async createApiToken(name: string): Promise<CreatedApiToken> {
+    const wire = await this.request<ApiTokenWire & { token: string }>(
+      "POST",
+      "/api/auth/tokens",
+      { name },
+    );
+    return { ...toApiToken(wire), token: wire.token };
+  }
+
+  /** DELETE /api/auth/tokens/{tokenId} */
+  async revokeApiToken(tokenId: string): Promise<void> {
+    await this.request<void>(
+      "DELETE",
+      `/api/auth/tokens/${encodeURIComponent(tokenId)}`,
+    );
   }
 
   /** GET /api/machines */
@@ -497,6 +616,7 @@ export class CveScannerApiClient {
       defaultSshUser: wire.capabilities?.default_ssh_user ?? false,
       version: wire.version ?? null,
       demoMode: wire.capabilities?.demo_mode ?? false,
+      loginRequired: wire.capabilities?.login_required ?? false,
     };
   }
 
@@ -660,6 +780,9 @@ export class CveScannerApiClient {
         headers,
         body: payload,
         signal: controller?.signal,
+        // The session is a cookie. Same-origin requests send it anyway;
+        // "include" keeps a split deployment (CVEDECK_CORS_ORIGINS) working.
+        credentials: "include",
       });
     } catch (error) {
       if ((error as { name?: string })?.name === "AbortError") {
@@ -672,6 +795,10 @@ export class CveScannerApiClient {
       throw error;
     } finally {
       if (timer !== null) clearTimeout(timer);
+    }
+
+    if (response.status === 401 && !PUBLIC_AUTH_PATHS.has(path)) {
+      this.onUnauthorized?.();
     }
 
     if (!response.ok) {

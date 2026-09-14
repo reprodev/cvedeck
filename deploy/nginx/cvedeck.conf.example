@@ -1,8 +1,9 @@
 # Example nginx reverse proxy for the CveDeck.
 #
-# The application has NO AUTHENTICATION of its own. Terminate TLS here and add
-# an access control layer (auth_basic below, or your SSO/identity-aware proxy)
-# before exposing it beyond a trusted network.
+# CveDeck requires a login by default. Terminate TLS here: over plain HTTP the
+# password, the session cookie and scan credentials cross the network readable.
+# An extra access layer (auth_basic below, or an identity-aware proxy) is still
+# worth adding before exposing it to the internet.
 #
 # Copy to /etc/nginx/sites-available/cvedeck, adjust server_name and the
 # certificate paths, then symlink into sites-enabled and reload nginx.
@@ -30,13 +31,16 @@ server {
     client_max_body_size 16m;
 
     location / {
-        # Add authentication -- the application enforces none.
+        # Optional second layer in front of CveDeck's own login.
         # auth_basic "CVE Scanner";
         # auth_basic_user_file /etc/nginx/cvedeck.htpasswd;
 
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
 
+        # Host must be passed through: CveDeck refuses a state-changing request
+        # whose Origin does not match it. X-Forwarded-Proto lets it mark the
+        # session cookie Secure; uvicorn trusts it from 127.0.0.1 by default.
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;

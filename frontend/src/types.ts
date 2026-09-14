@@ -217,6 +217,42 @@ export interface ServerCapabilities {
    * return 403.
    */
   demoMode: boolean;
+  /**
+   * Whether this deployment asks for a login (Req 16.9). False when login is
+   * disabled or in demo mode, which is when the account controls are hidden.
+   */
+  loginRequired: boolean;
+}
+
+/**
+ * What the dashboard shows before anything else (Req 16.3).
+ *
+ * - `setup_required`: no account exists yet; show the setup page.
+ * - `signed_out`: show the sign-in page.
+ * - `signed_in`: show the dashboard, with the account controls.
+ * - `open`: login is not required here; show the dashboard without them.
+ */
+export type AuthStateName = "setup_required" | "signed_out" | "signed_in" | "open";
+
+export interface AuthState {
+  state: AuthStateName;
+  username: string | null;
+}
+
+/** An API token as listed. Never carries the token itself (Req 16.7). */
+export interface ApiToken {
+  tokenId: string;
+  name: string;
+  /** The first characters, enough to recognise it and no more. */
+  prefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+/** The one response that includes the token; it cannot be fetched again. */
+export interface CreatedApiToken extends ApiToken {
+  token: string;
 }
 
 /** A persisted remediation record returned by the backend. */

@@ -3,10 +3,6 @@ Description=CveDeck -- refresh threat-intel feeds (CISA KEV, FIRST EPSS)
 Documentation=https://github.com/reprodev/cvedeck
 After=network-online.target cvedeck.service
 Wants=network-online.target
-# The API has to be up to accept the refresh. A run that fires while it is
-# restarting simply fails and the timer retries tomorrow -- the previous cache
-# is left intact, so a missed refresh degrades to stale data, never to none.
-Requires=cvedeck.service
 
 [Service]
 Type=oneshot
@@ -15,18 +11,23 @@ Type=oneshot
 # cache. Enrichment is applied at scan time, so this takes effect on the next
 # scan rather than retroactively.
 #
-# --max-time is generous because the EPSS set is a few megabytes. --fail makes
-# curl exit non-zero on an HTTP error so a failed refresh shows up in
-# `systemctl status` rather than passing silently.
-ExecStart=/usr/bin/curl --fail --silent --show-error --max-time 300 \
-    -X POST http://127.0.0.1:8000/api/feeds/refresh
+# Runs on the host against the database directly rather than calling the API:
+# the API requires a login, and a process that can already read the database
+# has nothing to prove with a token. Exits non-zero if either feed failed, so a
+# failed refresh shows up in `systemctl status` rather than passing silently.
+# A failed refresh leaves the previous cache intact, so a missed run degrades
+# to stale data, never to none.
+User=cvedeck
+Group=cvedeck
+EnvironmentFile=/etc/cvedeck/cvedeck.env
+ExecStart=/opt/cvedeck/venv/bin/cvedeck-admin refresh-feeds
 
-# The endpoint is on loopback and reads nothing from disk, so this unit needs
-# almost no access to the system at all.
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict
+# The database lives here; everything else stays read-only.
+ReadWritePaths=/var/lib/cvedeck
 ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes

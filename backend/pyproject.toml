@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cvedeck"
-version = "0.6.0"
+version = "0.7.0"
 description = "Agentless CVE scanner dashboard backend"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,11 @@ dependencies = [
     "uvicorn>=0.29",
     "httpx>=0.27",
 ]
+
+[project.scripts]
+# Recover access from a shell on the host: reset a lost password, or create the
+# account without the web setup page. See DEPLOYMENT.md "Authentication".
+cvedeck-admin = "app.auth.cli:main"
 
 [project.optional-dependencies]
 dev = [
