@@ -107,6 +107,7 @@ export function exportFindingsCsv(
     "Blast Radius",
     "Dependencies",
     "Depended On By (Reverse Deps)",
+    "First Seen",
   ];
 
   const rows = findings.map((f) => [
@@ -119,6 +120,7 @@ export function exportFindingsCsv(
     f.blastRadius || "low",
     (f.dependencies || []).join("; "),
     (f.dependedOnBy || []).join("; "),
+    f.firstSeenAt || "",
   ]);
 
   const sanitizedHost = hostname.replace(/[^a-zA-Z0-9_.-]/g, "_");

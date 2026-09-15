@@ -25,7 +25,9 @@ import type {
   MachineSummary,
   RemediationInput,
   RemediationRecord,
+  FindingChangeRow,
   ScanOutcome,
+  ScanRun,
   ScanTargetInput,
   Severity,
   TestConnectionInput,
@@ -155,6 +157,10 @@ interface MachineSummaryWire {
   last_scan_sources_ok?: boolean;
   cve_counts: MachineSummary["cveCounts"];
   kev_count?: number;
+  host_key_fingerprint?: string | null;
+  last_scan_new?: number | null;
+  last_scan_resolved?: number | null;
+  last_scan_baseline?: boolean;
 }
 
 /** Wire shape of a CVE finding as serialized by the backend. */
@@ -180,6 +186,8 @@ interface CveFindingWire {
   kev_due_date?: string | null;
   epss_score?: number | null;
   epss_percentile?: number | null;
+  first_seen_at?: string | null;
+  is_new?: boolean;
 }
 
 /** Wire shape of a per-target scan outcome as serialized by the backend. */
@@ -190,6 +198,33 @@ interface MachineScanWire {
   sources_ok?: boolean;
   unavailable_sources?: string[];
   message?: string | null;
+  new_count?: number | null;
+  resolved_count?: number | null;
+  baseline?: boolean;
+}
+
+/** Wire shape of GET /api/machines/{id}/scans. */
+interface ScanRunWire {
+  run_id: string;
+  scanned_at: string;
+  status: string;
+  sources_ok: boolean;
+  finding_count: number;
+  new_count: number | null;
+  resolved_count: number | null;
+  baseline: boolean;
+}
+
+/** Wire shape of GET /api/machines/{id}/scans/{run_id}/changes. */
+interface FindingChangeWire {
+  change: "new" | "resolved";
+  cve_id: string;
+  package_identifier: string | null;
+  package_name: string | null;
+  severity: Severity;
+  cvss_score: number;
+  kev_listed: boolean | null;
+  remediation_status: string | null;
 }
 
 /** Wire shape of the POST /api/scans response. */
@@ -292,6 +327,10 @@ function toMachineSummary(wire: MachineSummaryWire): MachineSummary {
       low: wire.cve_counts.low,
     },
     kevCount: wire.kev_count ?? 0,
+    hostKeyFingerprint: wire.host_key_fingerprint ?? null,
+    lastScanNew: wire.last_scan_new ?? null,
+    lastScanResolved: wire.last_scan_resolved ?? null,
+    lastScanBaseline: wire.last_scan_baseline ?? false,
   };
 }
 
@@ -320,6 +359,8 @@ function toCveFinding(wire: CveFindingWire): CveFinding {
     kevDueDate: wire.kev_due_date ?? null,
     epssScore: wire.epss_score ?? null,
     epssPercentile: wire.epss_percentile ?? null,
+    firstSeenAt: wire.first_seen_at ?? null,
+    isNew: wire.is_new ?? false,
   };
 }
 
@@ -371,6 +412,9 @@ function toScanOutcome(wire: MachineScanWire): ScanOutcome {
     sourcesOk: wire.sources_ok ?? true,
     unavailableSources: wire.unavailable_sources ?? [],
     message: wire.message ?? null,
+    newCount: wire.new_count ?? null,
+    resolvedCount: wire.resolved_count ?? null,
+    baseline: wire.baseline ?? false,
   };
 }
 
@@ -412,6 +456,7 @@ interface TestConnectionResponseWire {
   message: string;
   latency_ms: number;
   os_banner: string;
+  host_key_fingerprint?: string | null;
 }
 
 function toTestConnectionResult(wire: TestConnectionResponseWire): TestConnectionResult {
@@ -421,6 +466,7 @@ function toTestConnectionResult(wire: TestConnectionResponseWire): TestConnectio
     message: wire.message,
     latencyMs: wire.latency_ms,
     osBanner: wire.os_banner,
+    hostKeyFingerprint: wire.host_key_fingerprint ?? null,
   };
 }
 
@@ -529,6 +575,53 @@ export class CveScannerApiClient {
       "DELETE",
       `/api/auth/tokens/${encodeURIComponent(tokenId)}`,
     );
+  }
+
+  /**
+   * DELETE /api/host-keys/{hostname} -- forget the pinned SSH host key, so the
+   * next connection trusts whatever key the host presents (Req 17.7).
+   */
+  async forgetHostKey(hostname: string): Promise<void> {
+    await this.request<void>(
+      "DELETE",
+      `/api/host-keys/${encodeURIComponent(hostname)}`,
+    );
+  }
+
+  /** GET /api/machines/{id}/scans -- a host's scan runs, newest first (Req 18.1). */
+  async listScanRuns(machineId: string, limit = 20): Promise<ScanRun[]> {
+    const wire = await this.request<ScanRunWire[]>(
+      "GET",
+      `/api/machines/${encodeURIComponent(machineId)}/scans?limit=${limit}`,
+    );
+    return wire.map((run) => ({
+      runId: run.run_id,
+      scannedAt: run.scanned_at,
+      status: run.status,
+      sourcesOk: run.sources_ok,
+      findingCount: run.finding_count,
+      newCount: run.new_count,
+      resolvedCount: run.resolved_count,
+      baseline: run.baseline,
+    }));
+  }
+
+  /** GET /api/machines/{id}/scans/{run_id}/changes (Req 18.2). */
+  async listScanChanges(machineId: string, runId: string): Promise<FindingChangeRow[]> {
+    const wire = await this.request<FindingChangeWire[]>(
+      "GET",
+      `/api/machines/${encodeURIComponent(machineId)}/scans/${encodeURIComponent(runId)}/changes`,
+    );
+    return wire.map((c) => ({
+      change: c.change,
+      cveId: c.cve_id,
+      packageIdentifier: c.package_identifier,
+      packageName: c.package_name,
+      severity: c.severity,
+      cvssScore: c.cvss_score,
+      kevListed: c.kev_listed,
+      remediationStatus: c.remediation_status,
+    }));
   }
 
   /** GET /api/machines */

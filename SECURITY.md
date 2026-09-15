@@ -83,11 +83,15 @@ network; put a TLS reverse proxy in front anywhere beyond a trusted network.
 process, which fits the single-worker deployment. Behind a proxy that uvicorn
 does not trust, every client shares the proxy's address.
 
-**SSH host keys are accepted on first use.** The Linux collector uses
-paramiko's `AutoAddPolicy`, so a first connection to a host trusts whatever key
-it presents. This is a real man-in-the-middle exposure on an untrusted network.
-Pinned host keys are on the roadmap
-([AGENTS.md §5](AGENTS.md#5-known-follow-ups--roadmap--research-tracks)).
+**The first connection to a host trusts its SSH key.** CveDeck pins each host's
+key the first time a scan or connection test to it succeeds, and refuses the
+host, before sending any credential, if it ever presents a different key. That
+first connection is still trust on first use: something in the middle of it
+gets pinned instead of the host. Compare the fingerprint shown on the machine's
+page with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host, or set
+`CVEDECK_SSH_HOST_KEY_POLICY=strict` so unpinned hosts are refused. An instance
+upgraded from 0.7.3 or earlier has no pins, so its next scan of each host is a
+first use.
 
 **WinRM defaults to HTTP.** Windows scans are refused in this release, so no
 WinRM connection is made by a scan. When Windows support lands, set

@@ -81,7 +81,7 @@ class FakeRepository:
         self.saved_inventories.append(inventory)
         return inventory
 
-    def save_findings(self, machine_id: str, findings: list[FindingInput]):
+    def save_findings(self, machine_id: str, findings: list[FindingInput], **_kwargs):
         self.saved_findings.setdefault(machine_id, []).extend(findings)
         return findings
 

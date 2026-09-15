@@ -26,6 +26,10 @@ export function makeMachine(
     lastScanSourcesOk: true,
     cveCounts: { ...NO_CVES },
     kevCount: 0,
+    hostKeyFingerprint: null,
+    lastScanNew: null,
+    lastScanResolved: null,
+    lastScanBaseline: false,
     ...overrides,
   };
 }
@@ -40,6 +44,9 @@ export function makeScanOutcome(
     sourcesOk: true,
     unavailableSources: [],
     message: null,
+    newCount: null,
+    resolvedCount: null,
+    baseline: false,
     ...overrides,
   };
 }

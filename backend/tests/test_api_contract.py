@@ -161,6 +161,13 @@ _MACHINE_SUMMARY_KEYS = {
     # which on a fleet whose intel feeds never loaded is not the same as "none
     # exist" -- GET /api/feeds is what distinguishes them.
     "kev_count": int,
+    # The pinned SSH host key's fingerprint; None until one is pinned.
+    "host_key_fingerprint": (str, type(None)),
+    # What the latest successful scan changed. Null is "not assessed" -- no
+    # successful scan, a baseline, or (resolved only) a partial scan.
+    "last_scan_new": (int, type(None)),
+    "last_scan_resolved": (int, type(None)),
+    "last_scan_baseline": bool,
 }
 _SEVERITY_COUNT_KEYS = {"critical", "high", "medium", "low"}
 _FINDING_KEYS = {
@@ -194,6 +201,9 @@ _FINDING_KEYS = {
     "kev_due_date": (str, type(None)),
     "epss_score": (int, float, type(None)),
     "epss_percentile": (int, float, type(None)),
+    # Scan history (Req 18.5, 18.6).
+    "first_seen_at": (str, type(None)),
+    "is_new": bool,
 }
 
 

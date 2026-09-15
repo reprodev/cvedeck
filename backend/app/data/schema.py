@@ -22,11 +22,11 @@ serialization used by the API.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean
 from sqlalchemy import Enum as SqlEnum
-from sqlalchemy import Float, ForeignKey, Integer, String
+from sqlalchemy import Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy import false as sa_false
 from sqlalchemy import text as sa_text
 from sqlalchemy import true as sa_true
@@ -39,6 +39,7 @@ from sqlalchemy.orm import (
 
 from ..enums import (
     FeedStatus,
+    FindingChange,
     Platform,
     RemediationStatus,
     ScanStatus,
@@ -90,6 +91,9 @@ class TargetMachine(Base):
         back_populates="machine", cascade="all, delete-orphan"
     )
     remediation_records: Mapped[list[RemediationRecord]] = relationship(
+        back_populates="machine", cascade="all, delete-orphan"
+    )
+    scan_runs: Mapped[list[ScanRun]] = relationship(
         back_populates="machine", cascade="all, delete-orphan"
     )
 
@@ -230,6 +234,14 @@ class CveFinding(Base):
     epss_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     epss_percentile: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    #: When this finding was first seen on this machine (Req 18.5). Carried
+    #: across the delete-and-rewrite of every scan by matching on CVE and
+    #: package name, not version, so an upgrade that leaves a package vulnerable
+    #: does not make an old finding look new.
+    first_seen_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
     sync_status: Mapped[SyncStatus] = mapped_column(
         SqlEnum(SyncStatus, name="sync_status"), nullable=False
     )
@@ -238,6 +250,76 @@ class CveFinding(Base):
     dependency_path: Mapped[DependencyPath | None] = relationship(
         back_populates="findings"
     )
+
+
+class ScanRun(Base):
+    """One scan attempt on one machine, successful or not (Req 18.1).
+
+    ``new_count`` and ``resolved_count`` are NULL when the run cannot say. Both
+    are NULL on a failed scan and on a baseline, a machine's first successful
+    run. ``resolved_count`` alone is NULL on a partial scan, where an
+    unreachable source can make a finding disappear without it being fixed.
+    NULL means "not assessed", never zero.
+    """
+
+    __tablename__ = "scan_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(
+        ForeignKey("target_machines.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    scanned_at: Mapped[datetime] = mapped_column(nullable=False)
+    status: Mapped[ScanStatus] = mapped_column(
+        SqlEnum(ScanStatus, name="scan_status"), nullable=False
+    )
+    sources_ok: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    finding_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    resolved_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: True for a machine's first successful run, which has nothing to compare
+    #: with -- including its first scan after upgrading to a version that
+    #: records history (Req 18.4).
+    baseline: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    sync_status: Mapped[SyncStatus] = mapped_column(
+        SqlEnum(SyncStatus, name="sync_status"), nullable=False
+    )
+
+    machine: Mapped[TargetMachine] = relationship(back_populates="scan_runs")
+    changes: Mapped[list[ScanFindingChange]] = relationship(
+        back_populates="scan_run", cascade="all, delete-orphan"
+    )
+
+
+class ScanFindingChange(Base):
+    """A finding that appeared or cleared in one scan run (Req 18.2).
+
+    A snapshot rather than a reference: a resolved finding no longer exists in
+    ``cve_findings``, so what it was has to be kept here.
+    """
+
+    __tablename__ = "scan_finding_changes"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    scan_run_id: Mapped[str] = mapped_column(
+        ForeignKey("scan_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    change: Mapped[FindingChange] = mapped_column(
+        SqlEnum(FindingChange, name="finding_change"), nullable=False
+    )
+    cve_id: Mapped[str] = mapped_column(String, nullable=False)
+    package_identifier: Mapped[str | None] = mapped_column(String, nullable=True)
+    severity: Mapped[Severity] = mapped_column(
+        SqlEnum(Severity, name="severity"), nullable=False
+    )
+    cvss_score: Mapped[float] = mapped_column(Float, nullable=False)
+    kev_listed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sync_status: Mapped[SyncStatus] = mapped_column(
+        SqlEnum(SyncStatus, name="sync_status"), nullable=False
+    )
+
+    scan_run: Mapped[ScanRun] = relationship(back_populates="changes")
 
 
 class KevEntry(Base):
@@ -318,6 +400,34 @@ class FeedRefresh(Base):
         Integer, nullable=False, default=0, server_default=sa_text("0")
     )
     error_detail: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class SshHostKey(Base):
+    """The SSH host key pinned for one address (Req 17).
+
+    Keyed by ``(hostname, port)`` rather than by machine, because a connection
+    test has an address and no machine, and the two must share one pin
+    (Req 17.6). ``hostname`` is stored lower-cased, since DNS names are not
+    case-sensitive and a second pin for ``Host.lan`` would be a free first use.
+
+    No ``sync_status``, like the auth tables: which key this instance trusts is
+    its own decision, and a pin arriving from another database would be trust
+    this instance never granted.
+    """
+
+    __tablename__ = "ssh_host_keys"
+    __table_args__ = (UniqueConstraint("hostname", "port"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    hostname: Mapped[str] = mapped_column(String, nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: known_hosts key type, e.g. ``ssh-ed25519``.
+    key_type: Mapped[str] = mapped_column(String, nullable=False)
+    key_base64: Mapped[str] = mapped_column(String, nullable=False)
+    #: ``SHA256:...``, as ``ssh-keygen -lf`` prints it.
+    fingerprint_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(nullable=False)
 
 
 class User(Base):

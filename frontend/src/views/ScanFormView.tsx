@@ -14,7 +14,7 @@ import type {
   TestConnectionInput,
   TestConnectionResult,
 } from "../types";
-import { statusLabel } from "../lib/labels";
+import { isHostKeyStatus, statusLabel } from "../lib/labels";
 import { isScannable, WINDOWS_SCAN_UNSUPPORTED } from "../lib/platform";
 import { Icon } from "../components/Icon";
 
@@ -132,6 +132,7 @@ export function ScanFormView({
           "Enter a hostname and the credentials for the selected authentication mode.",
         latencyMs: 0,
         osBanner: "",
+        hostKeyFingerprint: null,
       });
       return;
     }
@@ -152,6 +153,7 @@ export function ScanFormView({
         message: err instanceof Error ? err.message : String(err),
         latencyMs: 0,
         osBanner: "",
+        hostKeyFingerprint: null,
       });
     } finally {
       setTestingConnection(false);
@@ -356,18 +358,30 @@ export function ScanFormView({
 
         {testResult && (
           <div
+            data-testid="test-connection-result"
+            data-status={testResult.status}
             style={{
               marginTop: "0.85rem",
               padding: "0.6rem 0.85rem",
               borderRadius: "6px",
               fontSize: "0.84rem",
+              // A refused host key is amber, not red: red is reserved for
+              // exploitation, and this needs a person to look (Req 17.3).
               border: testResult.success
                 ? "1px solid var(--ok-border)"
-                : "1px solid var(--error-border)",
+                : isHostKeyStatus(testResult.status)
+                  ? "1px solid var(--warn-border)"
+                  : "1px solid var(--error-border)",
               background: testResult.success
                 ? "var(--ok-bg)"
-                : "var(--error-bg)",
-              color: testResult.success ? "var(--ok-text)" : "var(--exploit)",
+                : isHostKeyStatus(testResult.status)
+                  ? "var(--warn-bg)"
+                  : "var(--error-bg)",
+              color: testResult.success
+                ? "var(--ok-text)"
+                : isHostKeyStatus(testResult.status)
+                  ? "var(--warn-text)"
+                  : "var(--exploit)",
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
@@ -381,6 +395,11 @@ export function ScanFormView({
               {testResult.osBanner && (
                 <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "var(--text-muted)" }}>
                   Detected Host: <strong>{testResult.osBanner}</strong>
+                </div>
+              )}
+              {testResult.success && testResult.hostKeyFingerprint && (
+                <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                  SSH host key: <code>{testResult.hostKeyFingerprint}</code>
                 </div>
               )}
             </div>
@@ -400,6 +419,9 @@ export function ScanFormView({
                 <strong>{outcome.machineId}</strong>:{" "}
                 {statusLabel(outcome.status)} -- {outcome.findingCount}{" "}
                 {outcome.findingCount === 1 ? "finding" : "findings"}
+                {isHostKeyStatus(outcome.status) && outcome.message && (
+                  <div className="hint">{outcome.message}</div>
+                )}
               </li>
             ))}
           </ul>

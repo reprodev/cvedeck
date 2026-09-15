@@ -28,8 +28,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import config
-from ..data.repository import MachineListEntry, Repository
-from ..data.schema import CveFinding, RemediationRecord, TargetMachine
+from ..data.repository import FindingKey, MachineListEntry, Repository, finding_key
+from ..data.schema import CveFinding, RemediationRecord, ScanRun, TargetMachine
 from ..enums import Severity
 from ..models import Package as DomainPackage
 from ..package_identifier import parse_fix, parse_package_name
@@ -38,7 +38,9 @@ from .dependencies import get_session
 from .schemas import (
     CveFindingOut,
     FeedHealthOut,
+    FindingChangeOut,
     MachineSummary,
+    ScanRunOut,
     SeverityCounts,
 )
 
@@ -50,8 +52,17 @@ def _get_repository(session: Session = Depends(get_session)) -> Repository:
     return Repository(session)
 
 
-def _to_machine_summary(entry: MachineListEntry) -> MachineSummary:
-    """Map a repository machine-list entry to the API summary model."""
+def _to_machine_summary(
+    entry: MachineListEntry,
+    host_key_fingerprints: dict[str, str],
+    latest_run: ScanRun | None = None,
+) -> MachineSummary:
+    """Map a repository machine-list entry to the API summary model.
+
+    ``host_key_fingerprints`` is :meth:`Repository.host_key_fingerprints` for
+    the configured SSH port, so the fleet view costs one query for its pins.
+    ``latest_run`` is the machine's latest successful scan run, if any.
+    """
     machine = entry.machine
     counts = entry.cve_counts
     return MachineSummary(
@@ -68,6 +79,14 @@ def _to_machine_summary(entry: MachineListEntry) -> MachineSummary:
             low=counts.low,
         ),
         kev_count=entry.kev_count,
+        host_key_fingerprint=host_key_fingerprints.get(
+            machine.hostname.strip().lower()
+        ),
+        last_scan_new=latest_run.new_count if latest_run is not None else None,
+        last_scan_resolved=(
+            latest_run.resolved_count if latest_run is not None else None
+        ),
+        last_scan_baseline=latest_run.baseline if latest_run is not None else False,
     )
 
 
@@ -94,6 +113,7 @@ def _to_finding_out(
     remediation_by_cve: dict[str, RemediationRecord],
     direct_deps: dict[str, list[str]] | None = None,
     depended_on_by: dict[str, list[str]] | None = None,
+    new_keys: set[FindingKey] | None = None,
 ) -> CveFindingOut:
     """Map a stored finding to the API finding model.
 
@@ -133,6 +153,9 @@ def _to_finding_out(
         remediation_status=record.status if record is not None else None,
         remediation_record_id=record.id if record is not None else None,
         remediation_note=record.note if record is not None else None,
+        first_seen_at=finding.first_seen_at,
+        is_new=finding_key(finding.cve_id, finding.package_identifier)
+        in (new_keys or set()),
         dependencies=deps,
         depended_on_by=dependents,
         blast_radius=blast_radius,
@@ -188,7 +211,12 @@ def list_machines(
     repo: Repository = Depends(_get_repository),
 ) -> list[MachineSummary]:
     """List scanned machines with severity-grouped CVE counts (Req 6.1, 3.2)."""
-    return [_to_machine_summary(entry) for entry in repo.list_machines()]
+    fingerprints = repo.host_key_fingerprints(config.ssh_port())
+    latest = repo.latest_successful_runs()
+    return [
+        _to_machine_summary(entry, fingerprints, latest.get(entry.machine.id))
+        for entry in repo.list_machines()
+    ]
 
 
 @router.get("/machines/{machine_id}", response_model=MachineSummary)
@@ -205,8 +233,67 @@ def get_machine(
             machine=machine,
             cve_counts=repo.get_severity_counts(machine_id),
             kev_count=repo.get_kev_count(machine_id),
-        )
+        ),
+        repo.host_key_fingerprints(config.ssh_port()),
+        repo.latest_successful_run(machine_id),
     )
+
+
+@router.get("/machines/{machine_id}/scans", response_model=list[ScanRunOut])
+def list_machine_scans(
+    machine_id: str,
+    limit: int = Query(default=20, ge=1, le=200),
+    repo: Repository = Depends(_get_repository),
+) -> list[ScanRunOut]:
+    """A machine's scan runs, newest first (Req 18.1); 404 if unknown."""
+    if repo.get_machine(machine_id) is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    return [
+        ScanRunOut(
+            run_id=run.id,
+            scanned_at=run.scanned_at,
+            status=run.status,
+            sources_ok=run.sources_ok,
+            finding_count=run.finding_count,
+            new_count=run.new_count,
+            resolved_count=run.resolved_count,
+            baseline=run.baseline,
+        )
+        for run in repo.list_scan_runs(machine_id, limit)
+    ]
+
+
+@router.get(
+    "/machines/{machine_id}/scans/{run_id}/changes",
+    response_model=list[FindingChangeOut],
+)
+def list_scan_changes(
+    machine_id: str,
+    run_id: str,
+    repo: Repository = Depends(_get_repository),
+    session: Session = Depends(get_session),
+) -> list[FindingChangeOut]:
+    """What one scan run found new and saw resolved (Req 18.2); 404 if unknown."""
+    if repo.get_scan_run(machine_id, run_id) is None:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    remediation_by_cve = _remediation_map(session, machine_id)
+    return [
+        FindingChangeOut(
+            change=change.change,
+            cve_id=change.cve_id,
+            package_identifier=change.package_identifier,
+            package_name=_parse_pkg_name(change.package_identifier),
+            severity=change.severity,
+            cvss_score=change.cvss_score,
+            kev_listed=change.kev_listed,
+            remediation_status=(
+                remediation_by_cve[change.cve_id].status
+                if change.cve_id in remediation_by_cve
+                else None
+            ),
+        )
+        for change in repo.get_scan_changes(run_id)
+    ]
 
 
 @router.get(
@@ -232,8 +319,9 @@ def get_machine_cves(
         if inventory is not None
         else ({}, {})
     )
+    new_keys = repo.new_finding_keys(repo.latest_successful_run(machine_id))
     return [
-        _to_finding_out(f, remediation_by_cve, direct_deps, depended_on_by)
+        _to_finding_out(f, remediation_by_cve, direct_deps, depended_on_by, new_keys)
         for f in findings
     ]
 
@@ -252,14 +340,23 @@ def list_cves(
 
     # Remediation is keyed per machine+CVE; build a per-machine map lazily.
     remediation_maps: dict[str, dict[str, RemediationRecord]] = {}
+    new_keys_by_machine: dict[str, set[FindingKey]] = {}
+    repo = Repository(session)
     results: list[CveFindingOut] = []
     for finding in findings:
         if finding.machine_id not in remediation_maps:
             remediation_maps[finding.machine_id] = _remediation_map(
                 session, finding.machine_id
             )
+            new_keys_by_machine[finding.machine_id] = repo.new_finding_keys(
+                repo.latest_successful_run(finding.machine_id)
+            )
         results.append(
-            _to_finding_out(finding, remediation_maps[finding.machine_id])
+            _to_finding_out(
+                finding,
+                remediation_maps[finding.machine_id],
+                new_keys=new_keys_by_machine[finding.machine_id],
+            )
         )
     return results
 

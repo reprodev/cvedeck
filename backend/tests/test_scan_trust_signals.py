@@ -21,7 +21,7 @@ class _Repo:
     def save_inventory(self, inventory):
         return inventory
 
-    def save_findings(self, machine_id, findings):
+    def save_findings(self, machine_id, findings, **_kwargs):
         return findings
 
 

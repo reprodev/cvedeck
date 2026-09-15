@@ -155,3 +155,20 @@ describe("MachineListView loading state", () => {
     expect(byTitle("Windows scanning is not supported yet")).toBeDisabled();
   });
 });
+
+describe("MachineListView scan delta (Req 18.6)", () => {
+  it("shows what the last scan changed, with units in its accessible name", () => {
+    render(
+      <MachineListView
+        machines={[
+          makeMachine({ machineId: "a", hostname: "web-01", lastScanNew: 3, lastScanResolved: 5 }),
+          makeMachine({ machineId: "b", hostname: "db-01", lastScanBaseline: true }),
+        ]}
+      />,
+    );
+
+    const delta = screen.getByText("+3 new / −5 resolved");
+    expect(delta).toHaveAttribute("aria-label", "Since the previous scan: 3 new findings, 5 resolved findings.");
+    expect(screen.queryByText(/Baseline/)).not.toBeInTheDocument();
+  });
+});

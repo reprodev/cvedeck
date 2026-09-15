@@ -26,7 +26,7 @@ import socket
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 import paramiko
 from sqlalchemy.orm import Session
 
@@ -35,10 +35,11 @@ from ..data.repository import Repository
 from ..enums import Platform, ScanStatus
 from ..models import Credentials, TargetMachine
 from ..scanner.collectors import parse_private_key
-from ..scanner.engine import ScannerEngine
+from ..scanner.engine import MachineScan, ScannerEngine
 from ..scanner.epss_client import EpssHttpClient
 from ..scanner.kev_client import KevHttpClient
-from ..scanner.exceptions import AuthError
+from ..scanner.exceptions import AuthError, HostKeyError, HostKeyMismatchError
+from ..scanner.host_keys import connect_pinned
 from ..services.remediation import (
     RemediationRecordNotFoundError,
     RemediationService,
@@ -46,6 +47,7 @@ from ..services.remediation import (
 from ..services.sync import SyncService
 from .credentials import CredentialResolutionError, resolve_credentials
 from .dependencies import get_scanner_engine, get_session, get_sync_service
+from .wiring import RepositoryHostKeyStore
 from .schemas import (
     DiscoveredHostOut,
     DiscoveredServiceOut,
@@ -273,10 +275,49 @@ def initiate_scan(
                 sources_ok=scan.sources_ok,
                 unavailable_sources=list(scan.unavailable_sources),
                 message=scan.message,
+                **_diff_counts(scan),
             )
             for scan in result.machine_scans
         ]
     )
+
+
+def _diff_counts(scan: MachineScan) -> dict[str, object]:
+    """A scan outcome's new and resolved counts, as ``None`` where not assessed (Req 18.2)."""
+    diff = scan.diff
+    if diff is None or diff.baseline:
+        return {"new_count": None, "resolved_count": None, "baseline": diff is not None}
+    return {
+        "new_count": len(diff.new),
+        "resolved_count": len(diff.resolved) if diff.resolved_assessed else None,
+        "baseline": False,
+    }
+
+
+@router.delete(
+    "/host-keys/{hostname}",
+    status_code=204,
+    dependencies=[Depends(_demo_guard("Forgetting a host key"))],
+)
+def forget_host_key(
+    hostname: str,
+    port: int | None = Query(default=None, ge=1, le=65535),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Forget the SSH host key pinned for an address (Req 17.7).
+
+    ``port`` defaults to the configured SSH port, the one scans dial.
+
+    The only way a pin changes. The next connection to the address trusts
+    whatever key the host presents, so this is an explicit, signed-in action
+    and never something a scan does on its own. 404 when nothing is pinned.
+    """
+    if not Repository(session).forget_host_key(
+        hostname, port if port is not None else config.ssh_port()
+    ):
+        raise HTTPException(status_code=404, detail="No host key is pinned for that address")
+    session.commit()
+    return Response(status_code=204)
 
 
 @router.post("/sync", response_model=SyncResponse)
@@ -471,10 +512,15 @@ def enroll_discovered_hosts(
     response_model=TestConnectionResponse,
     dependencies=[Depends(_demo_guard("Connection testing"))],
 )
-def test_scan_connection(body: TestConnectionRequest) -> TestConnectionResponse:
+def test_scan_connection(
+    body: TestConnectionRequest,
+    session: Session = Depends(get_session),
+) -> TestConnectionResponse:
     """Pre-flight test connection reachability and credentials for a target.
 
     Performs a fast, non-invasive transport probe without initiating a full CVE scan.
+    SSH connects exactly as a scan does: on the configured port, and holding
+    the host to the same pinned key store (Req 17.6).
     """
     start_time = time.perf_counter()
     target_host = body.hostname.strip()
@@ -500,7 +546,8 @@ def test_scan_connection(body: TestConnectionRequest) -> TestConnectionResponse:
     username = credentials.username
 
     if body.platform == Platform.LINUX:
-        port = 22
+        port = config.ssh_port()
+        host_keys = RepositoryHostKeyStore(Repository(session))
         # Fast TCP pre-flight check
         try:
             with socket.create_connection((target_host, port), timeout=2.5):
@@ -510,13 +557,12 @@ def test_scan_connection(body: TestConnectionRequest) -> TestConnectionResponse:
             return TestConnectionResponse(
                 success=False,
                 status="CONNECTION_FAILURE",
-                message=f"Port 22 (SSH) is unreachable on {target_host} ({exc})",
+                message=f"Port {port} (SSH) is unreachable on {target_host} ({exc})",
                 latency_ms=round(elapsed, 2),
             )
 
         # Test SSH authentication and read-only identity probe
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
             auth_kwargs: dict[str, object] = {}
             if credentials.uses_key:
@@ -529,15 +575,22 @@ def test_scan_connection(body: TestConnectionRequest) -> TestConnectionResponse:
             else:
                 auth_kwargs["password"] = credentials.password.get_secret_value()
 
-            client.connect(
+            connect_pinned(
+                client,
                 hostname=target_host,
                 port=port,
+                store=host_keys,
+                policy=config.ssh_host_key_policy(),
                 username=username,
                 timeout=4.0,
                 allow_agent=False,
                 look_for_keys=False,
                 **auth_kwargs,
             )
+            # The host proved its key and accepted the credentials, so a
+            # first-use pin stands even if the probe below fails.
+            session.commit()
+            pinned = host_keys.get(target_host, port)
             # Query OS release
             _stdin, stdout, _stderr = client.exec_command(
                 "cat /etc/os-release 2>/dev/null || uname -srm", timeout=3.0
@@ -563,6 +616,20 @@ def test_scan_connection(body: TestConnectionRequest) -> TestConnectionResponse:
                 message=f"SSH authenticated successfully for {username}@{target_host}",
                 latency_ms=round(elapsed, 2),
                 os_banner=os_line,
+                host_key_fingerprint=pinned.fingerprint_sha256 if pinned else None,
+            )
+        except HostKeyError as exc:
+            elapsed = (time.perf_counter() - start_time) * 1000.0
+            return TestConnectionResponse(
+                success=False,
+                status=(
+                    "HOST_KEY_MISMATCH"
+                    if isinstance(exc, HostKeyMismatchError)
+                    else "HOST_KEY_UNKNOWN"
+                ),
+                message=str(exc),
+                latency_ms=round(elapsed, 2),
+                host_key_fingerprint=getattr(exc, "pinned", None),
             )
         except AuthError as exc:
             # A malformed key or wrong passphrase, caught before the network.

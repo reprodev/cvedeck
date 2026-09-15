@@ -22,7 +22,14 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from ..enums import FeedStatus, Platform, RemediationStatus, ScanStatus, Severity
+from ..enums import (
+    FeedStatus,
+    FindingChange,
+    Platform,
+    RemediationStatus,
+    ScanStatus,
+    Severity,
+)
 
 
 class SeverityCounts(BaseModel):
@@ -56,6 +63,18 @@ class MachineSummary(BaseModel):
     #: ``GET /api/feeds`` exists alongside it. Zero means "none confirmed", not
     #: "none exist"; the feed health is what tells those two apart.
     kev_count: int = 0
+    #: SHA-256 fingerprint of the SSH host key pinned for this machine's
+    #: hostname on the configured port, or ``None`` when nothing is pinned
+    #: (Req 17.8).
+    host_key_fingerprint: str | None = None
+    #: What the latest successful scan changed (Req 18.6). ``None`` when it
+    #: cannot say: no successful scan yet, or a baseline. ``last_scan_resolved``
+    #: alone is ``None`` after a partial scan, which resolves nothing. ``None``
+    #: is "not assessed" and must not be rendered as zero.
+    last_scan_new: int | None = None
+    last_scan_resolved: int | None = None
+    #: Whether the latest successful scan was this machine's baseline.
+    last_scan_baseline: bool = False
 
 
 class CveFindingOut(BaseModel):
@@ -121,6 +140,51 @@ class CveFindingOut(BaseModel):
     #: score because the EPSS distribution is heavily skewed -- 0.08 sounds
     #: negligible and is in fact the 94th percentile.
     epss_percentile: float | None = None
+
+    # --- Scan history (Req 18.5, 18.6) ---------------------------------------
+    #: When this finding was first seen on this machine.
+    first_seen_at: datetime | None = None
+    #: Whether the machine's latest successful scan reported this finding as
+    #: new. Always ``False`` after a baseline, which has nothing to compare.
+    is_new: bool = False
+
+
+class ScanRunOut(BaseModel):
+    """One scan attempt on a machine (Req 18.1).
+
+    ``new_count`` and ``resolved_count`` are ``None`` when the run cannot say:
+    both for a failed scan or a baseline, ``resolved_count`` alone for a
+    partial scan. ``finding_count`` is the findings stored after a successful
+    run, and 0 for a failed one, whose findings are the previous scan's.
+    """
+
+    run_id: str
+    scanned_at: datetime
+    status: ScanStatus
+    sources_ok: bool
+    finding_count: int
+    new_count: int | None = None
+    resolved_count: int | None = None
+    baseline: bool = False
+
+
+class FindingChangeOut(BaseModel):
+    """A finding that appeared or cleared in one scan run (Req 18.2).
+
+    ``remediation_status`` is the CVE's current manual remediation record on
+    the machine, if any. A resolved finding keeps its record untouched
+    (Req 18.9), so a client can show "cleared by scan" beside a record that is
+    still open.
+    """
+
+    change: FindingChange
+    cve_id: str
+    package_identifier: str | None = None
+    package_name: str | None = None
+    severity: Severity
+    cvss_score: float
+    kev_listed: bool | None = None
+    remediation_status: RemediationStatus | None = None
 
 
 class FeedHealthOut(BaseModel):
@@ -249,6 +313,11 @@ class MachineScanOut(BaseModel):
     sources_ok: bool = True
     unavailable_sources: list[str] = Field(default_factory=list)
     message: str | None = None
+    #: What this scan changed (Req 18.2). ``None`` for a failed scan or a
+    #: baseline; ``resolved_count`` alone is ``None`` for a partial scan.
+    new_count: int | None = None
+    resolved_count: int | None = None
+    baseline: bool = False
 
 
 class ScanResponse(BaseModel):
@@ -389,6 +458,9 @@ class TestConnectionResponse(BaseModel):
     message: str
     latency_ms: float
     os_banner: str = ""
+    #: The SSH host key pinned for this address after the test, or the pinned
+    #: key a mismatched host failed to present (Req 17.3, 17.8).
+    host_key_fingerprint: str | None = None
 
 
 # --------------------------------------------------------------------------- #

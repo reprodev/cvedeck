@@ -32,6 +32,8 @@ from ..data.schema import (
     Inventory,
     Package,
     RemediationRecord,
+    ScanFindingChange,
+    ScanRun,
     TargetMachine,
 )
 from ..enums import SyncStatus
@@ -45,6 +47,11 @@ _SYNC_ORDER: tuple[type[Base], ...] = (
     Inventory,
     DependencyPath,
     CveFinding,
+    # Scan history (Req 18.8). A pruned run is not deleted online, for the
+    # same reason a replaced finding is not: sync propagates rows, not
+    # deletions.
+    ScanRun,
+    ScanFindingChange,
     RemediationRecord,
 )
 

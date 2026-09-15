@@ -41,11 +41,15 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable, Protocol, Sequence
 
-from app.data.repository import FindingInput
+from app.data.repository import FindingDiff, FindingInput
 from app.enums import ScanStatus, SourceStatus
 from app.models import Credentials, Inventory, TargetMachine
 from app.scanner.collectors import InventoryCollector, get_collector
-from app.scanner.exceptions import AuthError
+from app.scanner.exceptions import (
+    AuthError,
+    HostKeyMismatchError,
+    HostKeyUnknownError,
+)
 from app.scanner.matcher import (
     Finding,
     Matcher,
@@ -64,7 +68,11 @@ class _Repository(Protocol):
         ...
 
     def save_findings(
-        self, machine_id: str, findings: list[FindingInput]
+        self,
+        machine_id: str,
+        findings: list[FindingInput],
+        *,
+        suppress_resolved: bool = False,
     ) -> object:
         ...
 
@@ -95,6 +103,9 @@ class MachineScan:
     #: everything that was asked responded. Set by the engine, which is the only
     #: layer that knows which sources were wired up in the first place.
     unavailable_sources: tuple[str, ...] = ()
+    #: How the findings differ from the machine's previous ones (Req 18), when
+    #: the repository reports it. ``None`` on a failed scan.
+    diff: FindingDiff | None = None
 
     @property
     def findings(self) -> list[Finding]:
@@ -217,8 +228,10 @@ class ScannerEngine:
     def _scan_target(self, target: TargetMachine) -> MachineScan:
         """Run ``_scan_one`` for a target, isolating recoverable failures.
 
-        Maps ``ConnectionError`` -> ``CONNECTION_FAILURE`` (Req 1.4) and
-        ``AuthError`` -> ``AUTH_FAILURE`` (Req 1.5, 9.4); records the status
+        Maps ``ConnectionError`` -> ``CONNECTION_FAILURE`` (Req 1.4),
+        ``AuthError`` -> ``AUTH_FAILURE`` (Req 1.5, 9.4), and a refused SSH
+        host key -> ``HOST_KEY_MISMATCH`` / ``HOST_KEY_UNKNOWN`` (Req 17.3,
+        17.5); records the status
         and returns the outcome rather than propagating, so one bad key or
         passphrase does not abort the batch (Req 9.4, 11.9). The originating
         exception travels on the outcome as ``error`` so the API can report it
@@ -230,6 +243,18 @@ class ScannerEngine:
             scan = MachineScan(
                 machine_id=target.id,
                 status=ScanStatus.AUTH_FAILURE,
+                error=exc,
+            )
+        except HostKeyMismatchError as exc:
+            scan = MachineScan(
+                machine_id=target.id,
+                status=ScanStatus.HOST_KEY_MISMATCH,
+                error=exc,
+            )
+        except HostKeyUnknownError as exc:
+            scan = MachineScan(
+                machine_id=target.id,
+                status=ScanStatus.HOST_KEY_UNKNOWN,
                 error=exc,
             )
         except ConnectionError as exc:
@@ -263,9 +288,13 @@ class ScannerEngine:
         self._repository.save_inventory(inventory)
 
         match_result = self._matcher.match(inventory, self._nvd, self._osv)
-        self._repository.save_findings(
+        # Known before saving, because a partial scan must not resolve anything:
+        # a source that did not answer is not a patch (Req 18.3).
+        unavailable = self._unavailable_sources(match_result)
+        saved = self._repository.save_findings(
             target.id,
             self._enrich([_finding_to_input(f) for f in match_result.findings]),
+            suppress_resolved=bool(unavailable),
         )
 
         return MachineScan(
@@ -273,7 +302,8 @@ class ScannerEngine:
             status=ScanStatus.SUCCESS,
             inventory=inventory,
             match_result=match_result,
-            unavailable_sources=self._unavailable_sources(match_result),
+            unavailable_sources=unavailable,
+            diff=saved if isinstance(saved, FindingDiff) else None,
         )
 
     def _enrich(self, findings: list[FindingInput]) -> list[FindingInput]:

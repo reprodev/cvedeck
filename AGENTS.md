@@ -119,8 +119,9 @@ environment the app reads, so no alembic.ini edit is needed.
   4.0-6.9 Medium, 7.0-8.9 High, 9.0-10.0 Critical. Total over 0.0-10.0; raises
   outside that range. Property 4 depends on this.
 - Per-target fault isolation & timeout architecture (ScannerEngine): a ConnectionError /
-  socket timeout / unhandled runtime exception -> CONNECTION_FAILURE and an AuthError ->
-  AUTH_FAILURE for that target; a failing target NEVER aborts the batch or causes an HTTP 500.
+  socket timeout / unhandled runtime exception -> CONNECTION_FAILURE, an AuthError ->
+  AUTH_FAILURE, and a refused SSH host key -> HOST_KEY_MISMATCH / HOST_KEY_UNKNOWN for
+  that target; a failing target NEVER aborts the batch or causes an HTTP 500.
   LinuxCollector separates TCP connect timeout (_CONNECT_TIMEOUT = 5.0s) from package
   database query timeout (_COMMAND_TIMEOUT = 45.0s). Property 1 depends on this.
 - Collectors are read-only. They may only issue inventory-read commands (os-release,
@@ -461,6 +462,12 @@ environment the app reads, so no alembic.ini edit is needed.
   - *Phase A (Per-Scan Private Key & Passphrase)*: **Implemented.** Ed25519/ECDSA/RSA in PEM or OpenSSH format via `Credentials.private_key` + `passphrase`, parsed in memory by `parse_private_key`.
   - *Phase B (Server-Managed Keyring & Fleet Auto-Scan)*: **Implemented.** `CVEDECK_DEFAULT_SSH_KEY_PATH` / `CVEDECK_DEFAULT_SSH_USER`; a target may omit credentials entirely.
   - *Phase C (Ephemeral Signed SSH Certificates)*: Enterprise CA integration (HashiCorp Vault / Teleport) for zero-trust infrastructure. Still open.
+- Pinned SSH host keys: **Implemented** (Req 17). Both SSH paths connect through
+  `app/scanner/host_keys.py:connect_pinned`, keyed by `(hostname, port)` in
+  `ssh_host_keys`. Trust on first use by default, `CVEDECK_SSH_HOST_KEY_POLICY=strict`
+  to refuse unpinned hosts. A changed key is `HOST_KEY_MISMATCH`, never a
+  connection failure, and only `DELETE /api/host-keys/{hostname}` removes a pin.
+  Do not add a second SSH connect path that bypasses the helper.
 - Real NVD 2.0 HTTP client: **Implemented** (`NvdHttpClient`, v0.5.0). Opt-in via
   `CVEDECK_NVD_ENABLED` because NVD allows only 5 requests / 30s without a key
   (50 with one, via `CVEDECK_NVD_API_KEY`). Left off, `wiring.build_nvd_client`
@@ -477,7 +484,13 @@ environment the app reads, so no alembic.ini edit is needed.
 - Scheduled scanning is still absent, and scans still run **inline inside the HTTP
   request** (hence `proxy_read_timeout 900s` in DEPLOYMENT.md). Background execution
   (`scan_jobs` + a worker thread, no Celery/Redis -- one uvicorn worker, one SQLite
-  writer) is the prerequisite for cron scans, progress reporting, and finding diffs.
+  writer) is the prerequisite for cron scans and progress reporting.
+- Scan history and finding diffs: **Implemented** (Req 18). `Repository.save_findings`
+  returns a `FindingDiff` keyed on CVE + package name (never version), and
+  `DeploymentScannerEngine._record_scan_status` writes a `scan_runs` row for every
+  attempt. Trust rules: a partial scan resolves nothing and keeps unreported findings,
+  a failed scan records no counts, a machine's first successful run is a baseline.
+  NULL counts mean "not assessed" and must never be rendered as 0.
 - Phase 2 Unauthenticated Fingerprinting: Extending `NetworkDiscoveryEngine` with deeper
   banner correlation against NVD CPEs and OSV advisories to flag network-exposed
   vulnerabilities from service versions discovered during Phase 1 sweeps.

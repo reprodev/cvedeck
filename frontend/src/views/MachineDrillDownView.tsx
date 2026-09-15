@@ -14,7 +14,9 @@ import { exportFindingsCsv } from "../lib/csvExport";
 import { filterBySeverity } from "../lib/severity";
 import {
   type CveFinding,
+  type FindingChangeRow,
   type Platform,
+  type ScanRun,
   type RemediationStatus,
   type Severity,
 } from "../types";
@@ -30,9 +32,12 @@ import {
   hasFix as findingHasFix,
 } from "../lib/remediation";
 import { useClipboard } from "../lib/useClipboard";
-import { remediationStatusLabel, severityLabel } from "../lib/labels";
+import { isHostKeyStatus, relativeTime, remediationStatusLabel, severityLabel } from "../lib/labels";
+import { scanDelta } from "../lib/scanDelta";
+import { ScanHistoryPanel } from "../components/ScanHistoryPanel";
 import { RemediationCell } from "../components/RemediationCell";
 import { CveDetailModal } from "../components/CveDetailModal";
+import { Modal } from "../components/Modal";
 import { Icon } from "../components/Icon";
 import {
   exploitStatus,
@@ -65,6 +70,23 @@ export interface MachineDrillDownViewProps {
     status: RemediationStatus,
     note: string,
   ) => void;
+  /** The machine's last scan status, when known. */
+  lastScanStatus?: string;
+  /** SHA-256 fingerprint of the host's pinned SSH host key (Req 17.8). */
+  hostKeyFingerprint?: string | null;
+  /**
+   * Forget the pinned host key (Req 17.7). Omitted where forgetting is not
+   * allowed, such as demo mode, which hides the action.
+   */
+  onForgetHostKey?: () => Promise<void>;
+  /** What the latest successful scan changed (Req 18.6); null is not assessed. */
+  lastScanNew?: number | null;
+  lastScanResolved?: number | null;
+  lastScanBaseline?: boolean;
+  /** Load the host's scan runs. Omitted, the scan history panel is not shown. */
+  onLoadScanRuns?: () => Promise<ScanRun[]>;
+  /** Load one run's new and resolved findings. */
+  onLoadScanChanges?: (runId: string) => Promise<FindingChangeRow[]>;
 }
 
 /** Human-readable label for a severity level. */
@@ -119,7 +141,35 @@ export function MachineDrillDownView({
   findings,
   onBack,
   onSaveRemediation,
+  lastScanStatus,
+  hostKeyFingerprint = null,
+  onForgetHostKey,
+  lastScanNew = null,
+  lastScanResolved = null,
+  lastScanBaseline = false,
+  onLoadScanRuns,
+  onLoadScanChanges,
 }: MachineDrillDownViewProps) {
+  const delta = scanDelta({ lastScanNew, lastScanResolved, lastScanBaseline });
+  const [newOnly, setNewOnly] = useState(false);
+  const [confirmForget, setConfirmForget] = useState(false);
+  const [forgetting, setForgetting] = useState(false);
+  const [forgetError, setForgetError] = useState<string | null>(null);
+
+  const forgetHostKey = async () => {
+    if (!onForgetHostKey) return;
+    setForgetting(true);
+    setForgetError(null);
+    try {
+      await onForgetHostKey();
+      setConfirmForget(false);
+    } catch (err) {
+      setForgetError(err instanceof Error ? err.message : "The host key could not be forgotten.");
+    } finally {
+      setForgetting(false);
+    }
+  };
+
   const [severityFilter, setSeverityFilter] = useState<Severity | "all">("all");
   const [patchFilter, setPatchFilter] = useState<"all" | "fixable" | "pending">("all");
   const [blastFilter, setBlastFilter] = useState<"all" | "high" | "leaf">("all");
@@ -216,14 +266,15 @@ export function MachineDrillDownView({
     return { remediated, inProgress, open };
   }, [findings]);
 
-  // Filter by severity (Requirement 3.3)
-  const severityFilteredFindings = useMemo(
-    () =>
-      severityFilter === "all"
-        ? findings
-        : filterBySeverity(findings, severityFilter),
-    [findings, severityFilter],
-  );
+  const newCount = useMemo(() => findings.filter((f) => f.isNew).length, [findings]);
+
+  // Filter by severity (Requirement 3.3), and to what the last scan found new
+  // (Req 18.6).
+  const severityFilteredFindings = useMemo(() => {
+    const bySeverity =
+      severityFilter === "all" ? findings : filterBySeverity(findings, severityFilter);
+    return newOnly ? bySeverity.filter((f) => f.isNew) : bySeverity;
+  }, [findings, severityFilter, newOnly]);
 
   // Filter by patch readiness
   const patchFilteredFindings = useMemo(() => {
@@ -421,6 +472,11 @@ export function MachineDrillDownView({
             <span className="view-subtitle">
               {findings.length} {findings.length === 1 ? "vulnerability" : "vulnerabilities"} detected across installed components
             </span>
+            {delta && (
+              <span className="scan-delta-line" data-testid="scan-delta">
+                {delta.long}
+              </span>
+            )}
           </div>
         </div>
 
@@ -463,6 +519,77 @@ export function MachineDrillDownView({
           </button>
         )}
       </div>
+
+      {lastScanStatus && isHostKeyStatus(lastScanStatus) && (
+        <div className="release-fix-notice" role="note" data-testid="host-key-refused">
+          <Icon name="shield-alert" />
+          <div>
+            {lastScanStatus === "host_key_mismatch" ? (
+              <>
+                <strong>The last scan was refused: this host presented a different SSH host key.</strong>{" "}
+                No credentials were sent. The findings below are from the last scan that
+                completed. If the host was rebuilt or its keys regenerated, check the new
+                key on the host and forget the pinned one.
+              </>
+            ) : (
+              <>
+                <strong>The last scan was refused: no SSH host key is pinned for this host.</strong>{" "}
+                This server only scans hosts whose key is already pinned.
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {hostKeyFingerprint && (
+        <div className="host-key-pin" data-testid="host-key-pin">
+          <span className="host-key-label">
+            <Icon name="key" /> SSH host key
+          </span>
+          <code>{hostKeyFingerprint}</code>
+          {onForgetHostKey && (
+            <button
+              type="button"
+              className="btn-secondary host-key-forget"
+              onClick={() => {
+                setForgetError(null);
+                setConfirmForget(true);
+              }}
+            >
+              Forget host key
+            </button>
+          )}
+        </div>
+      )}
+
+      {confirmForget && hostKeyFingerprint && (
+        <Modal title="Forget this host key?" onClose={() => setConfirmForget(false)}>
+          <div className="modal-body">
+            <p>
+              Scans of {hostname ?? machineId} are held to <code>{hostKeyFingerprint}</code>.
+            </p>
+            <p>
+              <strong>The next scan will trust whatever key the host presents</strong>, and pin
+              that one instead. Forget it only if you know why the key changed. Compare it with{" "}
+              <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on the host first.
+            </p>
+            {forgetError && <p role="alert">{forgetError}</p>}
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => setConfirmForget(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={forgetHostKey}
+                disabled={forgetting}
+              >
+                {forgetting ? "Forgetting..." : "Forget host key"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/*
         One strip where five KPI cards and a full-width progress card used to
@@ -514,6 +641,17 @@ export function MachineDrillDownView({
               {severityLabel(sev)} {counts[sev]}
             </button>
           ))}
+          {newCount > 0 && (
+            <button
+              type="button"
+              className={`sev-chip ${newOnly ? "active" : ""}`}
+              aria-pressed={newOnly}
+              onClick={() => setNewOnly(!newOnly)}
+              title="Findings the latest scan found that the scan before it did not"
+            >
+              New {newCount}
+            </button>
+          )}
         </div>
 
         {findings.length > 0 && (
@@ -545,6 +683,10 @@ export function MachineDrillDownView({
           </div>
         )}
       </div>
+
+      {onLoadScanRuns && onLoadScanChanges && (
+        <ScanHistoryPanel onLoadRuns={onLoadScanRuns} onLoadChanges={onLoadScanChanges} />
+      )}
 
       {findings.length === 0 ? (
         <p>No CVEs identified for this machine.</p>
@@ -727,12 +869,14 @@ export function MachineDrillDownView({
               filters={[
                 { label: "search", value: searchQuery.trim() },
                 { label: "severity", value: severityFilter === "all" ? "" : severityFilter },
+                { label: "new", value: newOnly ? "new only" : "" },
                 { label: "patch state", value: patchFilter === "all" ? "" : patchFilter },
                 { label: "blast radius", value: blastFilter === "all" ? "" : blastFilter },
               ]}
               onClearFilters={() => {
                 setSearchQuery("");
                 setSeverityFilter("all");
+                setNewOnly(false);
                 setPatchFilter("all");
                 setBlastFilter("all");
                 setCurrentPage(1);
@@ -1248,6 +1392,7 @@ export function MachineDrillDownView({
                       <th scope="col" style={{ width: "110px" }}>Severity</th>
                       <th scope="col" style={{ width: "110px" }}>CVSS Score</th>
                       <th scope="col" style={{ minWidth: "160px" }}>Remediation Status</th>
+                      <th scope="col" style={{ width: "100px" }}>First seen</th>
                       {onSaveRemediation && <th scope="col" style={{ minWidth: "320px" }}>Update Remediation</th>}
                     </tr>
                   </thead>
@@ -1277,6 +1422,14 @@ export function MachineDrillDownView({
                                 <span>{finding.cveId}</span>
                                 <span style={{ fontSize: "0.75rem", opacity: 0.7 }}><Icon name="search" /> Inspect</span>
                               </button>
+                              {finding.isNew && (
+                                <span
+                                  className="badge badge-new"
+                                  title="Found by the latest scan, and not by the scan before it"
+                                >
+                                  New
+                                </span>
+                              )}
                             </div>
                             {finding.packageIdentifier && (
                               <div className="package-pill">
@@ -1386,6 +1539,13 @@ export function MachineDrillDownView({
                             >
                               {remediationLabel(finding.remediationStatus)}
                             </span>
+                          </td>
+                          <td
+                            data-label="First seen"
+                            className="scan-age"
+                            title={finding.firstSeenAt ? new Date(finding.firstSeenAt).toLocaleString() : undefined}
+                          >
+                            {finding.firstSeenAt ? relativeTime(finding.firstSeenAt) : "--"}
                           </td>
                           {onSaveRemediation && (
                             <td className="remediation-col" data-label="Update">

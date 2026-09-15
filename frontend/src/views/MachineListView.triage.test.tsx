@@ -278,3 +278,32 @@ describe("severity chips", () => {
     expect(screen.getByRole("columnheader", { name: /^High/ })).toBeInTheDocument();
   });
 });
+
+describe("refused host keys (Req 17.3)", () => {
+  it("groups them on their own rather than as ordinary failures", async () => {
+    const user = userEvent.setup();
+    render(
+      <MachineListView
+        machines={[
+          makeMachine({ machineId: "a", hostname: "web-01", lastScannedAt: daysAgo(1) }),
+          makeMachine({
+            machineId: "b",
+            hostname: "rebuilt-01",
+            lastScanStatus: "host_key_mismatch",
+            lastScannedAt: daysAgo(1),
+          }),
+        ]}
+        feeds={USABLE_FEEDS}
+      />,
+    );
+
+    expect(
+      within(card("Needs attention")).getByText(/1 host refused on host key/),
+    ).toBeInTheDocument();
+    const badge = screen.getByText("Host key changed");
+    expect(badge).toHaveClass("badge-status-warn");
+
+    await user.click(card("Needs attention"));
+    expect(visibleHostnames()).toEqual(["rebuilt-01"]);
+  });
+});

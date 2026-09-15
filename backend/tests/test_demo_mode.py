@@ -82,6 +82,13 @@ def test_connection_test_is_refused(demo):
     assert response.status_code == 403
 
 
+def test_forgetting_a_host_key_is_refused(demo):
+    """Req 17.7: a demo visitor must not be able to drop a pinned key."""
+    response = demo.delete("/api/host-keys/web-01.lan")
+
+    assert response.status_code == 403
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [

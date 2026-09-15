@@ -58,6 +58,12 @@ def test_create_all_creates_every_table(engine):
         "auth_sessions",
         "api_tokens",
         "auth_setup",
+        # Pinned SSH host keys (Req 17). Not syncable: which key this instance
+        # trusts is its own decision.
+        "ssh_host_keys",
+        # Scan history (Req 18). Syncable, like the findings it describes.
+        "scan_runs",
+        "scan_finding_changes",
     }
 
 

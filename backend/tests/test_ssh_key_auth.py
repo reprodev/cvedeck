@@ -108,6 +108,9 @@ class _FakeSshClient:
         self.connect_kwargs: dict = {}
         self.closed = False
 
+    def set_missing_host_key_policy(self, policy):
+        pass
+
     def connect(self, **kwargs):
         self.connect_kwargs = kwargs
 

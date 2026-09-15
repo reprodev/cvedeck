@@ -57,7 +57,9 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_DB_URL` | SQLite file inside the data directory | Full SQLAlchemy URL. Set to `postgresql+psycopg://user:pass@host/db` to use PostgreSQL. |
 | `CVEDECK_STATIC_DIR` | unset (`/app/static` in the image) | Directory holding the built dashboard. Unset means the API serves no static files. |
 | `CVEDECK_ONLINE_DB_URL` | unset | Online database for `POST /api/sync`. Unset means sync reports HTTP 503. |
-| `CVEDECK_SSH_PORT` | `22` | Port the Linux collector dials. |
+| `CVEDECK_SSH_PORT` | `22` | Port the Linux collector and the connection test dial. |
+| `CVEDECK_SCAN_HISTORY_LIMIT` | `50` | Scan runs kept per machine, with what each one found new and resolved. Older runs are pruned when a new one is recorded; a machine's latest successful run is always kept. At least 1. |
+| `CVEDECK_SSH_HOST_KEY_POLICY` | `tofu` | What to do with a host whose SSH key is not pinned yet. `tofu` pins the key it presents on the first successful connection; `strict` refuses it. A host that presents a different key from its pinned one is refused under both. Any other value is an error. |
 | `CVEDECK_WINRM_PORT` | `5985` | Port the Windows collector dials (`5986` for HTTPS). Windows scans are refused in this release — see the note under Security. |
 | `CVEDECK_OSV_API_URL` | `https://api.osv.dev/v1` | Base URL for the OSV.dev REST API. |
 | `CVEDECK_HTTP_TIMEOUT` | `15.0` | Timeout in seconds for vulnerability source HTTP requests. |
@@ -448,8 +450,12 @@ Therefore:
   package inventory. The collectors only run read-only commands (`cat
   /etc/os-release`, `dpkg-query`/`rpm -qa`, `Get-CimInstance`, and a registry
   read), and install nothing on the target.
-- SSH host keys are accepted automatically (`AutoAddPolicy`); there is no
-  host-key verification, so scan only over networks where you accept that risk.
+- SSH host keys are pinned on the first successful connection to each host, and
+  a host that later presents a different key is refused before any credential
+  is sent. The machine's page shows the pinned fingerprint and a **Forget host
+  key** action for a host you have rebuilt. The first connection is still trust
+  on first use; check the fingerprint against the host, or set
+  `CVEDECK_SSH_HOST_KEY_POLICY=strict` to refuse hosts that have no pin.
 - **Windows scans are refused.** `POST /api/scans` returns 422 for any batch
   containing a Windows target, because collected Windows inventory cannot yet be
   matched against vulnerability data and a scan would report the host as clean

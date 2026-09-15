@@ -197,6 +197,9 @@ class SyncService:
 | PUT | `/api/remediation/{record_id}` | Update remediation record | 4.3 |
 | POST | `/api/scans` | Manually initiate a scan | 1.1, 1.2 |
 | POST | `/api/scans/test-connection` | Pre-flight connectivity & credential validation | 1.1, 9.1 |
+| DELETE | `/api/host-keys/{hostname}?port=` | Forget a pinned SSH host key | 17.7 |
+| GET | `/api/machines/{machine_id}/scans?limit=` | A machine's scan runs, newest first | 18.1, 18.6 |
+| GET | `/api/machines/{machine_id}/scans/{run_id}/changes` | A run's new and resolved findings | 18.2, 18.6 |
 | POST | `/api/discovery/sweep` | Zero-touch ICMP/TCP/banner network asset sweep | 8.1, 8.2 |
 | POST | `/api/discovery/enroll` | Enroll discovered network hosts into fleet roster | 8.4 |
 | POST | `/api/sync` | Manually trigger synchronization | 5.2 |
@@ -352,6 +355,8 @@ The `CveFinding.dependency_path_id` → `DependencyPath` relationship, plus `Dep
 |-----------|----------|-------------|
 | Target unreachable | Record `CONNECTION_FAILURE` for that target, continue batch | 1.4 |
 | Target auth fails | Record `AUTH_FAILURE` for that target, continue batch | 1.5 |
+| Target presents a key other than its pinned SSH host key | Refuse before authenticating, record `HOST_KEY_MISMATCH`, continue batch | 17.3 |
+| Target has no pinned key under the `strict` policy | Refuse before authenticating, record `HOST_KEY_UNKNOWN`, continue batch | 17.5 |
 | NVD or OSV unreachable | Record `DATA_SOURCE_UNAVAILABLE`, complete matching against the reachable source | 2.5 |
 | Online DB unreachable during sync | Retain data locally, mark `PENDING_SYNC` | 5.3 |
 | Online DB reachable after outage | Propagate all pending items on next sync; online converges | 5.4 |
@@ -444,6 +449,12 @@ A dual approach is used. Property-based tests (minimum 100 iterations each, tagg
 *For any* route the application serves under `/api`, other than the health check and the auth state, setup, sign-in and sign-out routes, a request carrying neither a current session nor a current API token SHALL be refused with HTTP 401 while login is required. The route set is discovered from the application itself, so a route added later is covered without being listed.
 
 **Validates: Requirements 16.1**
+
+### Property 13: A scan's diff is exact, and a partial scan resolves nothing
+
+*For any* findings recorded for a machine and any findings from its next successful scan, the new findings SHALL be exactly those whose CVE and package name were not recorded before, and the resolved findings exactly those recorded before and not found now; a finding found in both SHALL keep its first-seen time. When the scan is partial, no finding SHALL be resolved and every previously recorded finding SHALL remain.
+
+**Validates: Requirements 18.2, 18.3, 18.5**
 
 
 ---
@@ -664,3 +675,78 @@ a reverse proxy.
   shows the setup page, the sign-in page, or the dashboard. The API client
   reports any 401 so an expired session returns to sign-in. Account settings
   (password, tokens) live at `#/settings`.
+
+### SSH host keys
+
+Both SSH paths used to accept any key a host presented (paramiko's
+`AutoAddPolicy`) and remember nothing, so every connection was a first use
+(Req 17).
+
+- **One helper.** `app/scanner/host_keys.py:connect_pinned` wraps
+  `SSHClient.connect` for the collector and for `POST
+  /api/scans/test-connection`. Both reach the same `ssh_host_keys` table
+  through `wiring.RepositoryHostKeyStore`, and test connection now dials
+  `CVEDECK_SSH_PORT` like a scan does, so one pin covers both (Req 17.6).
+- **Keyed by address.** A pin is `(hostname, port)`, with the hostname
+  lower-cased, not a machine id, because a connection test has no machine.
+- **Order matters.** A pinned key is added to the client's host keys before
+  connecting. paramiko then puts that key type first in negotiation (Req 17.4)
+  and compares keys after key exchange, before authentication, so a refused host
+  never receives a password or a signature. With nothing pinned, `PinningPolicy`
+  records the presented key under `tofu` or raises under `strict` (Req 17.5).
+  The key is written only after `connect` returns (Req 17.1).
+- **Distinct statuses.** `BadHostKeyException` subclasses `SSHException`, which
+  every caller mapped to `CONNECTION_FAILURE`; it is caught inside the helper
+  and re-raised as `HostKeyMismatchError`, a `CollectorError`. The engine maps
+  it to `HOST_KEY_MISMATCH` and `HostKeyUnknownError` to `HOST_KEY_UNKNOWN`
+  (Req 17.3). The dashboard shows both in amber, since red means exploitation.
+- **No automatic re-trust.** `Repository.pin_host_key` refuses to overwrite a
+  pin. Only `DELETE /api/host-keys/{hostname}` removes one, behind login and the
+  demo-mode guard (Req 17.7). The machine summary carries the pinned fingerprint
+  for the drill-down (Req 17.8).
+- **Not synchronized.** Like the auth tables, `ssh_host_keys` has no
+  `sync_status`: which keys this instance trusts is its own decision.
+- **Migration.** Revision `b3abe7f1ff0c` adds the table and widens the
+  PostgreSQL `scan_status` type (with `NEVER_SCANNED`, which the earlier
+  revision missed). An upgraded instance has no pins, so its next scan of each
+  host pins the key that host presents.
+
+### Scan history
+
+Each scan used to delete a machine's findings and write them again, so nothing
+could say what changed (Req 18).
+
+- **Where the diff is made.** `Repository.save_findings` reads the machine's
+  findings before replacing them and returns a `FindingDiff`. Findings match on
+  `finding_key`: the CVE plus `parse_package_name(package_identifier)`, never
+  the version, so an upgrade that stays vulnerable changes nothing. A matched
+  finding keeps its `first_seen_at` (Req 18.5).
+- **Where it is recorded.** `DeploymentScannerEngine._record_scan_status`
+  already runs for every outcome, so it calls `Repository.record_scan_run`,
+  which writes a `scan_runs` row and, for a compared run, one
+  `scan_finding_changes` row per new or resolved finding. The change rows are
+  snapshots, because a resolved finding no longer exists (Req 18.1, 18.2).
+- **Trust rules.** The engine works out which sources failed *before* saving,
+  and a partial scan saves with `suppress_resolved`: findings it reported are
+  rewritten, findings it did not are kept, nothing is resolved, and the run's
+  `resolved_count` is NULL (Req 18.3). A machine with no successful run gets a
+  baseline, with both counts NULL, which covers every machine on its first scan
+  after the upgrade. A failed scan never reaches `save_findings` and records
+  its run with no counts (Req 18.4). NULL is "not assessed" everywhere, in the
+  API and the UI, and is never shown as 0.
+- **"New" badges** come from the change rows of the machine's latest
+  *successful* run, so a failed attempt afterwards does not clear them.
+- **Retention.** `CVEDECK_SCAN_HISTORY_LIMIT` (default 50) runs per machine,
+  pruned when a run is written; the latest successful run is never pruned
+  (Req 18.7).
+- **API.** `MachineSummary` gains `last_scan_new`, `last_scan_resolved` and
+  `last_scan_baseline`; `CveFindingOut` gains `first_seen_at` and `is_new`;
+  `MachineScanOut` gains `new_count`, `resolved_count` and `baseline`.
+  `GET /api/machines/{id}/scans` and `GET /api/machines/{id}/scans/{run_id}/changes`
+  are read routes (Req 18.6).
+- **Sync.** Both tables follow `CveFinding` in `_SYNC_ORDER` (Req 18.8). Sync
+  propagates rows, not deletions, so a pruned run stays in the Online_Database,
+  as a replaced finding already does.
+- **Remediation** is untouched by a resolution (Req 18.9). The changes route
+  returns the CVE's current remediation status, so the UI can show a finding
+  cleared by a scan beside a record still marked open.

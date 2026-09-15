@@ -130,7 +130,8 @@ goes on the allowlist in `tests/test_auth_enforcement.py`, in the spec and in
 DEPLOYMENT.md, and it will be asked about in review.
 
 **Per-target fault isolation.** A `ConnectionError` becomes
-`CONNECTION_FAILURE`, an `AuthError` becomes `AUTH_FAILURE`, and neither ever
+`CONNECTION_FAILURE`, an `AuthError` becomes `AUTH_FAILURE`, a refused SSH host
+key becomes `HOST_KEY_MISMATCH` or `HOST_KEY_UNKNOWN`, and none of them ever
 aborts the batch or produces an HTTP 500. One unreachable host must not cost you
 the other thirty.
 

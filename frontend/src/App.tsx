@@ -384,7 +384,10 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
             );
           } else {
             toast.success(
-              `Scan completed for ${target.hostname}: ${outcome.findingCount} CVEs identified.`,
+              `Scan completed for ${target.hostname}: ${outcome.findingCount} CVEs identified` +
+                (outcome.baseline || outcome.newCount === null
+                  ? "."
+                  : ` (${outcome.newCount} new, ${outcome.resolvedCount ?? "none"} resolved).`),
             );
           }
         }
@@ -396,6 +399,19 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
       } finally {
         setScanning(false);
       }
+    },
+    [api, loadMachines, toast],
+  );
+
+  // Forgetting is the only way a pinned key changes (Req 17.7). The modal in
+  // the drill-down shows any failure, so it is rethrown rather than toasted.
+  const handleForgetHostKey = useCallback(
+    async (hostname: string) => {
+      await api.forgetHostKey(hostname);
+      toast.success(
+        `Forgot the host key for ${hostname}. The next scan pins whatever key it presents.`,
+      );
+      await loadMachines();
     },
     [api, loadMachines, toast],
   );
@@ -577,6 +593,18 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           findings={findings}
           onBack={handleBack}
           onSaveRemediation={handleSaveRemediation}
+          lastScanStatus={selectedMachine?.lastScanStatus}
+          hostKeyFingerprint={selectedMachine?.hostKeyFingerprint ?? null}
+          onForgetHostKey={
+            selectedMachine && !capabilities?.demoMode
+              ? () => handleForgetHostKey(selectedMachine.hostname)
+              : undefined
+          }
+          lastScanNew={selectedMachine?.lastScanNew ?? null}
+          lastScanResolved={selectedMachine?.lastScanResolved ?? null}
+          lastScanBaseline={selectedMachine?.lastScanBaseline ?? false}
+          onLoadScanRuns={() => api.listScanRuns(selectedMachineId)}
+          onLoadScanChanges={(runId) => api.listScanChanges(selectedMachineId, runId)}
         />
       ) : activeNav === "settings" && account ? (
         <SettingsView

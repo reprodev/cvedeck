@@ -40,6 +40,48 @@ async function submitScan(options: {
   await userEvent.click(screen.getByRole("button", { name: "Start scan" }));
 }
 
+describe("ScanFormView host key results (Req 17)", () => {
+  async function testConnection(result: object) {
+    const onTestConnection = vi.fn().mockResolvedValue({
+      success: false,
+      status: "ERROR",
+      message: "",
+      latencyMs: 12,
+      osBanner: "",
+      hostKeyFingerprint: null,
+      ...result,
+    });
+    render(<ScanFormView onScan={vi.fn()} onTestConnection={onTestConnection} />);
+    await userEvent.type(screen.getByLabelText("Hostname"), "web-01.example.com");
+    await userEvent.type(screen.getByLabelText("Username"), "scanner");
+    await userEvent.type(screen.getByLabelText("Password"), "secret");
+    await userEvent.click(screen.getByRole("button", { name: /Test Connection/ }));
+    return screen.findByTestId("test-connection-result");
+  }
+
+  it("shows the pinned fingerprint after a successful test", async () => {
+    const panel = await testConnection({
+      success: true,
+      status: "SUCCESS",
+      message: "SSH authenticated",
+      hostKeyFingerprint: "SHA256:abc",
+    });
+
+    expect(panel).toHaveTextContent("SSH host key: SHA256:abc");
+  });
+
+  it("renders a changed host key in amber, not red (Req 17.3)", async () => {
+    const panel = await testConnection({
+      status: "HOST_KEY_MISMATCH",
+      message: "SSH host key for web-01.example.com:22 has changed: pinned SHA256:old, presented SHA256:new.",
+      hostKeyFingerprint: "SHA256:old",
+    });
+
+    expect(panel).toHaveTextContent("pinned SHA256:old, presented SHA256:new");
+    expect(panel.style.background).toBe("var(--warn-bg)");
+  });
+});
+
 describe("ScanFormView", () => {
   it("submits the entered target, defaulting to Linux (Req 1.1, 1.2)", async () => {
     const onScan = vi.fn();

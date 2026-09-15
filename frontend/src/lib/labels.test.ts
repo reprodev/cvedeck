@@ -6,6 +6,7 @@ import {
   severityLabel,
   statusLabel,
   statusTone,
+  isHostKeyStatus,
 } from "./labels";
 
 describe("statusLabel", () => {
@@ -30,6 +31,17 @@ describe("statusTone", () => {
     expect(statusTone("success")).toBe("success");
     expect(statusTone("connection_failure")).toBe("failure");
     expect(statusTone("auth_failure")).toBe("failure");
+  });
+
+  it("gives a refused host key the amber caveat tone, never red", () => {
+    // Red is reserved for exploitation; a changed key needs a person, not a retry.
+    expect(statusTone("host_key_mismatch")).toBe("warn");
+    expect(statusTone("host_key_unknown")).toBe("warn");
+    expect(statusLabel("host_key_mismatch")).toBe("Host key changed");
+    expect(statusLabel("host_key_unknown")).toBe("Host key not pinned");
+    // Test connection reports the same statuses in upper case.
+    expect(isHostKeyStatus("HOST_KEY_MISMATCH")).toBe(true);
+    expect(isHostKeyStatus("connection_failure")).toBe(false);
   });
 });
 

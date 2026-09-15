@@ -84,6 +84,29 @@ def ssh_port() -> int:
     return _int_env("CVEDECK_SSH_PORT", _DEFAULT_SSH_PORT)
 
 
+def scan_history_limit() -> int:
+    """How many scan runs to keep per machine (Req 18.7). At least 1."""
+    limit = _int_env("CVEDECK_SCAN_HISTORY_LIMIT", 50)
+    if limit < 1:
+        raise ValueError(f"CVEDECK_SCAN_HISTORY_LIMIT must be at least 1, got {limit}")
+    return limit
+
+
+def ssh_host_key_policy() -> str:
+    """What to do with a host that has no pinned SSH host key (Req 17.5).
+
+    ``tofu`` (the default) pins the key the host presents on the first
+    successful connection. ``strict`` refuses the host until a key is pinned
+    for it. A changed key is refused under both.
+    """
+    policy = os.environ.get("CVEDECK_SSH_HOST_KEY_POLICY", "tofu").strip().lower()
+    if policy not in {"tofu", "strict"}:
+        raise ValueError(
+            f"CVEDECK_SSH_HOST_KEY_POLICY must be 'tofu' or 'strict', got {policy!r}"
+        )
+    return policy
+
+
 def winrm_port() -> int:
     """TCP port the Windows collector dials for WinRM (5986 for HTTPS)."""
     return _int_env("CVEDECK_WINRM_PORT", _DEFAULT_WINRM_PORT)

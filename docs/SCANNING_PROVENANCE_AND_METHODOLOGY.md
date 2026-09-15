@@ -658,6 +658,40 @@ raises a banner when enrichment is degraded. A stale cache still enriches —
 withholding a nearly complete answer to avoid a marginally incomplete one helps
 nobody — but the operator is told what they are looking at.
 
+### F. What Changed Between Scans
+
+After a patch round the question is "what did that clear, and is anything new?"
+A diff between two scans can answer it, and it can also lie in exactly the ways
+this section exists to prevent: a finding that disappears because OSV did not
+answer looks the same as one a patch fixed. So a scan's changes follow the same
+rule as everything above. When CveDeck does not know, it says so.
+
+- **Same finding means same CVE and same package name.** The version is left out.
+  A package upgraded to a newer build that is still vulnerable is the same open
+  problem. It is not one finding resolved and another new, which would inflate
+  both counts after every partial upgrade. A finding keeps its first-seen date for
+  as long as it is found.
+- **A partial scan resolves nothing.** If a configured source did not answer,
+  findings the scan did not report are kept exactly as they were. Findings it did
+  report are recorded, and new ones are still new. Its resolved count is stored
+  as NULL, "not assessed", and the dashboard renders it as a dash with the reason
+  or as "resolved not assessed", never as 0. "0 resolved" would claim an outage
+  proved nothing was patched.
+- **A failed scan changes nothing.** The run is recorded with its status and no
+  counts. The host's findings stay those of its last successful scan.
+- **The first successful scan is a baseline.** With nothing to compare it with,
+  it reports neither new nor resolved findings. That includes each host's first
+  scan after upgrading to a version that records history. Without the rule, that
+  re-scan would call every existing finding new.
+- **A scan never closes a remediation record.** Remediation stays a person's
+  statement (Req 4). A finding cleared by a scan while its record still says
+  "In Progress" is shown as exactly that, so the operator decides whether the
+  record is done.
+
+Counts always say what they count. The fleet table shows "+3 new / −5 resolved",
+with "3 new findings, 5 resolved findings" as its tooltip and accessible name,
+because the cards above it count hosts.
+
 ---
 
 ## 13. Host Runtime Context

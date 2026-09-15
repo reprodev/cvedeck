@@ -52,6 +52,7 @@ from ..scanner.collectors import (
     WindowsCollector,
 )
 from ..scanner.engine import MachineScan, ScannerEngine, ScanResult
+from ..scanner.host_keys import HostKeyStore, PinnedHostKey
 from ..scanner.matcher import NvdClient, OsvClient
 from ..scanner.nvd_client import NvdHttpClient
 from ..scanner.osv_client import OsvHttpClient
@@ -60,15 +61,56 @@ from ..services.sync import SyncService
 from .dependencies import get_session
 
 
-def build_collector(platform: Platform) -> InventoryCollector:
+class RepositoryHostKeyStore:
+    """The :class:`~app.scanner.host_keys.HostKeyStore` over the request session.
+
+    Scans and connection tests both build one, which is what makes a key
+    accepted by a connection test the key the next scan is held to (Req 17.6).
+    Writes flush and join the caller's transaction like every repository write.
+    """
+
+    def __init__(self, repository: Repository) -> None:
+        self._repository = repository
+
+    def get(self, hostname: str, port: int) -> PinnedHostKey | None:
+        row = self._repository.get_host_key(hostname, port)
+        if row is None:
+            return None
+        return PinnedHostKey(
+            key_type=row.key_type,
+            key_base64=row.key_base64,
+            fingerprint_sha256=row.fingerprint_sha256,
+        )
+
+    def pin(self, hostname: str, port: int, key: PinnedHostKey) -> None:
+        self._repository.pin_host_key(
+            hostname,
+            port,
+            key_type=key.key_type,
+            key_base64=key.key_base64,
+            fingerprint_sha256=key.fingerprint_sha256,
+        )
+
+    def touch(self, hostname: str, port: int) -> None:
+        self._repository.touch_host_key(hostname, port)
+
+
+def build_collector(
+    platform: Platform, host_key_store: HostKeyStore | None = None
+) -> InventoryCollector:
     """Return the collector for a platform, using the configured ports.
 
     Mirrors :func:`app.scanner.collectors.get_collector` but honors the
     deployment's port/scheme configuration, so a fleet that runs SSH on a
-    non-standard port or WinRM over HTTPS needs no code change.
+    non-standard port or WinRM over HTTPS needs no code change. SSH host keys
+    are pinned in ``host_key_store`` under the configured policy (Req 17).
     """
     if platform is Platform.LINUX:
-        return LinuxCollector(port=config.ssh_port())
+        return LinuxCollector(
+            port=config.ssh_port(),
+            host_key_store=host_key_store,
+            host_key_policy=config.ssh_host_key_policy(),
+        )
     if platform is Platform.WINDOWS:
         return WindowsCollector(
             scheme=config.winrm_scheme(), port=config.winrm_port()
@@ -129,10 +171,11 @@ class DeploymentScannerEngine(ScannerEngine):
         nvd: NvdClient | None = None,
     ) -> None:
         repository = Repository(session)
+        host_keys = RepositoryHostKeyStore(repository)
         super().__init__(
             repository=repository,
             credentials_for=_no_credentials,
-            collector_factory=build_collector,
+            collector_factory=lambda platform: build_collector(platform, host_keys),
             record_status=self._record_scan_status,
             osv=osv if osv is not None else build_osv_client(),
             nvd=nvd if nvd is not None else build_nvd_client(),
@@ -141,6 +184,7 @@ class DeploymentScannerEngine(ScannerEngine):
             ),
         )
         self._session = session
+        self._repo = repository
 
     def scan(self, targets: list[TargetMachine]) -> ScanResult:
         """Register every target, scan the batch, then commit once."""
@@ -192,10 +236,20 @@ class DeploymentScannerEngine(ScannerEngine):
         row = self._session.get(TargetMachineRow, target.id)
         if row is None:  # pragma: no cover - upserted before the scan runs
             return
+        now = datetime.now(timezone.utc)
         row.last_scan_status = scan.status
-        row.last_scanned_at = datetime.now(timezone.utc)
+        row.last_scanned_at = now
         row.last_scan_sources_ok = scan.sources_ok
         row.sync_status = SyncStatus.PENDING_SYNC
+        # Every attempt, failed ones included, goes into the history (Req 18.1).
+        self._repo.record_scan_run(
+            target.id,
+            status=scan.status,
+            sources_ok=scan.sources_ok,
+            scanned_at=scan.diff.scanned_at if scan.diff is not None else now,
+            diff=scan.diff,
+            keep=config.scan_history_limit(),
+        )
 
 
 def build_scanner_engine(

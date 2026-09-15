@@ -19,6 +19,8 @@ healthy hosts:
     * a host scanned a month ago                  (stale)
     * hosts with findings CISA lists as exploited (kev_listed=True)
     * hosts whose findings were never enriched    (kev_listed=None)
+    * a scan history: a baseline, a scan with new and resolved findings, a
+      partial scan that resolves nothing, and failed attempts (Req 18)
 
 That last pair is the point. Per AGENTS.md section 3, ``kev_listed`` is
 three-valued and the states are never collapsed: NULL means "not checked",
@@ -38,8 +40,15 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from ..enums import Platform, ScanStatus, Severity, SyncStatus
-from .schema import CveFinding, Inventory, Package, TargetMachine
+from ..enums import FindingChange, Platform, ScanStatus, Severity, SyncStatus
+from .schema import (
+    CveFinding,
+    Inventory,
+    Package,
+    ScanFindingChange,
+    ScanRun,
+    TargetMachine,
+)
 
 
 def _uid() -> str:
@@ -129,6 +138,73 @@ _DEPENDENCIES: dict[str, list[str]] = {
 }
 
 
+# Scan history (Req 18). Every successfully scanned host has a baseline a week
+# before its last scan, then that scan. Two hosts carry more:
+#
+# web-01 has three runs. Eight days ago two findings appeared and one cleared;
+# its latest scan found two actively exploited ones new and cleared three. The
+# cleared findings are not in the host's findings any more, which is the point:
+# only the history remembers them.
+#
+# app-alma's latest scan was partial. It reports what it found new, and says
+# nothing about what cleared, because an unreachable source is not a patch.
+_WEB01_NEW_LATEST = {"CVE-2024-3094", "CVE-2023-44487"}
+_WEB01_NEW_EARLIER = {"CVE-2023-6246", "CVE-2024-25062"}
+# (cve_id, cvss, severity, package, kev)
+_WEB01_RESOLVED_LATEST: list[tuple[str, float, Severity, str, bool | None]] = [
+    ("CVE-2024-6387",  8.1, Severity.HIGH,   "openssh-server", False),
+    ("CVE-2023-48795", 5.9, Severity.MEDIUM, "openssh-client", False),
+    ("CVE-2024-2961",  7.3, Severity.HIGH,   "glibc",          False),
+]
+_WEB01_RESOLVED_EARLIER: list[tuple[str, float, Severity, str, bool | None]] = [
+    ("CVE-2023-4911",  7.8, Severity.HIGH,   "glibc",          True),
+]
+_ALMA_NEW_LATEST = {"CVE-2023-50387"}
+
+
+def _run(
+    machine: TargetMachine,
+    at: datetime,
+    *,
+    finding_count: int,
+    status: ScanStatus = ScanStatus.SUCCESS,
+    sources_ok: bool = True,
+    baseline: bool = False,
+    new: list[tuple[str, float, Severity, str, bool | None]] = (),
+    resolved: list[tuple[str, float, Severity, str, bool | None]] | None = (),
+) -> ScanRun:
+    """One seeded scan run. ``resolved=None`` is a partial run: not assessed."""
+    succeeded = status is ScanStatus.SUCCESS
+    compared = succeeded and not baseline
+    run = ScanRun(
+        id=_uid(),
+        machine_id=machine.id,
+        scanned_at=at,
+        status=status,
+        sources_ok=sources_ok,
+        finding_count=finding_count if succeeded else 0,
+        new_count=len(new) if compared else None,
+        resolved_count=len(resolved) if compared and resolved is not None else None,
+        baseline=baseline,
+        sync_status=SyncStatus.PENDING_SYNC,
+    )
+    for kind, rows in ((FindingChange.NEW, new), (FindingChange.RESOLVED, resolved or ())):
+        for cve_id, cvss, severity, package, kev in rows:
+            run.changes.append(
+                ScanFindingChange(
+                    id=_uid(),
+                    change=kind,
+                    cve_id=cve_id,
+                    package_identifier=_identifier("Debian", package, None),
+                    severity=severity,
+                    cvss_score=cvss,
+                    kev_listed=kev,
+                    sync_status=SyncStatus.PENDING_SYNC,
+                )
+            )
+    return run
+
+
 def _identifier(ecosystem: str, package: str, fixed: str | None) -> str:
     """Build a ``package_identifier`` in the format the API parses.
 
@@ -181,9 +257,16 @@ def seed_demo_fleet(session: Session) -> int:
 
         # Hosts that were never successfully scanned have no inventory and no
         # findings. Giving them any would contradict their own status
-        # (Req 15.5).
+        # (Req 15.5). A failed attempt is still in the history.
         if status is not ScanStatus.SUCCESS:
+            if scanned_ago_h is not None:
+                session.add(
+                    _run(machine, _ago(hours=scanned_ago_h), finding_count=0, status=status)
+                )
             continue
+
+        last_scan = _ago(hours=scanned_ago_h or 0)
+        baseline_at = last_scan - timedelta(days=7)
 
         inventory = Inventory(
             id=_uid(),
@@ -217,6 +300,17 @@ def seed_demo_fleet(session: Session) -> int:
 
         seen: set[str] = set()
         ecosystem = "Debian"
+        if hostname == "web-01.lan":
+            first_seen_by_cve = {
+                **{cve: last_scan for cve in _WEB01_NEW_LATEST},
+                **{cve: _ago(hours=scanned_ago_h + 24 * 8) for cve in _WEB01_NEW_EARLIER},
+            }
+            baseline_at = last_scan - timedelta(days=15)
+        elif hostname == "app-alma.lan":
+            first_seen_by_cve = {cve: last_scan for cve in _ALMA_NEW_LATEST}
+        else:
+            first_seen_by_cve = {}
+        seeded: list[tuple[str, float, Severity, str, bool | None]] = []
 
         for cve_id, cvss, severity, package, fixed, kev, epss, pct in chosen:
             if cve_id in seen:
@@ -248,9 +342,48 @@ def seed_demo_fleet(session: Session) -> int:
                     kev_due_date="2024-07-01" if (enriched and kev) else None,
                     epss_score=epss if enriched else None,
                     epss_percentile=pct if enriched else None,
+                    first_seen_at=first_seen_by_cve.get(cve_id, baseline_at),
                     sync_status=SyncStatus.PENDING_SYNC,
                 )
             )
+            seeded.append((cve_id, cvss, severity, package, kev if enriched else None))
+
+        count = len(seeded)
+        by_cve = {row[0]: row for row in seeded}
+        session.add(_run(machine, baseline_at, finding_count=count, baseline=True))
+        if hostname == "web-01.lan":
+            session.add(
+                _run(
+                    machine,
+                    _ago(hours=scanned_ago_h + 24 * 8),
+                    finding_count=count + len(_WEB01_RESOLVED_LATEST) - len(_WEB01_NEW_LATEST),
+                    new=[by_cve[cve] for cve in sorted(_WEB01_NEW_EARLIER)],
+                    resolved=_WEB01_RESOLVED_EARLIER,
+                )
+            )
+            session.add(
+                _run(
+                    machine,
+                    last_scan,
+                    finding_count=count,
+                    new=[by_cve[cve] for cve in sorted(_WEB01_NEW_LATEST)],
+                    resolved=_WEB01_RESOLVED_LATEST,
+                )
+            )
+        elif hostname == "app-alma.lan":
+            session.add(
+                _run(
+                    machine,
+                    last_scan,
+                    finding_count=count,
+                    sources_ok=False,
+                    new=[by_cve[cve] for cve in sorted(_ALMA_NEW_LATEST)],
+                    resolved=None,
+                )
+            )
+        elif hostname != "nas-01.lan":
+            # nas-01's only run is its month-old baseline.
+            session.add(_run(machine, last_scan, finding_count=count))
 
     session.flush()
     return len(machines)

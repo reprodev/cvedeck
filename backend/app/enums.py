@@ -35,12 +35,29 @@ class ScanStatus(str, Enum):
     (Req 10.4). It previously defaulted to ``CONNECTION_FAILURE``, which made
     every freshly enrolled host render as a red failure before anything had
     been attempted -- the distinction Req 10.4 exists to preserve.
+
+    ``HOST_KEY_MISMATCH`` and ``HOST_KEY_UNKNOWN`` are refusals, not failures
+    to connect (Req 17.3, 17.5): the host answered, with a key other than the
+    pinned one, or with a key when policy requires one to be pinned already.
     """
 
     NEVER_SCANNED = "never_scanned"
     SUCCESS = "success"
     CONNECTION_FAILURE = "connection_failure"
     AUTH_FAILURE = "auth_failure"
+    HOST_KEY_MISMATCH = "host_key_mismatch"
+    HOST_KEY_UNKNOWN = "host_key_unknown"
+
+
+class FindingChange(str, Enum):
+    """How a finding differs between a host's consecutive scans (Req 18).
+
+    Persisted on each scan run's change rows. There is deliberately no
+    "unchanged": a run records only what moved.
+    """
+
+    NEW = "new"
+    RESOLVED = "resolved"
 
 
 class SourceStatus(str, Enum):

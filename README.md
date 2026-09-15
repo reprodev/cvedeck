@@ -67,7 +67,13 @@ Everything is manual for now: no scheduled scans, and no automated remediation.
 - **Scans without agents.** SSH (`paramiko`), with a password or an
   Ed25519/ECDSA/RSA key that is parsed in memory and never written to disk. A
   pre-flight connection test reports reachability, credentials and the OS banner
-  before you commit to a scan.
+  before you commit to a scan. Each host's SSH key is pinned on first contact,
+  and a host whose key changes is refused before it sees a credential.
+
+- **Shows what changed since the last scan.** Every scan is kept with the
+  findings it found new and the ones it cleared, and each finding shows when it
+  first appeared. A scan that could not reach an advisory source never counts a
+  finding as resolved.
 
 - **Ranks by exploitation, not just severity.** Every finding shows whether CISA
   lists it as actively exploited (with the federal remediation due date), and

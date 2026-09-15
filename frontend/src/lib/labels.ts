@@ -23,6 +23,10 @@ export function statusLabel(status: string): string {
       return "Could not connect";
     case "auth_failure":
       return "Authentication failed";
+    case "host_key_mismatch":
+      return "Host key changed";
+    case "host_key_unknown":
+      return "Host key not pinned";
     default:
       return status;
   }
@@ -34,11 +38,24 @@ export function statusLabel(status: string): string {
  * `never_scanned` is deliberately neutral rather than a failure: a host
  * enrolled from discovery has had nothing attempted against it, and showing it
  * in red taught users to ignore red.
+ *
+ * A refused host key is `warn`: amber, like every other caveat. It is not
+ * exploitation, the only thing red is for, and it is not an ordinary failure
+ * to retry either. Someone has to look at it (Req 17.3).
  */
-export function statusTone(status: string): "success" | "neutral" | "failure" {
+export function statusTone(
+  status: string,
+): "success" | "neutral" | "warn" | "failure" {
   if (status === "success") return "success";
   if (status === "never_scanned") return "neutral";
+  if (isHostKeyStatus(status)) return "warn";
   return "failure";
+}
+
+/** Whether a scan status is a refused SSH host key (Req 17.3, 17.5). */
+export function isHostKeyStatus(status: string): boolean {
+  const lower = status.toLowerCase();
+  return lower === "host_key_mismatch" || lower === "host_key_unknown";
 }
 
 /** Human-readable label for a remediation status. */

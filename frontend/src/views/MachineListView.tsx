@@ -17,8 +17,10 @@ import {
   severityLabel,
   statusLabel,
   statusTone,
+  isHostKeyStatus,
 } from "../lib/labels";
 import { enrichmentWarning, feedLabel, formatFeedAge } from "../lib/intel";
+import { scanDelta } from "../lib/scanDelta";
 import { sortIndicator, useSort } from "../lib/useSort";
 import { EmptyState } from "../components/EmptyState";
 import { SkeletonRows } from "../components/Skeleton";
@@ -172,6 +174,9 @@ export function MachineListView({
   // "how many are specifically auth failures".
   const attention = useMemo(() => {
     const never = machines.filter((m) => m.lastScanStatus === "never_scanned");
+    // Its own group: a refused host key is not a flaky connection to retry,
+    // and folding it into "failed" would hide the one that needs a person.
+    const hostKey = machines.filter((m) => isHostKeyStatus(m.lastScanStatus));
     const failed = machines.filter(
       (m) =>
         m.lastScanStatus === "connection_failure" ||
@@ -180,7 +185,13 @@ export function MachineListView({
     const stale = machines.filter(
       (m) => m.lastScanStatus === "success" && isStale(m.lastScannedAt),
     );
-    return { never, failed, stale, all: [...never, ...failed, ...stale] };
+    return {
+      never,
+      failed,
+      stale,
+      hostKey,
+      all: [...never, ...failed, ...stale, ...hostKey],
+    };
   }, [machines]);
 
   const attentionCount = attention.all.length;
@@ -197,6 +208,9 @@ export function MachineListView({
 
   const attentionSummary = useMemo(() => {
     const parts: string[] = [];
+    if (attention.hostKey.length) {
+      parts.push(`${hostUnit(attention.hostKey.length)} refused on host key`);
+    }
     if (attention.failed.length) parts.push(`${attention.failed.length} failed`);
     if (attention.stale.length) parts.push(`${attention.stale.length} stale`);
     if (attention.never.length) parts.push(`${attention.never.length} never scanned`);
@@ -761,6 +775,20 @@ export function MachineListView({
                     >
                       {statusLabel(machine.lastScanStatus)}
                     </span>
+                    {(() => {
+                      // What the last successful scan changed, with its units
+                      // (Req 18.6). Nothing for a baseline or an unchanged host.
+                      const delta = scanDelta(machine);
+                      return delta?.short ? (
+                        <span
+                          className="scan-delta"
+                          title={delta.long}
+                          aria-label={delta.long}
+                        >
+                          {delta.short}
+                        </span>
+                      ) : null;
+                    })()}
                     {machine.lastScanStatus === "success" &&
                       !machine.lastScanSourcesOk && (
                         <span

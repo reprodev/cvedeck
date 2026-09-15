@@ -32,6 +32,7 @@ from app.enums import Platform
 from app.models import Credentials, Inventory, OsInfo, Package, TargetMachine
 
 from .exceptions import AuthError
+from .host_keys import POLICY_TOFU, HostKeyStore, connect_pinned
 from .releases import UBUNTU_CODENAMES, ubuntu_ecosystem
 
 # Default remoting ports.
@@ -99,9 +100,8 @@ _LINUX_PACKAGES_CMD = (
 
 
 def _default_ssh_client_factory() -> paramiko.SSHClient:
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    return client
+    # No host key policy here: connect_pinned installs one per connection.
+    return paramiko.SSHClient()
 
 
 # Key types paramiko can load, tried in order. Ed25519 first because it is the
@@ -181,8 +181,12 @@ class LinuxCollector:
         port: int = _SSH_PORT,
         connect_timeout: float = _CONNECT_TIMEOUT,
         command_timeout: float = _COMMAND_TIMEOUT,
+        host_key_store: HostKeyStore | None = None,
+        host_key_policy: str = POLICY_TOFU,
     ) -> None:
         self._ssh_client_factory = ssh_client_factory or _default_ssh_client_factory
+        self._host_key_store = host_key_store
+        self._host_key_policy = host_key_policy
         self._port = port
         self._connect_timeout = connect_timeout
         self._command_timeout = command_timeout
@@ -209,9 +213,14 @@ class LinuxCollector:
         client = self._ssh_client_factory()
         try:
             try:
-                client.connect(
+                # A refused host key raises HostKeyError, which is neither
+                # clause below: it is not a network failure (Req 17.3).
+                connect_pinned(
+                    client,
                     hostname=target.hostname,
                     port=self._port,
+                    store=self._host_key_store,
+                    policy=self._host_key_policy,
                     username=credentials.username,
                     timeout=self._connect_timeout,
                     allow_agent=False,

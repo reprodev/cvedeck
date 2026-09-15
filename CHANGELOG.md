@@ -8,6 +8,72 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.0] - 2026-09-15
+
+CveDeck now remembers each host's SSH key and refuses a host whose key changes,
+and it keeps every scan, so a re-scan says what is new, what was cleared, and how
+long each finding has been open. **The first scan of each host after upgrading
+pins its key and is its baseline**; see Upgrading.
+
+### Security
+
+- **SSH host keys are pinned.** Scans and connection tests used to accept
+  whatever key a host presented and remember nothing, so every connection was a
+  first use and anything answering in a host's place was trusted with the scan
+  credentials. Each host's key is now pinned the first time a connection to it
+  succeeds. A host that later presents a different key is refused before any
+  credential is sent, with the new status **Host key changed** and both SHA-256
+  fingerprints in the message. It is no longer reported as a failed connection.
+  A host that offers several key types is held to the type that was pinned.
+
+### Added
+
+- **Scan history, and what changed.** Every scan of a host is recorded, failed
+  ones included, with what it found new and what it cleared. The fleet view shows
+  each host's latest change ("+3 new / −5 resolved"). A host's page says what its
+  last scan changed, marks new findings with a **New** badge and a **New** filter,
+  adds a **First seen** column, and has a **Scan history** panel that lists each
+  run's new and resolved findings. The findings CSV gains a First Seen column.
+  The API gains `GET /api/machines/{id}/scans` and
+  `GET /api/machines/{id}/scans/{run_id}/changes`, and scan results report new
+  and resolved counts.
+- **The same finding is recognised across scans** by CVE and package name, not
+  version, so upgrading a package to a build that is still vulnerable does not
+  read as one finding fixed and another new.
+- **`CVEDECK_SCAN_HISTORY_LIMIT`** (default 50) sets how many runs each host
+  keeps.
+- **The machine's page shows its pinned SSH host key**, with **Forget host key**
+  for a host you have rebuilt or whose keys you regenerated. Forgetting needs a
+  confirmation, and the next scan pins whatever key the host presents. Nothing
+  else ever replaces a pinned key. Forgetting is refused in demo mode.
+- **`CVEDECK_SSH_HOST_KEY_POLICY=strict`** refuses hosts that have no pinned
+  key yet (status **Host key not pinned**), for operators who want no trust on
+  first use. The default, `tofu`, pins on first contact.
+- **Test connection dials `CVEDECK_SSH_PORT`**, as scans do. It always used
+  port 22, so on a fleet with SSH elsewhere the test and the scan reached
+  different ports.
+
+### Changed
+
+- **A partial scan no longer drops findings it could not re-check.** When an
+  advisory source did not answer, the findings that source would have reported
+  used to disappear from the host until the next complete scan. They are now kept,
+  and nothing is counted as resolved, because an unreachable source is not a
+  patch. The host is still marked **Partial**.
+
+### Upgrading
+
+- **The first scan of each host after upgrading is its baseline.** It records no
+  new or resolved findings, so the re-scan does not list every finding as new.
+  What changed is reported from the scan after it. Existing findings take their
+  host's last scan time as their first-seen date.
+- **The first scan of each host after upgrading pins the key it presents.** An
+  upgraded instance has no pins. On hosts where it matters, compare the
+  fingerprint on the machine's page with
+  `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the host.
+
+---
+
 ## [0.7.3] - 2026-09-14
 
 Findings and fixes are now judged against each host's own distribution release.

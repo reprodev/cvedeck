@@ -357,3 +357,78 @@ scripting against the API, I want a token that does not depend on a browser.
     (extends Req 15).
 12. THE system SHALL provide a command, run on the host, that resets the account
     password, ending every session, or creates the account when none exists.
+
+### Requirement 17: Pinned SSH host keys
+
+**User story:** As an administrator scanning hosts over a network I do not fully
+trust, I want CveDeck to remember each host's SSH key and refuse a host that
+presents a different one, so that a machine in the middle cannot collect the
+credentials I scan with or feed the scanner a false inventory.
+
+#### Acceptance criteria
+
+1. WHEN the system connects to a host and port for which no SSH host key is
+   pinned AND the policy is trust on first use THEN the system SHALL pin the key
+   the host presents, and SHALL pin it only after the connection has succeeded,
+   so that an unreachable host or a rejected login pins nothing.
+2. WHEN the system connects to a host and port for which a key is pinned AND the
+   host presents that key THEN the system SHALL proceed and record when the key
+   was last seen.
+3. WHEN a host presents a key other than the one pinned for it THEN the system
+   SHALL refuse the connection before offering any credential, SHALL record the
+   outcome as `HOST_KEY_MISMATCH` rather than as a connection failure, SHALL
+   report the SHA-256 fingerprints of both keys, and SHALL NOT replace the pin.
+4. WHEN a host offers several key types AND one of them is pinned THEN the system
+   SHALL negotiate the pinned key type, so that a host is not refused for
+   presenting a different type of key it also holds.
+5. WHERE the host key policy is `strict` THEN the system SHALL refuse a host with
+   no pinned key before offering any credential and record the outcome as
+   `HOST_KEY_UNKNOWN`; THE system SHALL default to trust on first use and SHALL
+   reject an unrecognised policy setting.
+6. THE system SHALL hold scans and connection tests to one store of pinned keys,
+   so that a key accepted by either is the key the other requires.
+7. THE system SHALL change a pinned key only when a signed-in user explicitly
+   forgets it, and SHALL refuse to forget a key in demonstration mode (extends
+   Req 15).
+8. THE system SHALL show the fingerprint of the key pinned for a machine, so that
+   it can be compared with the key on the host.
+
+### Requirement 18: Scan history and what changed
+
+**User story:** As an administrator re-scanning my fleet, I want to see what is
+new since the last scan, what a patch cleared, and how long each finding has
+been open, so that I can tell whether my patching worked without comparing
+lists by hand.
+
+#### Acceptance criteria
+
+1. WHEN a scan of a machine is attempted THEN the system SHALL record a run for
+   it, successful or not, with its outcome, its time, whether every configured
+   data source answered, and the number of findings it left recorded.
+2. WHEN a scan of a machine succeeds THEN the system SHALL compare its findings
+   with the machine's previous findings, treating two findings as the same when
+   they share a CVE and package name whatever the package version; SHALL record
+   the findings that are new and the findings that are resolved, with each one's
+   severity, CVSS score and exploitation status at the time; and SHALL report the
+   new and resolved counts with the scan result.
+3. WHEN a scan succeeds AND a configured data source did not answer THEN the
+   system SHALL record the findings that are new, SHALL NOT mark any finding
+   resolved, SHALL keep the findings the scan did not report, and SHALL report
+   the resolved count as not assessed rather than as zero (extends Req 10).
+4. WHEN a machine's first successful scan is recorded, including its first scan
+   after upgrading to a version that records history, THEN the system SHALL
+   record it as a baseline with no new or resolved findings; AND WHEN a scan fails
+   THEN the system SHALL leave the machine's findings unchanged and record no
+   comparison.
+5. THE system SHALL record when each finding was first seen on its machine and
+   SHALL keep that time across scans for as long as the finding is found.
+6. THE system SHALL show, for each machine, the new and resolved counts of its
+   latest successful scan, which of its findings that scan found new, and the
+   history of its runs with each run's new and resolved findings; and SHALL show
+   a count that was not assessed differently from zero.
+7. THE system SHALL keep a configurable number of runs per machine, 50 by
+   default, and SHALL NOT discard a machine's latest successful run.
+8. THE system SHALL synchronize scan runs and their changes to the
+   Online_Database like other scan data (extends Req 5).
+9. THE system SHALL NOT change a remediation record because a scan resolved its
+   finding (extends Req 4).

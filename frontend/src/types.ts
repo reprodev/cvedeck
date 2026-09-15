@@ -29,7 +29,10 @@ export interface MachineSummary {
   machineId: string;
   hostname: string;
   platform: Platform;
-  /** "never_scanned", "success", "connection_failure", or "auth_failure". */
+  /**
+   * "never_scanned", "success", "connection_failure", "auth_failure", or a
+   * refused SSH host key: "host_key_mismatch" / "host_key_unknown" (Req 17).
+   */
   lastScanStatus: string;
   /** ISO-8601 timestamp of the last scan, or null if never scanned. */
   lastScannedAt: string | null;
@@ -48,6 +51,20 @@ export interface MachineSummary {
    * than presenting a zero as reassurance.
    */
   kevCount: number;
+  /**
+   * SHA-256 fingerprint of the SSH host key pinned for this host, or null when
+   * nothing is pinned yet (Req 17.8).
+   */
+  hostKeyFingerprint: string | null;
+  /**
+   * What the latest successful scan changed (Req 18.6). Null means not
+   * assessed -- no successful scan yet, a baseline, or (resolved only) a
+   * partial scan -- and must never be shown as zero.
+   */
+  lastScanNew: number | null;
+  lastScanResolved: number | null;
+  /** Whether the latest successful scan was this host's baseline. */
+  lastScanBaseline: boolean;
 }
 
 /** How a finding can be fixed on the host it was found on. */
@@ -113,6 +130,39 @@ export interface CveFinding {
    * negligible and is in fact around the 94th percentile.
    */
   epssPercentile?: number | null;
+
+  // --- Scan history (Req 18.5, 18.6) -----------------------------------------
+  /** ISO-8601 time this finding was first seen on this host. */
+  firstSeenAt?: string | null;
+  /** Whether the host's latest successful scan found this finding new. */
+  isNew?: boolean;
+}
+
+/** One scan attempt on a host (Req 18.1). */
+export interface ScanRun {
+  runId: string;
+  scannedAt: string;
+  status: string;
+  sourcesOk: boolean;
+  findingCount: number;
+  /** Null when not assessed: a failed scan or a baseline. */
+  newCount: number | null;
+  /** Null when not assessed: a failed scan, a baseline, or a partial scan. */
+  resolvedCount: number | null;
+  baseline: boolean;
+}
+
+/** A finding that appeared or cleared in one scan run (Req 18.2). */
+export interface FindingChangeRow {
+  change: "new" | "resolved";
+  cveId: string;
+  packageIdentifier: string | null;
+  packageName: string | null;
+  severity: Severity;
+  cvssScore: number;
+  kevListed: boolean | null;
+  /** The CVE's current remediation record status on the host, if any. */
+  remediationStatus: string | null;
 }
 
 /** Refresh state of one locally cached threat-intel feed. */
@@ -196,7 +246,10 @@ export interface ScanTargetInput {
 /** Per-target outcome of a scan, as reported by POST /api/scans. */
 export interface ScanOutcome {
   machineId: string;
-  /** "never_scanned", "success", "connection_failure", or "auth_failure". */
+  /**
+   * "never_scanned", "success", "connection_failure", "auth_failure", or a
+   * refused SSH host key: "host_key_mismatch" / "host_key_unknown" (Req 17).
+   */
   status: string;
   findingCount: number;
   /** False when a configured advisory source did not answer. */
@@ -205,6 +258,10 @@ export interface ScanOutcome {
   unavailableSources: string[];
   /** The originating error, or a partial-results notice. Null on a clean run. */
   message: string | null;
+  /** What the scan changed (Req 18.2); null when not assessed. */
+  newCount: number | null;
+  resolvedCount: number | null;
+  baseline: boolean;
 }
 
 /** Deployment capabilities reported by the backend. */
@@ -339,6 +396,11 @@ export interface TestConnectionResult {
   message: string;
   latencyMs: number;
   osBanner: string;
+  /**
+   * The SSH host key pinned for the address after the test, or the pinned key
+   * a mismatched host failed to present. Null when nothing is pinned.
+   */
+  hostKeyFingerprint: string | null;
 }
 
 

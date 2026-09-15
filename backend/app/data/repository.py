@@ -32,10 +32,18 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..enums import FeedStatus, Platform, ScanStatus, Severity, SyncStatus
+from ..enums import (
+    FeedStatus,
+    FindingChange,
+    Platform,
+    ScanStatus,
+    Severity,
+    SyncStatus,
+)
 from ..models import Inventory as DomainInventory
 from ..models import OsInfo
 from ..models import Package as DomainPackage
+from ..package_identifier import parse_package_name
 from .schema import (
     CveFinding,
     EpssScore,
@@ -44,6 +52,9 @@ from .schema import (
     KevEntry,
     Package,
     RemediationRecord,
+    ScanFindingChange,
+    ScanRun,
+    SshHostKey,
     TargetMachine,
 )
 
@@ -52,6 +63,30 @@ from .schema import (
 #: 999-parameter ceiling (its limit before 3.32) so enrichment lookups do not
 #: depend on the host's SQLite build.
 _IN_CLAUSE_CHUNK = 500
+
+
+def _as_utc(moment: datetime) -> datetime:
+    """Compare stored and in-session times alike.
+
+    SQLite hands datetimes back naive, while a row written earlier in the same
+    session still holds the aware value it was given. Both are UTC.
+    """
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _snapshot(finding: FindingInput | CveFinding) -> FindingSnapshot:
+    return FindingSnapshot(
+        cve_id=finding.cve_id,
+        package_identifier=finding.package_identifier,
+        severity=finding.severity,
+        cvss_score=finding.cvss_score,
+        kev_listed=finding.kev_listed,
+    )
+
+
+def _host_key_name(hostname: str) -> str:
+    """The form a hostname is pinned under; see ``SshHostKey``."""
+    return hostname.strip().lower()
 
 
 def _new_id() -> str:
@@ -82,6 +117,47 @@ class FindingInput:
     kev_due_date: str | None = None
     epss_score: float | None = None
     epss_percentile: float | None = None
+
+
+FindingKey = tuple[str, str | None]
+
+
+def finding_key(cve_id: str, package_identifier: str | None) -> FindingKey:
+    """What makes two scans' findings the same finding (Req 18.2).
+
+    The CVE and the package *name*. The version is left out on purpose: a
+    package upgraded to a version that is still vulnerable is the same
+    unresolved problem, not one finding resolved and another new.
+    """
+    return cve_id, parse_package_name(package_identifier)
+
+
+@dataclass(frozen=True)
+class FindingSnapshot:
+    """What a finding was, kept on a scan run's change rows."""
+
+    cve_id: str
+    package_identifier: str | None
+    severity: Severity
+    cvss_score: float
+    kev_listed: bool | None
+
+
+@dataclass(frozen=True)
+class FindingDiff:
+    """How a successful scan's findings differ from the machine's previous ones.
+
+    ``baseline`` marks a machine's first successful run, which has nothing to
+    compare with, so ``new`` and ``resolved`` are empty (Req 18.4).
+    ``resolved_assessed`` is ``False`` for a partial scan, which never resolves
+    anything (Req 18.3).
+    """
+
+    new: tuple[FindingSnapshot, ...]
+    resolved: tuple[FindingSnapshot, ...]
+    baseline: bool
+    resolved_assessed: bool
+    scanned_at: datetime
 
 
 @dataclass(frozen=True)
@@ -234,7 +310,12 @@ class Repository:
         self._session.execute(stmt)
         self._session.flush()
 
-    def save_finding(self, machine_id: str, finding: FindingInput) -> CveFinding:
+    def save_finding(
+        self,
+        machine_id: str,
+        finding: FindingInput,
+        first_seen_at: datetime | None = None,
+    ) -> CveFinding:
         """Persist a single CVE finding for a machine (Req 2.3, 5.1)."""
         row = CveFinding(
             id=_new_id(),
@@ -249,6 +330,7 @@ class Repository:
             kev_due_date=finding.kev_due_date,
             epss_score=finding.epss_score,
             epss_percentile=finding.epss_percentile,
+            first_seen_at=first_seen_at or datetime.now(timezone.utc),
             sync_status=SyncStatus.PENDING_SYNC,
         )
         self._session.add(row)
@@ -256,15 +338,235 @@ class Repository:
         return row
 
     def save_findings(
-        self, machine_id: str, findings: list[FindingInput]
-    ) -> list[CveFinding]:
-        """Persist multiple CVE findings for a machine (Req 2.3, 5.1).
+        self,
+        machine_id: str,
+        findings: list[FindingInput],
+        *,
+        suppress_resolved: bool = False,
+        scanned_at: datetime | None = None,
+    ) -> FindingDiff:
+        """Persist a scan's findings for a machine and say what changed (Req 2.3, 18).
 
-        Replaces any previously stored findings for this machine so subsequent
-        scans reflect the latest scan state rather than accumulating duplicates.
+        A complete scan replaces the machine's findings, so a re-scan reflects
+        the host as it is now rather than accumulating duplicates. Each finding
+        keeps the ``first_seen_at`` of the finding it matches by
+        :func:`finding_key` (Req 18.5).
+
+        ``suppress_resolved`` is for a partial scan, one where a configured
+        source did not answer (Req 18.3). Nothing is resolved by it: a finding
+        it did not report is kept as it was, because an unreachable source is
+        not a patch. Findings it did report are written as usual, and new ones
+        are still new.
+
+        A machine with no successful scan run yet gets a baseline, with no new
+        or resolved findings, so its first scan after upgrading does not report
+        every finding as new (Req 18.4).
         """
-        self.delete_findings_for_machine(machine_id)
-        return [self.save_finding(machine_id, f) for f in findings]
+        now = scanned_at or datetime.now(timezone.utc)
+        baseline = not self._has_successful_run(machine_id)
+
+        old_rows = list(
+            self._session.execute(
+                select(CveFinding).where(CveFinding.machine_id == machine_id)
+            ).scalars()
+        )
+        old_by_key: dict[FindingKey, CveFinding] = {}
+        first_seen: dict[FindingKey, datetime] = {}
+        for row in old_rows:
+            key = finding_key(row.cve_id, row.package_identifier)
+            old_by_key.setdefault(key, row)
+            if key not in first_seen or _as_utc(row.first_seen_at) < _as_utc(first_seen[key]):
+                first_seen[key] = row.first_seen_at
+
+        new_keys = {finding_key(f.cve_id, f.package_identifier) for f in findings}
+        stale = [
+            row
+            for row in old_rows
+            if not suppress_resolved
+            or finding_key(row.cve_id, row.package_identifier) in new_keys
+        ]
+        if stale:
+            from sqlalchemy import delete
+
+            self._session.execute(
+                delete(CveFinding).where(CveFinding.id.in_([r.id for r in stale]))
+            )
+            self._session.flush()
+
+        new: list[FindingSnapshot] = []
+        reported: set[FindingKey] = set()
+        for finding in findings:
+            key = finding_key(finding.cve_id, finding.package_identifier)
+            self.save_finding(machine_id, finding, first_seen.get(key, now))
+            if key not in old_by_key and key not in reported:
+                new.append(_snapshot(finding))
+            reported.add(key)
+
+        resolved: list[FindingSnapshot] = []
+        if not suppress_resolved:
+            resolved = [
+                _snapshot(row) for key, row in old_by_key.items() if key not in new_keys
+            ]
+
+        return FindingDiff(
+            new=() if baseline else tuple(new),
+            resolved=() if baseline else tuple(resolved),
+            baseline=baseline,
+            resolved_assessed=not suppress_resolved,
+            scanned_at=now,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Scan history (Req 18)
+    # ------------------------------------------------------------------ #
+    def _has_successful_run(self, machine_id: str) -> bool:
+        stmt = (
+            select(ScanRun.id)
+            .where(ScanRun.machine_id == machine_id)
+            .where(ScanRun.status == ScanStatus.SUCCESS)
+            .limit(1)
+        )
+        return self._session.execute(stmt).first() is not None
+
+    def record_scan_run(
+        self,
+        machine_id: str,
+        *,
+        status: ScanStatus,
+        sources_ok: bool,
+        scanned_at: datetime,
+        diff: FindingDiff | None,
+        keep: int,
+    ) -> ScanRun:
+        """Record one scan attempt and what it changed (Req 18.1, 18.2).
+
+        A failed attempt is recorded too, with no counts: the findings it
+        leaves in place are the previous scan's, and saying "0 new" would claim
+        an answer it does not have. Keeps the newest ``keep`` runs for the
+        machine, and never prunes its latest successful one, which the "new"
+        badges are read from (Req 18.7).
+        """
+        succeeded = status is ScanStatus.SUCCESS and diff is not None
+        baseline = succeeded and diff.baseline
+        compared = succeeded and not baseline
+        run = ScanRun(
+            id=_new_id(),
+            machine_id=machine_id,
+            scanned_at=scanned_at,
+            status=status,
+            sources_ok=sources_ok,
+            finding_count=(
+                len(self.get_findings_for_machine(machine_id)) if succeeded else 0
+            ),
+            new_count=len(diff.new) if compared else None,
+            resolved_count=(
+                len(diff.resolved) if compared and diff.resolved_assessed else None
+            ),
+            baseline=baseline,
+            sync_status=SyncStatus.PENDING_SYNC,
+        )
+        self._session.add(run)
+        if compared:
+            for kind, snapshots in (
+                (FindingChange.NEW, diff.new),
+                (FindingChange.RESOLVED, diff.resolved),
+            ):
+                for snap in snapshots:
+                    self._session.add(
+                        ScanFindingChange(
+                            id=_new_id(),
+                            scan_run_id=run.id,
+                            change=kind,
+                            cve_id=snap.cve_id,
+                            package_identifier=snap.package_identifier,
+                            severity=snap.severity,
+                            cvss_score=snap.cvss_score,
+                            kev_listed=snap.kev_listed,
+                            sync_status=SyncStatus.PENDING_SYNC,
+                        )
+                    )
+        self._session.flush()
+        self._prune_scan_runs(machine_id, keep)
+        return run
+
+    def _prune_scan_runs(self, machine_id: str, keep: int) -> None:
+        runs = self.list_scan_runs(machine_id)
+        latest_success = next(
+            (r.id for r in runs if r.status is ScanStatus.SUCCESS), None
+        )
+        for run in runs[max(keep, 1):]:
+            if run.id != latest_success:
+                # Through the session, so the ORM cascade removes its changes
+                # on SQLite, which does not enforce ON DELETE by default.
+                self._session.delete(run)
+        self._session.flush()
+
+    def list_scan_runs(
+        self, machine_id: str, limit: int | None = None
+    ) -> list[ScanRun]:
+        """A machine's scan runs, newest first."""
+        stmt = (
+            select(ScanRun)
+            .where(ScanRun.machine_id == machine_id)
+            .order_by(ScanRun.scanned_at.desc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self._session.execute(stmt).scalars())
+
+    def get_scan_run(self, machine_id: str, run_id: str) -> ScanRun | None:
+        run = self._session.get(ScanRun, run_id)
+        return run if run is not None and run.machine_id == machine_id else None
+
+    def get_scan_changes(self, run_id: str) -> list[ScanFindingChange]:
+        """A run's changes: new before resolved, then highest CVSS first."""
+        stmt = (
+            select(ScanFindingChange)
+            .where(ScanFindingChange.scan_run_id == run_id)
+            .order_by(
+                ScanFindingChange.change,
+                ScanFindingChange.cvss_score.desc(),
+                ScanFindingChange.cve_id,
+            )
+        )
+        return list(self._session.execute(stmt).scalars())
+
+    def latest_successful_runs(self) -> dict[str, ScanRun]:
+        """Each machine's most recent successful run, in one query."""
+        latest = (
+            select(ScanRun.machine_id, func.max(ScanRun.scanned_at).label("at"))
+            .where(ScanRun.status == ScanStatus.SUCCESS)
+            .group_by(ScanRun.machine_id)
+            .subquery()
+        )
+        stmt = select(ScanRun).join(
+            latest,
+            (ScanRun.machine_id == latest.c.machine_id)
+            & (ScanRun.scanned_at == latest.c.at),
+        )
+        return {run.machine_id: run for run in self._session.execute(stmt).scalars()}
+
+    def latest_successful_run(self, machine_id: str) -> ScanRun | None:
+        stmt = (
+            select(ScanRun)
+            .where(ScanRun.machine_id == machine_id)
+            .where(ScanRun.status == ScanStatus.SUCCESS)
+            .order_by(ScanRun.scanned_at.desc())
+            .limit(1)
+        )
+        return self._session.execute(stmt).scalar_one_or_none()
+
+    def new_finding_keys(self, run: ScanRun | None) -> set[FindingKey]:
+        """The findings a run reported as new, by :func:`finding_key`."""
+        if run is None:
+            return set()
+        stmt = select(
+            ScanFindingChange.cve_id, ScanFindingChange.package_identifier
+        ).where(
+            ScanFindingChange.scan_run_id == run.id,
+            ScanFindingChange.change == FindingChange.NEW,
+        )
+        return {finding_key(cve, pkg) for cve, pkg in self._session.execute(stmt)}
 
     def get_findings_for_machine(
         self, machine_id: str, severity: Severity | None = None
@@ -537,6 +839,75 @@ class Repository:
                 )
             )
         return entries
+
+    # ------------------------------------------------------------------ #
+    # Pinned SSH host keys (Req 17)
+    # ------------------------------------------------------------------ #
+    def get_host_key(self, hostname: str, port: int) -> SshHostKey | None:
+        """The key pinned for an address, or ``None``."""
+        stmt = select(SshHostKey).where(
+            SshHostKey.hostname == _host_key_name(hostname),
+            SshHostKey.port == port,
+        )
+        return self._session.execute(stmt).scalar_one_or_none()
+
+    def pin_host_key(
+        self,
+        hostname: str,
+        port: int,
+        *,
+        key_type: str,
+        key_base64: str,
+        fingerprint_sha256: str,
+    ) -> SshHostKey:
+        """Pin a key for an address that has none (Req 17.1).
+
+        Never replaces an existing pin: changing which key a host is trusted
+        with goes through :meth:`forget_host_key`, a separate and deliberate
+        act (Req 17.7).
+        """
+        if self.get_host_key(hostname, port) is not None:
+            raise ValueError(f"a host key is already pinned for {hostname}:{port}")
+        now = datetime.now(timezone.utc)
+        row = SshHostKey(
+            id=_new_id(),
+            hostname=_host_key_name(hostname),
+            port=port,
+            key_type=key_type,
+            key_base64=key_base64,
+            fingerprint_sha256=fingerprint_sha256,
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+        self._session.add(row)
+        self._session.flush()
+        return row
+
+    def touch_host_key(self, hostname: str, port: int) -> None:
+        """Record that the pinned key was presented again."""
+        row = self.get_host_key(hostname, port)
+        if row is not None:
+            row.last_seen_at = datetime.now(timezone.utc)
+            self._session.flush()
+
+    def forget_host_key(self, hostname: str, port: int) -> bool:
+        """Remove an address's pin; ``False`` when there was none (Req 17.7)."""
+        row = self.get_host_key(hostname, port)
+        if row is None:
+            return False
+        self._session.delete(row)
+        self._session.flush()
+        return True
+
+    def host_key_fingerprints(self, port: int) -> dict[str, str]:
+        """Every pinned fingerprint on a port, by lower-cased hostname.
+
+        One query for the whole fleet view rather than one per machine.
+        """
+        stmt = select(SshHostKey.hostname, SshHostKey.fingerprint_sha256).where(
+            SshHostKey.port == port
+        )
+        return dict(self._session.execute(stmt).all())
 
     def get_machine(self, machine_id: str) -> TargetMachine | None:
         """Read a single machine by id, or ``None`` if it does not exist."""

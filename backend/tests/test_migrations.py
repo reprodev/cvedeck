@@ -317,5 +317,74 @@ def test_the_access_control_migration_round_trips(tmp_path):
     assert _revision(engine) == _head()
 
 
+def test_a_0_7_3_database_upgrades_to_host_keys_with_its_data(tmp_path):
+    """Validates Req 17: an upgraded instance keeps its fleet and has no pins."""
+    from sqlalchemy.orm import Session
+
+    from app.data.schema import SshHostKey
+    from app.data.schema import TargetMachine as TargetMachineRow
+    from app.enums import ScanStatus
+
+    url = f"sqlite:///{(tmp_path / 'v073.db').as_posix()}"
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "c3d9e1f27a60")
+        connection.execute(
+            text(
+                "INSERT INTO target_machines "
+                "(id, hostname, platform, last_scan_status, last_scan_sources_ok, sync_status) "
+                "VALUES ('m1', 'web-01', 'LINUX', 'SUCCESS', 1, 'SYNCED')"
+            )
+        )
+
+    upgrade_to_head(engine)
+
+    assert _revision(engine) == _head()
+    with Session(engine) as session:
+        assert session.query(SshHostKey).count() == 0
+        row = session.get(TargetMachineRow, "m1")
+        assert row.hostname == "web-01"
+        # The widened status round-trips through the ORM.
+        row.last_scan_status = ScanStatus.HOST_KEY_MISMATCH
+        session.commit()
+        session.expire_all()
+        assert session.get(TargetMachineRow, "m1").last_scan_status is ScanStatus.HOST_KEY_MISMATCH
+
+
+def test_the_host_keys_migration_round_trips(tmp_path):
+    """Downgrading folds the host-key refusals into a status the old build knows."""
+    engine = create_engine(f"sqlite:///{(tmp_path / 'keys.db').as_posix()}")
+    upgrade_to_head(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO target_machines "
+                "(id, hostname, platform, last_scan_status, last_scan_sources_ok, sync_status) "
+                "VALUES ('m1', 'a', 'LINUX', 'HOST_KEY_MISMATCH', 1, 'SYNCED'), "
+                "('m2', 'b', 'LINUX', 'HOST_KEY_UNKNOWN', 1, 'SYNCED'), "
+                "('m3', 'c', 'LINUX', 'SUCCESS', 1, 'SYNCED')"
+            )
+        )
+
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.downgrade(cfg, "c3d9e1f27a60")
+    assert "ssh_host_keys" not in inspect(engine).get_table_names()
+    with engine.connect() as connection:
+        statuses = dict(
+            connection.execute(text("SELECT id, last_scan_status FROM target_machines")).fetchall()
+        )
+    assert statuses == {"m1": "CONNECTION_FAILURE", "m2": "CONNECTION_FAILURE", "m3": "SUCCESS"}
+
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "head")
+    assert _revision(engine) == _head()
+
+
 def test_there_is_exactly_one_head():
     assert len(ScriptDirectory.from_config(alembic_config()).get_heads()) == 1
