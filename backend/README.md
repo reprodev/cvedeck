@@ -87,6 +87,13 @@ OS-level matching against NVD is implemented but off by default. Enable it with
   - `app/api/` - FastAPI app, routers, and production wiring
 - `tests/` - pytest + Hypothesis test suite
 
-No test makes a live network call: every data-source client is exercised against
+No test reaches the network: every data-source client is exercised against
 recorded fixture payloads through `httpx.MockTransport`. A suite that depends on
 CISA or NIST being reachable fails offline.
+
+The exception proves the same point. `tests/test_host_keys.py` runs a real
+paramiko SSH server on a loopback port, because the claims it makes -- that a
+changed host key is refused *before* any credential is sent, and that a pinned
+key type is still negotiated by a host offering several -- are properties of an
+actual handshake, and a fake client would assert them about itself. Nothing
+leaves the machine.

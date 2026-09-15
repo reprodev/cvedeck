@@ -510,6 +510,7 @@ For modern zero-trust environments (HashiCorp Vault, Teleport, Smallstep):
 | **Key Format Interoperability** | Supports modern OpenSSH format (`BEGIN OPENSSH PRIVATE KEY`), traditional PEM headers (`BEGIN RSA/DSA/EC PRIVATE KEY`), and PKCS#8 structures. Ed25519 is prioritized for performance and security. |
 | **Target Host Least-Privilege** | Target hosts should restrict the dedicated audit user via `~/.ssh/authorized_keys` options: <br>`no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,command="..." ssh-ed25519 AAAAC3...` |
 | **Fault Isolation & Error Safety** | Failed key decryption (bad passphrase), invalid key syntax, or rejected public keys raise `AuthError` (`AUTH_FAILURE`), maintaining per-target batch isolation without crashing scanner engines. |
+| **Host Key Trust (Req 17)** | A host's SSH key is pinned on the first connection that succeeds, and every later connection is held to it. A host presenting a different key is refused after key exchange and *before* authentication, so no credential reaches it; the refusal is `HOST_KEY_MISMATCH`, never a connection failure. The pinned key type is negotiated first, so a host with several key types is not refused for offering another. `CVEDECK_SSH_HOST_KEY_POLICY=strict` refuses hosts with no pin instead of trusting on first use. Only an explicit, signed-in **Forget host key** changes a pin. |
 | **Zero-Disk In-Memory Parsing** | User-submitted private keys are parsed entirely in memory via `io.StringIO` streams; no temporary files are ever written to the host filesystem. |
 
 ---
@@ -528,7 +529,7 @@ To ensure stability across heterogeneous enterprise networks, CveDeck implements
 
 ### B. Comprehensive Fault Isolation (Property 1)
 - The scanner engine enforces strict per-target error isolation:
-  - If a single target endpoint suffers an SSH timeout, network drop, or authentication failure, it is cleanly recorded as `CONNECTION_FAILURE` or `AUTH_FAILURE`.
+  - If a single target endpoint suffers an SSH timeout, network drop, or authentication failure, it is cleanly recorded as `CONNECTION_FAILURE` or `AUTH_FAILURE`; a refused host key is recorded as `HOST_KEY_MISMATCH` or `HOST_KEY_UNKNOWN` (Req 17.3, 17.5), which are refusals rather than failures to reach the host.
   - The failure is isolated to that specific machine and never aborts remaining batch scans or crashes the outward-facing HTTP API (`POST /api/scans`).
   - A target whose credentials cannot be resolved at all fails the same way, before the engine is reached.
 - **Degradation applies to outages, not to defects.** `Matcher.match` records a
@@ -541,8 +542,9 @@ To ensure stability across heterogeneous enterprise networks, CveDeck implements
 
 ### C. Pre-Flight Connection Testing
 - Operators can run a sub-second pre-flight diagnostic (`POST /api/scans/test-connection`) before initiating full scans.
-- Probes port 22/5985 reachability and performs read-only identity verification (`uname -a`, `/etc/os-release`), displaying real-time round-trip latency (ms) and detected remote operating system banners.
+- Probes reachability of the configured SSH port (`CVEDECK_SSH_PORT`, default 22) or WinRM port, and performs read-only identity verification (`uname -a`, `/etc/os-release`), displaying real-time round-trip latency (ms) and detected remote operating system banners.
 - Credentials are resolved through the same code path as a real scan, so pre-flight and the scan itself can never disagree about how a host is reached.
+- Host keys are pinned and checked through that same path too (Req 17.6): a key accepted here is the key the next scan is held to, and a pre-flight against a changed key is refused exactly as the scan would be. It reports the pinned fingerprint, which is what an operator compares against `ssh-keygen -lf` on the host.
 
 ---
 
