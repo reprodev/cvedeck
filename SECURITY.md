@@ -51,6 +51,9 @@ image, the deployment scripts under `deploy/`, and anything that could:
 - expose or exfiltrate target-host credentials
 - turn the scanner into a vector against the hosts it scans
 - allow remote code execution, SSRF, SQL injection, or path traversal
+- **carry an attack out of the product in an export.** A CSV is opened in a
+  spreadsheet that evaluates formulas, and much of what CveDeck exports came off
+  a scanned host rather than from the operator.
 - **cause the scanner to under-report vulnerabilities.** A bug that makes a
   vulnerable host read as clean is a security issue here, not merely a
   correctness one, because users act on that answer.

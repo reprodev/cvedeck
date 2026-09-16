@@ -140,10 +140,18 @@ def _to_finding_out(
 
     deps = (direct_deps or {}).get(pkg_name, []) if pkg_name else []
     dependents = (depended_on_by or {}).get(pkg_name, []) if pkg_name else []
+    # Only an answer when the dependency graph was actually built. A caller that
+    # passes no maps did not load the machine's inventory, and "nothing depends
+    # on this" is then a statement about the query rather than about the host --
+    # the same distinction the enrichment fields below keep (Req 10.10).
     blast_radius = (
-        "high"
-        if len(dependents) >= 10
-        else ("medium" if len(dependents) >= 3 else "low")
+        None
+        if depended_on_by is None
+        else (
+            "high"
+            if len(dependents) >= 10
+            else ("medium" if len(dependents) >= 3 else "low")
+        )
     )
 
     return CveFindingOut(
@@ -350,10 +358,12 @@ def get_machine_cves(
     findings = repo.get_findings_for_machine(machine_id, severity)
     remediation_by_cve = _remediation_map(session, machine_id)
     inventory = repo.get_latest_inventory_for_machine(machine_id)
+    # None, not empty maps, when nothing was ever collected: a machine with no
+    # inventory has an unknown blast radius, not a low one (Req 10.10).
     direct_deps, depended_on_by = (
         _build_dependency_maps(inventory.packages)
         if inventory is not None
-        else ({}, {})
+        else (None, None)
     )
     new_keys = repo.new_finding_keys(repo.latest_successful_run(machine_id))
     return [
@@ -375,7 +385,7 @@ def list_cves(
     machine instead made the cost of this route a function of how many machines
     have findings.
 
-    Blast radius and dependency paths are deliberately absent here. They are
+    Blast radius is null here and dependency paths empty, deliberately. They are
     derived from a machine's collected inventory, and this route does not load
     every machine's inventory to build them -- that is what
     ``GET /api/machines/{id}/cves`` is for.

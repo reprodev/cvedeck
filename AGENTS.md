@@ -501,6 +501,18 @@ change; what has not is context.
   `latest_remediation_records` and `host_key_pins`. A per-machine query inside a
   fleet-wide loop is invisible on a fixture and grows in production; there is a
   statement-count test guarding it.
+- **An unassessed value is never presented as a benign one** (Req 10.10, and
+  the enrichment invariant it extends). `blast_radius` is `None` where the
+  dependency graph was not built -- the fleet-wide list does not load inventory
+  -- and the dashboard shows "Not assessed" while the export writes
+  `not assessed`. Do not reintroduce a `?? "low"`: it reads as a default and
+  lands as a claim. The same applies to the scan-change counts and every
+  enrichment field.
+- **Exports are neutralised and complete** (Req 8.9, 8.10). `escapeCsvCell`
+  prefixes a cell a spreadsheet would evaluate, and the exports carry the
+  exploitation signals plus, for the fleet, when each host was scanned and
+  whether its counts are complete. A new export column that can be unknown must
+  say so in words; a spreadsheet has no tooltip.
 - **Sync propagates rows, never deletions.** A replaced finding, a pruned scan
   run and a forgotten host key all stay in the Online_Database. See the
   methodology document §14 for why, and do not describe the online store as
@@ -541,13 +553,8 @@ change; what has not is context.
   banner correlation against NVD CPEs and OSV advisories to flag network-exposed
   vulnerabilities from service versions discovered during Phase 1 sweeps.
 
-### 5.3 Deferred from 0.8.1, decided rather than missed
+### 5.3 Deferred, decided rather than missed
 
-- **Blast radius on `GET /api/cves`.** That route omits dependency data, because
-  filling it means loading every machine's inventory -- the per-machine cost 0.8.1
-  removed. The client maps `blast_radius ?? "low"`, so an absent value currently
-  renders as a real "low" and exports as one. Fixing that properly is a wire
-  contract change: absent has to be representable.
 - **A machine page shows only the pin for the configured `CVEDECK_SSH_PORT`.**
   Pins on other ports are reachable from Settings (Req 17.10) but not from the
   machine they belong to.

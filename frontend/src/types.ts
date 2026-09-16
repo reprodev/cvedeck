@@ -111,8 +111,15 @@ export interface CveFinding {
   dependencies?: string[];
   /** List of installed application and library packages that depend on this component (reverse dependencies). */
   dependedOnBy?: string[];
-  /** Calculated blast radius risk indicator (low, medium, high). */
-  blastRadius?: "low" | "medium" | "high";
+  /**
+   * How much of the host depends on this package: low, medium or high.
+   *
+   * Null or absent means the dependency graph was not built for this response
+   * -- the fleet-wide CVE list does not load inventory -- and must be rendered
+   * as unassessed, not as low (Req 10.10). Same rule as the enrichment fields
+   * below: an unanswered question is not a reassuring answer.
+   */
+  blastRadius?: "low" | "medium" | "high" | null;
 
   // --- Threat-intel enrichment ---------------------------------------------
   // Every field here is nullable, and null means "not enriched" -- NOT "safe".

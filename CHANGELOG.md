@@ -8,6 +8,54 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.2] - 2026-09-16
+
+0.8.0 and 0.8.1 were about what the dashboard shows. This one is about what it
+hands over: the CSV export, which is how a finding reaches the people who will
+patch it. No schema change and nothing to do on upgrade.
+
+### Security
+
+- **An exported CSV can no longer carry a live formula.** Cells were escaped per
+  RFC 4180, which is about parsing and not about what a spreadsheet then does
+  with the value: a cell beginning `=`, `+`, `-` or `@` is evaluated on open by
+  Excel, LibreOffice and Sheets. The values at risk are the ones nobody in your
+  team wrote — a remediation note pasted from a ticket, a package identifier
+  read off a scanned host, a reverse-DNS hostname from a swept subnet — and this
+  tool is pointed at hosts nobody trusts by definition. Such a cell now opens as
+  text. Numbers are untouched, so numeric columns still import as numbers.
+
+### Fixed
+
+- **An impact nobody measured no longer reports as "low".** Blast radius is
+  derived from a machine's collected inventory; the fleet-wide CVE list does not
+  load inventory, and a machine may have none at all, but the field defaulted to
+  `low` either way. `blast_radius` is now `null` on the wire where nothing was
+  measured — the field is still always present — shown as "Not assessed" and
+  exported as `not assessed`. A dependency graph that was built and found
+  nothing still reports low, because that is an answer.
+- **The Dependency Map no longer offers to purge a package on no evidence.**
+  With no dependency graph it drew a green "STANDALONE COMPONENT (0 host
+  dependencies)" card and a purge command beneath it. It now says the blast
+  radius was not assessed, and offers nothing.
+
+### Changed
+
+- **The findings export carries the exploitation signals**: whether CISA lists
+  the CVE as exploited (kept apart from "checked and absent" and "never
+  checked"), its KEV due date, its EPSS score and percentile, the fix status and
+  fixed version, and whether the finding is new. It previously left with
+  severity and CVSS alone, which cannot say what is being exploited today.
+- **The fleet export carries when each host was scanned and whether its counts
+  are complete**, plus its exploited count and what its last scan changed. A
+  sheet of counts with neither is undatable: month-old numbers read as current,
+  and an undercount from an unreachable advisory source read as a clean host.
+  A count that was not assessed is written as `not assessed`, never as 0.
+- Both exports gained columns, so a saved spreadsheet template that assumed the
+  old column order will need re-pointing.
+
+---
+
 ## [0.8.1] - 2026-09-16
 
 The tail of 0.8.0: a connection test that ignored its own transport settings,

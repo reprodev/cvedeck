@@ -117,8 +117,9 @@ Everything is manual for now: no scheduled scans, and no automated remediation.
   Ubuntu Security Tracker and OSV.dev; tabbed workspaces; severity and platform
   filters; pagination; light, dark and system themes; a linkable URL for every
   screen; and RFC 4180 CSV export for the fleet, a host's findings, or a discovery
-  sweep. Remediation status and notes are stored locally, with optional sync to a
-  remote database.
+  sweep — carrying the exploitation signals the screen shows, and opening as text
+  rather than as a formula. Remediation status and notes are stored locally, with
+  optional sync to a remote database.
 
 <p align="center">
   <picture>

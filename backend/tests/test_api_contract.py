@@ -38,6 +38,7 @@ from tests.auth_helpers import override_auth
 from app.api.dependencies import get_scanner_engine, get_session
 from app.api.schemas import CveFindingOut, MachineSummary
 from app.data.repository import FindingInput, RemediationInput, Repository
+from app.models import Inventory as DomainInventory, OsInfo, Package as DomainPackage
 from app.data.schema import Base, TargetMachine
 from app.enums import (
     Platform,
@@ -194,7 +195,10 @@ _FINDING_KEYS = {
     "remediation_note": (str, type(None)),
     "dependencies": list,
     "depended_on_by": list,
-    "blast_radius": str,
+    # Nullable like the enrichment fields below, and for the same reason: the
+    # fleet-wide list does not build the dependency graph, so it omits this
+    # rather than reporting an impact nobody measured (Req 10.10).
+    "blast_radius": (str, type(None)),
     # Threat-intel enrichment. Every one of these is nullable on purpose:
     # null means "not enriched", which a client must render as unknown rather
     # than as a negative. Only an explicit false on kev_listed means the CVE
@@ -512,6 +516,47 @@ def test_machine_cves_response_matches_documented_shape(session, client):
     assert by_id["CVE-nvd"]["package_identifier"] is None
     assert by_id["CVE-osv"]["package_identifier"] == "pkg:pypi/requests"
     assert by_id["CVE-osv"]["remediation_status"] is None
+    # This machine has no collected inventory, so no dependency graph was built
+    # and the blast radius is unassessed rather than low (Req 10.10).
+    assert by_id["CVE-nvd"]["blast_radius"] is None
+
+
+def test_a_collected_inventory_yields_a_measured_blast_radius(session, client):
+    """With a dependency graph, the blast radius is an answer (Req 10.10).
+
+    The null case above is only honest if the non-null one still works: a field
+    that is always absent would satisfy "never claims low" and tell nobody
+    anything.
+    """
+    _make_machine(session, "m1", "alpha.example.com")
+    repo = Repository(session)
+    repo.save_inventory(
+        DomainInventory(
+            machine_id="m1",
+            os_info=OsInfo(name="Ubuntu", version="22.04"),
+            packages=[
+                DomainPackage(name="openssl", version="3.0.2"),
+                *[
+                    DomainPackage(name=f"app{i}", version="1.0", dependencies=["openssl"])
+                    for i in range(10)
+                ],
+            ],
+        )
+    )
+    repo.save_findings(
+        "m1",
+        [
+            _finding(
+                "CVE-openssl", 9.8, Severity.CRITICAL, package_identifier="deb:openssl@3.0.2"
+            )
+        ],
+    )
+    session.commit()
+
+    findings = _assert_json_response(client.get("/api/machines/m1/cves"))
+
+    assert findings[0]["blast_radius"] == "high"
+    assert len(findings[0]["depended_on_by"]) == 10
 
 
 def test_all_cves_response_matches_documented_shape(session, client):
@@ -529,3 +574,8 @@ def test_all_cves_response_matches_documented_shape(session, client):
     assert {f["cve_id"] for f in findings} == {"CVE-1", "CVE-2"}
     for finding in findings:
         _assert_finding_shape(finding)
+        # The fleet-wide route never builds the dependency graph, so it reports
+        # no blast radius at all. Defaulting it to "low" here told every reader
+        # of this route that nothing in the fleet has dependents (Req 10.10).
+        assert finding["blast_radius"] is None
+        assert finding["depended_on_by"] == []

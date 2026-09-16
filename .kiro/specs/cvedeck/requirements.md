@@ -127,6 +127,8 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 6. WHEN navigating between dashboard views or refreshing the browser session, THE Web_Dashboard SHALL maintain cached network discovery sweep results in browser session storage without requiring redundant network re-sweeps.
 7. WHEN an administrator enters or selects a target host for credentialed scanning, THE Web_Dashboard SHALL automatically infer and default the platform selector to Linux or Windows based on enrolled fleet records and network discovery banner signatures.
 8. WHEN an administrator requests a data export from the Fleet Overview, Machine CVE Drill-Down, or Network Discovery view, THE Web_Dashboard SHALL generate and download an RFC 4180 compliant CSV file.
+9. WHEN an exported cell would be evaluated as a formula by a spreadsheet application, THE Web_Dashboard SHALL neutralise it so that it opens as text, while preserving the value it carries, so that a remediation note, a package identifier or a discovered hostname cannot execute in the recipient's spreadsheet.
+10. WHERE an export carries findings or fleet counts, THE Web_Dashboard SHALL include the exploitation signals and the completeness signals shown in the view it came from — whether a CVE is known to be exploited, when each host was scanned, and whether its counts are complete — and SHALL write a value the system did not assess as unassessed rather than as a number or a negative, since an exported file carries none of the dashboard's own treatment of an unknown.
 
 ### Requirement 9: SSH Key-Based and Secretless Remote Authentication
 
@@ -190,6 +192,11 @@ incomplete, so that I do not mistake a partial scan for a clean host.
    endpoint it reached, so that a successful test is evidence about the path the
    scan takes and no credential is sent over a channel the deployment has
    configured away.
+10. WHERE the system does not compute an impact assessment for a finding — a
+   blast radius with no dependency graph behind it — THEN it SHALL report that
+   assessment as unassessed rather than as its lowest value, and the dashboard
+   and its exports SHALL present it as unassessed, so that a question nobody
+   asked is never answered reassuringly (extends the enrichment invariant).
 
 ### Requirement 11: SSH key-based authentication
 

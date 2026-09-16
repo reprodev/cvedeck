@@ -182,7 +182,7 @@ interface CveFindingWire {
   remediation_note: string | null;
   dependencies?: string[];
   depended_on_by?: string[];
-  blast_radius?: "low" | "medium" | "high";
+  blast_radius?: "low" | "medium" | "high" | null;
   // Threat-intel enrichment. Null means unenriched, not safe -- see types.ts.
   kev_listed?: boolean | null;
   kev_due_date?: string | null;
@@ -365,7 +365,10 @@ function toCveFinding(wire: CveFindingWire): CveFinding {
     remediationNote: wire.remediation_note ?? null,
     dependencies: wire.dependencies ?? [],
     dependedOnBy: wire.depended_on_by ?? [],
-    blastRadius: wire.blast_radius ?? "low",
+    // `?? null`, never `?? "low"`: absent means the route did not build the
+    // dependency graph, which is not a claim that nothing depends on this
+    // package (Req 10.10).
+    blastRadius: wire.blast_radius ?? null,
     // `?? null` deliberately, never `?? false`: an absent field means the
     // backend did not enrich this finding, which is not the same claim as
     // "this CVE is not being exploited".

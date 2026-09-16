@@ -126,7 +126,12 @@ class CveFindingOut(BaseModel):
     remediation_note: str | None = None
     dependencies: list[str] = Field(default_factory=list)
     depended_on_by: list[str] = Field(default_factory=list)
-    blast_radius: str = "low"
+    #: How much of the host depends on this package: "low", "medium", "high",
+    #: or ``None`` when the dependency graph was not built for this response
+    #: (Req 10.10). ``None`` is not "low": the fleet-wide list omits the graph
+    #: by design, and a default of "low" there stated an impact nobody
+    #: measured. Clients must render it as unassessed.
+    blast_radius: str | None = None
 
     # --- Threat-intel enrichment ------------------------------------------
     # ``None`` throughout means "not enriched", which clients must render as

@@ -10,13 +10,65 @@ import type {
   DiscoveredHost,
   MachineSummary,
 } from "../types";
+import { exploitStatus } from "./intel";
 
-/** Escape a single cell value for CSV (RFC 4180). */
+/**
+ * What a cell says when the system never answered the question (Req 10.10).
+ *
+ * A spreadsheet has no tooltip and no dimmed styling, so the dashboard's
+ * quieter treatments of "unknown" do not survive the export. The word has to.
+ */
+const NOT_ASSESSED = "not assessed";
+const NOT_CHECKED = "not checked";
+
+/** Three states of exploitation knowledge, as a cell (Req 8.10). */
+function exploitCell(finding: CveFinding): string {
+  const status = exploitStatus(finding);
+  if (status === "exploited") return "yes";
+  if (status === "not-exploited") return "no";
+  return NOT_CHECKED;
+}
+
+/** A count that may not have been assessed, as a cell (Req 18.6). */
+function countCell(value: number | null | undefined): number | string {
+  return value === null || value === undefined ? NOT_ASSESSED : value;
+}
+
+/**
+ * Characters that make Excel, LibreOffice and Sheets treat a cell as a formula
+ * rather than as text, when they lead the cell (Req 8.9).
+ *
+ * A tab and a carriage return are in the list because both spreadsheets and
+ * this file's own quoting can leave them at the start of a parsed cell, where
+ * they are stripped and whatever follows -- `=cmd|...` -- leads instead.
+ */
+const FORMULA_LEADS = ["=", "+", "-", "@", "\t", "\r"];
+
+/**
+ * Escape a single cell value for CSV (RFC 4180), neutralising formulas (Req 8.9).
+ *
+ * RFC 4180 is about parsing, not about what the parser then does with the
+ * value, so quoting alone is no defence: a cell reading
+ * `=HYPERLINK("http://...")` opens as a live formula. The values at risk are
+ * exactly the ones the operator did not write -- a remediation note pasted from
+ * a ticket, a package identifier read off a scanned host, a reverse-DNS
+ * hostname from a swept subnet -- and this tool is pointed at hosts nobody
+ * trusts by definition.
+ *
+ * A leading apostrophe is the standard neutraliser: spreadsheets read it as
+ * "the rest is text" and hide it, though a plain-text viewer and some importers
+ * show it. That cost is worth paying; the alternative is that opening an export
+ * runs something. Numbers are exempt, so a CVSS score or a count is never
+ * touched and a negative number stays negative.
+ */
 export function escapeCsvCell(val: unknown): string {
   if (val === null || val === undefined) {
     return "";
   }
-  const str = String(val);
+  let str = String(val);
+  if (typeof val !== "number" && FORMULA_LEADS.includes(str.charAt(0))) {
+    str = `'${str}`;
+  }
   if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
     return `"${str.replace(/"/g, '""')}"`;
   }
@@ -55,18 +107,29 @@ function getTimestampStr(): string {
 // Specialized View Exporters
 // --------------------------------------------------------------------------- //
 
-/** Export Fleet Overview machines to CSV. */
+/**
+ * Export Fleet Overview machines to CSV (Req 8.8, 8.10).
+ *
+ * Carries when each host was scanned and whether its counts are complete. A
+ * sheet of counts with neither is undatable: month-old numbers read as current,
+ * and an undercount from an unreachable advisory source reads as a clean host.
+ */
 export function exportFleetCsv(machines: MachineSummary[]): void {
   const headers = [
     "Machine ID",
     "Hostname",
     "Platform",
     "Last Scan Status",
+    "Last Scanned",
+    "Counts Complete",
     "Critical CVEs",
     "High CVEs",
     "Medium CVEs",
     "Low CVEs",
     "Total Findings",
+    "Exploited (KEV)",
+    "New Findings",
+    "Resolved Findings",
   ];
 
   const rows = machines.map((m) => {
@@ -80,11 +143,20 @@ export function exportFleetCsv(machines: MachineSummary[]): void {
       m.hostname,
       m.platform,
       m.lastScanStatus || "discovered",
+      m.lastScannedAt || "never",
+      // False means an advisory source was unreachable, so the counts beside
+      // this are a floor rather than a total (Req 10.1).
+      m.lastScanSourcesOk ? "yes" : "no",
       m.cveCounts.critical,
       m.cveCounts.high,
       m.cveCounts.medium,
       m.cveCounts.low,
       total,
+      m.kevCount,
+      // Null is "not assessed" -- a baseline, a partial scan, or no successful
+      // scan yet -- and a zero here would be a different claim (Req 18.6).
+      countCell(m.lastScanNew),
+      countCell(m.lastScanResolved),
     ];
   });
 
@@ -92,7 +164,18 @@ export function exportFleetCsv(machines: MachineSummary[]): void {
   downloadCsv(`cvedeck-fleet-${getTimestampStr()}.csv`, csv);
 }
 
-/** Export Machine Findings / Drill-Down to CSV. */
+/**
+ * Export Machine Findings / Drill-Down to CSV (Req 8.8, 8.10).
+ *
+ * Ordered identity, severity, exploitation, fix, impact, then provenance. The
+ * export is how a finding reaches the people who will patch it, and it used to
+ * arrive without a single exploitation signal -- no KEV listing, no EPSS, no
+ * fix availability -- which left CVSS to stand in for urgency it cannot carry.
+ *
+ * EPSS is exported as its raw probability rather than through
+ * `formatEpssScore`, because a spreadsheet column is for sorting and filtering
+ * and "0.08%" sorts as text. The dashboard keeps the formatted view.
+ */
 export function exportFindingsCsv(
   hostname: string,
   findings: CveFinding[],
@@ -102,11 +185,18 @@ export function exportFindingsCsv(
     "Severity",
     "CVSS Score",
     "Package Identifier",
-    "Remediation Status",
-    "Remediation Note",
+    "Exploited (KEV)",
+    "KEV Due Date",
+    "EPSS Score (0-1)",
+    "EPSS Percentile (0-1)",
+    "Fix Status",
+    "Fixed Version",
     "Blast Radius",
     "Dependencies",
     "Depended On By (Reverse Deps)",
+    "Remediation Status",
+    "Remediation Note",
+    "New",
     "First Seen",
   ];
 
@@ -115,11 +205,18 @@ export function exportFindingsCsv(
     f.severity,
     f.cvssScore,
     f.packageIdentifier || "",
-    f.remediationStatus || "open",
-    f.remediationNote || "",
-    f.blastRadius || "low",
+    exploitCell(f),
+    f.kevDueDate || "",
+    f.epssScore ?? NOT_CHECKED,
+    f.epssPercentile ?? NOT_CHECKED,
+    f.fixStatus || "unknown",
+    f.fixedVersion || "",
+    f.blastRadius ?? NOT_ASSESSED,
     (f.dependencies || []).join("; "),
     (f.dependedOnBy || []).join("; "),
+    f.remediationStatus || "open",
+    f.remediationNote || "",
+    f.isNew ? "yes" : "no",
     f.firstSeenAt || "",
   ]);
 

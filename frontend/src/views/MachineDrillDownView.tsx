@@ -326,7 +326,7 @@ export function MachineDrillDownView({
         highestSeverity: Severity;
         dependencies: string[];
         dependedOnBy: string[];
-        blastRadius: "low" | "medium" | "high";
+        blastRadius: "low" | "medium" | "high" | null;
       }
     >();
 
@@ -342,7 +342,7 @@ export function MachineDrillDownView({
           highestSeverity: f.severity,
           dependencies: f.dependencies ?? [],
           dependedOnBy: f.dependedOnBy ?? [],
-          blastRadius: f.blastRadius ?? "low",
+          blastRadius: f.blastRadius ?? null,
         });
       } else {
         existing.findings.push(f);
@@ -968,7 +968,12 @@ export function MachineDrillDownView({
                 {paginatedTreeGroups.map((group) => {
                   const pkgName = group.packageName;
                   const hasFix = groupHasFix(group);
-                  const isLeaf = group.dependedOnBy.length === 0;
+                  // Three states, not two. With no dependency graph behind it,
+                  // "nothing depends on this" is a statement about the query,
+                  // and this view acts on it -- it offers a purge command
+                  // (Req 10.10).
+                  const dependentsKnown = group.blastRadius !== null;
+                  const isLeaf = dependentsKnown && group.dependedOnBy.length === 0;
                   const isCopied = copiedPkg === pkgName;
                   const tooling = getDistroTooling(platform, osName, group.packageIdentifier);
 
@@ -1006,7 +1011,21 @@ export function MachineDrillDownView({
                       </div>
 
                       {/* Blast Radius Assessment */}
-                      {!isLeaf ? (
+                      {!dependentsKnown ? (
+                        <div
+                          className="warning-card-low"
+                          style={{ padding: "0.6rem 0.8rem", margin: 0, opacity: 0.85 }}
+                        >
+                          <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--text-dim)", marginBottom: "0.2rem" }}>
+                            Blast radius not assessed
+                          </div>
+                          <div style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>
+                            No inventory has been collected for this host, so nothing
+                            is known about what depends on this package. Scan the host
+                            before removing it.
+                          </div>
+                        </div>
+                      ) : !isLeaf ? (
                         <div className="warning-card-high" style={{ padding: "0.6rem 0.8rem", margin: 0 }}>
                           <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--exploit)", marginBottom: "0.3rem" }}>
                             🚫 HIGH SYSTEM IMPACT — Required by {group.dependedOnBy.length} installed apps:
@@ -1168,7 +1187,12 @@ export function MachineDrillDownView({
                       const isCopied = copiedPkg === pkgName;
                       const isExpanded = expandedPkg === pkgName;
                       const hasFix = groupHasFix(group);
-                      const isLeaf = group.dependedOnBy.length === 0;
+                      // Three states, not two. With no dependency graph behind it,
+                  // "nothing depends on this" is a statement about the query,
+                  // and this view acts on it -- it offers a purge command
+                  // (Req 10.10).
+                  const dependentsKnown = group.blastRadius !== null;
+                  const isLeaf = dependentsKnown && group.dependedOnBy.length === 0;
                       return (
                         <Fragment key={pkgName}>
                           <tr>
@@ -1214,14 +1238,26 @@ export function MachineDrillDownView({
                                     ? "badge-blast-high"
                                     : group.blastRadius === "medium"
                                     ? "badge-blast-medium"
-                                    : "badge-blast-low"
+                                    : group.blastRadius === "low"
+                                    ? "badge-blast-low"
+                                    : "badge-blast-unknown"
+                                }
+                                title={
+                                  group.blastRadius === null
+                                    ? "No inventory has been collected for this host, so nothing is known about what depends on this package."
+                                    : undefined
                                 }
                               >
+                                {/* Null is its own state, not the bottom of the
+                                    scale: "Low (0 apps)" would answer a
+                                    question nobody asked (Req 10.10). */}
                                 {group.blastRadius === "high"
                                   ? `🔴 High (${group.dependedOnBy.length} apps)`
                                   : group.blastRadius === "medium"
                                   ? `🟡 Moderate (${group.dependedOnBy.length} apps)`
-                                  : `🟢 Low (${group.dependedOnBy.length} apps)`}
+                                  : group.blastRadius === "low"
+                                  ? `🟢 Low (${group.dependedOnBy.length} apps)`
+                                  : "Not assessed"}
                               </span>
                             </td>
                             <td>

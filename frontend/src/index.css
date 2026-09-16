@@ -1437,6 +1437,24 @@ tbody tr:last-child td {
   gap: 0.3rem;
 }
 
+/* Not an answer at all, so quieter than "low" and deliberately outside the
+   three-colour ramp -- the same treatment .kev-unknown gets, for the same
+   reason (Req 10.10). */
+.badge-blast-unknown {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px dashed var(--border);
+  opacity: 0.75;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: help;
+}
+
 .drawer-toggle-btn {
   background: none;
   border: 1px solid var(--border);

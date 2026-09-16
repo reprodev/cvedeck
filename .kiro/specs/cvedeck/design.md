@@ -456,6 +456,12 @@ A dual approach is used. Property-based tests (minimum 100 iterations each, tagg
 
 **Validates: Requirements 18.2, 18.3, 18.5**
 
+### Property 14: An exported cell survives the round trip and never becomes a formula
+
+*For any* cell value, parsing the generated CSV back SHALL yield that value, or that value behind a single leading apostrophe where a spreadsheet would otherwise have evaluated it; and no parsed cell other than a number SHALL begin with a character a spreadsheet evaluates. The round trip is half the property on purpose: neutralising a cell by mangling what it says would satisfy the safety half alone, and an export that silently alters a remediation note is a different bug rather than a fix.
+
+**Validates: Requirements 8.8, 8.9**
+
 
 ---
 
