@@ -56,6 +56,8 @@ export interface MachineSummary {
    * nothing is pinned yet (Req 17.8).
    */
   hostKeyFingerprint: string | null;
+  /** The pinned key's type, e.g. "ssh-ed25519" (Req 17.8). */
+  hostKeyType: string | null;
   /**
    * What the latest successful scan changed (Req 18.6). Null means not
    * assessed -- no successful scan yet, a baseline, or (resolved only) a
@@ -136,6 +138,22 @@ export interface CveFinding {
   firstSeenAt?: string | null;
   /** Whether the host's latest successful scan found this finding new. */
   isNew?: boolean;
+}
+
+/** One pinned SSH host key (Req 17.10). */
+export interface HostKeyPin {
+  hostname: string;
+  port: number;
+  keyType: string;
+  fingerprint: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  /**
+   * The enrolled machine at this address, or null when nothing in the fleet
+   * matches it -- a pin made by a connection test to an address nobody
+   * enrolled, or one made while CVEDECK_SSH_PORT was set to something else.
+   */
+  machineId: string | null;
 }
 
 /** One scan attempt on a host (Req 18.1). */

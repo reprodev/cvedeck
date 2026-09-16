@@ -29,7 +29,13 @@ from sqlalchemy.orm import Session
 
 from .. import config
 from ..data.repository import FindingKey, MachineListEntry, Repository, finding_key
-from ..data.schema import CveFinding, RemediationRecord, ScanRun, TargetMachine
+from ..data.schema import (
+    CveFinding,
+    RemediationRecord,
+    ScanRun,
+    SshHostKey,
+    TargetMachine,
+)
 from ..enums import Severity
 from ..models import Package as DomainPackage
 from ..package_identifier import parse_fix, parse_package_name
@@ -39,6 +45,7 @@ from .schemas import (
     CveFindingOut,
     FeedHealthOut,
     FindingChangeOut,
+    HostKeyOut,
     MachineSummary,
     ScanRunOut,
     SeverityCounts,
@@ -54,17 +61,18 @@ def _get_repository(session: Session = Depends(get_session)) -> Repository:
 
 def _to_machine_summary(
     entry: MachineListEntry,
-    host_key_fingerprints: dict[str, str],
+    host_key_pins: dict[str, "SshHostKey"],
     latest_run: ScanRun | None = None,
 ) -> MachineSummary:
     """Map a repository machine-list entry to the API summary model.
 
-    ``host_key_fingerprints`` is :meth:`Repository.host_key_fingerprints` for
-    the configured SSH port, so the fleet view costs one query for its pins.
-    ``latest_run`` is the machine's latest successful scan run, if any.
+    ``host_key_pins`` is :meth:`Repository.host_key_pins` for the configured SSH
+    port, so the fleet view costs one query for its pins. ``latest_run`` is the
+    machine's latest successful scan run, if any.
     """
     machine = entry.machine
     counts = entry.cve_counts
+    pin = host_key_pins.get(machine.hostname.strip().lower())
     return MachineSummary(
         machine_id=machine.id,
         hostname=machine.hostname,
@@ -79,9 +87,8 @@ def _to_machine_summary(
             low=counts.low,
         ),
         kev_count=entry.kev_count,
-        host_key_fingerprint=host_key_fingerprints.get(
-            machine.hostname.strip().lower()
-        ),
+        host_key_fingerprint=pin.fingerprint_sha256 if pin is not None else None,
+        host_key_type=pin.key_type if pin is not None else None,
         last_scan_new=latest_run.new_count if latest_run is not None else None,
         last_scan_resolved=(
             latest_run.resolved_count if latest_run is not None else None
@@ -211,10 +218,10 @@ def list_machines(
     repo: Repository = Depends(_get_repository),
 ) -> list[MachineSummary]:
     """List scanned machines with severity-grouped CVE counts (Req 6.1, 3.2)."""
-    fingerprints = repo.host_key_fingerprints(config.ssh_port())
+    pins = repo.host_key_pins(config.ssh_port())
     latest = repo.latest_successful_runs()
     return [
-        _to_machine_summary(entry, fingerprints, latest.get(entry.machine.id))
+        _to_machine_summary(entry, pins, latest.get(entry.machine.id))
         for entry in repo.list_machines()
     ]
 
@@ -234,9 +241,38 @@ def get_machine(
             cve_counts=repo.get_severity_counts(machine_id),
             kev_count=repo.get_kev_count(machine_id),
         ),
-        repo.host_key_fingerprints(config.ssh_port()),
+        repo.host_key_pins(config.ssh_port()),
         repo.latest_successful_run(machine_id),
     )
+
+
+@router.get("/host-keys", response_model=list[HostKeyOut])
+def list_host_keys(
+    repo: Repository = Depends(_get_repository),
+) -> list[HostKeyOut]:
+    """Every pinned SSH host key, whether or not a machine matches it (Req 17.10).
+
+    The machine page shows the pin for the machine's address on the configured
+    SSH port. That leaves two kinds of pin with nowhere to appear: one made by a
+    connection test to an address nobody enrolled, and one made when
+    ``CVEDECK_SSH_PORT`` was set to something else. Both still decide whether a
+    future connection is refused, so both are listed here and can be forgotten
+    from here.
+
+    A read route: demo mode may look. Forgetting stays refused there (Req 17.7).
+    """
+    return [
+        HostKeyOut(
+            hostname=pin.hostname,
+            port=pin.port,
+            key_type=pin.key_type,
+            fingerprint_sha256=pin.fingerprint_sha256,
+            first_seen_at=pin.first_seen_at,
+            last_seen_at=pin.last_seen_at,
+            machine_id=machine_id,
+        )
+        for pin, machine_id in repo.list_host_keys()
+    ]
 
 
 @router.get("/machines/{machine_id}/scans", response_model=list[ScanRunOut])
@@ -330,35 +366,38 @@ def get_machine_cves(
 def list_cves(
     severity: Severity | None = Query(default=None),
     session: Session = Depends(get_session),
+    repo: Repository = Depends(_get_repository),
 ) -> list[CveFindingOut]:
-    """Return all CVE findings, optionally severity-filtered (Req 3.3, 6.3)."""
+    """Return all CVE findings, optionally severity-filtered (Req 3.3, 6.3).
+
+    Four queries whatever the fleet size: the findings, then remediation
+    records, latest runs and their new findings, each batched. Asking per
+    machine instead made the cost of this route a function of how many machines
+    have findings.
+
+    Blast radius and dependency paths are deliberately absent here. They are
+    derived from a machine's collected inventory, and this route does not load
+    every machine's inventory to build them -- that is what
+    ``GET /api/machines/{id}/cves`` is for.
+    """
     stmt = select(CveFinding)
     if severity is not None:
         stmt = stmt.where(CveFinding.severity == severity)
     stmt = stmt.order_by(CveFinding.cvss_score.desc(), CveFinding.cve_id)
     findings = list(session.execute(stmt).scalars().all())
 
-    # Remediation is keyed per machine+CVE; build a per-machine map lazily.
-    remediation_maps: dict[str, dict[str, RemediationRecord]] = {}
-    new_keys_by_machine: dict[str, set[FindingKey]] = {}
-    repo = Repository(session)
-    results: list[CveFindingOut] = []
-    for finding in findings:
-        if finding.machine_id not in remediation_maps:
-            remediation_maps[finding.machine_id] = _remediation_map(
-                session, finding.machine_id
-            )
-            new_keys_by_machine[finding.machine_id] = repo.new_finding_keys(
-                repo.latest_successful_run(finding.machine_id)
-            )
-        results.append(
-            _to_finding_out(
-                finding,
-                remediation_maps[finding.machine_id],
-                new_keys=new_keys_by_machine[finding.machine_id],
-            )
+    remediation_maps = repo.latest_remediation_records()
+    new_keys_by_machine = repo.new_finding_keys_for_runs(
+        repo.latest_successful_runs().values()
+    )
+    return [
+        _to_finding_out(
+            finding,
+            remediation_maps.get(finding.machine_id, {}),
+            new_keys=new_keys_by_machine.get(finding.machine_id, set()),
         )
-    return results
+        for finding in findings
+    ]
 
 
 @router.get("/feeds", response_model=list[FeedHealthOut], tags=["read"])

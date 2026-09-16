@@ -60,7 +60,8 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_SSH_PORT` | `22` | Port the Linux collector and the connection test dial. |
 | `CVEDECK_SCAN_HISTORY_LIMIT` | `50` | Scan runs kept per machine, with what each one found new and resolved. Older runs are pruned when a new one is recorded; a machine's latest successful run is always kept. At least 1. |
 | `CVEDECK_SSH_HOST_KEY_POLICY` | `tofu` | What to do with a host whose SSH key is not pinned yet. `tofu` pins the key it presents on the first successful connection; `strict` refuses it. A host that presents a different key from its pinned one is refused under both. Any other value is an error. |
-| `CVEDECK_WINRM_PORT` | `5985` | Port the Windows collector dials (`5986` for HTTPS). Windows scans are refused in this release — see the note under Security. |
+| `CVEDECK_WINRM_PORT` | `5985` | Port the Windows collector and the connection test dial (`5986` for HTTPS). Windows scans are refused in this release, but a connection test does connect — see the note under Security. |
+| `CVEDECK_WINRM_SCHEME` | `http` | Transport for the WinRM endpoint: `http` or `https`. Any other value is an error. Applies to the connection test today, and to scans when Windows matching lands. The default sends the NTLM exchange unencrypted. |
 | `CVEDECK_OSV_API_URL` | `https://api.osv.dev/v1` | Base URL for the OSV.dev REST API. |
 | `CVEDECK_HTTP_TIMEOUT` | `15.0` | Timeout in seconds for vulnerability source HTTP requests. |
 | `CVEDECK_KEV_FEED_URL` | CISA KEV catalogue JSON | Source for the Known Exploited Vulnerabilities catalogue. |
@@ -459,12 +460,14 @@ Therefore:
 - **Windows scans are refused.** `POST /api/scans` returns 422 for any batch
   containing a Windows target, because collected Windows inventory cannot yet be
   matched against vulnerability data and a scan would report the host as clean
-  without having checked it. The WinRM settings below apply once Windows matching
-  exists; prefer HTTPS then (`CVEDECK_WINRM_SCHEME=https`,
-  `CVEDECK_WINRM_PORT=5986`), since the default transport on 5985 is unencrypted
-  at the transport layer.
+  without having checked it. **A connection test to a Windows host does connect**,
+  on `CVEDECK_WINRM_SCHEME` and `CVEDECK_WINRM_PORT`, so set them
+  (`https`, `5986`) before testing anything outside a lab: the default transport
+  on 5985 is unencrypted at the transport layer and the NTLM exchange crosses it
+  in the clear. The same settings carry the scan once Windows matching exists.
 
-Outbound access the scanner needs: TCP 22 to Linux targets.
+Outbound access the scanner needs: TCP 22 to Linux targets, and the configured
+WinRM port to any Windows host you run a connection test against.
 
 ## Scaling
 

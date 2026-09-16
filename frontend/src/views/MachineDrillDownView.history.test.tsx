@@ -92,3 +92,58 @@ describe("scan history panel", () => {
     expect(resolved).toHaveTextContent("Cleared by this scan; its remediation record is still In Progress.");
   });
 });
+
+describe("more runs than a page", () => {
+  const manyRuns: ScanRun[] = Array.from({ length: 20 }, (_, n) => ({
+    runId: `r${n}`,
+    scannedAt: `2026-09-${String(n + 1).padStart(2, "0")}T10:00:00Z`,
+    status: "success",
+    sourcesOk: true,
+    findingCount: 2,
+    newCount: 0,
+    resolvedCount: 0,
+    baseline: false,
+  }));
+
+  it("asks for more only when a full page came back (Req 18.7)", async () => {
+    const user = userEvent.setup();
+    const onLoadScanRuns = vi
+      .fn()
+      .mockResolvedValueOnce(manyRuns)
+      .mockResolvedValueOnce([...manyRuns, { ...manyRuns[0], runId: "r20" }]);
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={findings}
+        onLoadScanRuns={onLoadScanRuns}
+        onLoadScanChanges={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByText("Scan history"));
+    expect(await screen.findByText(/Showing the 20 most recent runs/)).toBeInTheDocument();
+    expect(onLoadScanRuns).toHaveBeenCalledWith(20);
+
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+
+    expect(onLoadScanRuns).toHaveBeenLastCalledWith(200);
+    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer more when the host's whole history fits on a page", async () => {
+    const user = userEvent.setup();
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={findings}
+        onLoadScanRuns={vi.fn().mockResolvedValue(runs)}
+        onLoadScanChanges={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByText("Scan history"));
+    const panel = screen.getByTestId("scan-history");
+    await within(panel).findByRole("table");
+    expect(within(panel).queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+  });
+});

@@ -595,6 +595,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onSaveRemediation={handleSaveRemediation}
           lastScanStatus={selectedMachine?.lastScanStatus}
           hostKeyFingerprint={selectedMachine?.hostKeyFingerprint ?? null}
+          hostKeyType={selectedMachine?.hostKeyType ?? null}
           onForgetHostKey={
             selectedMachine && !capabilities?.demoMode
               ? () => handleForgetHostKey(selectedMachine.hostname)
@@ -603,7 +604,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           lastScanNew={selectedMachine?.lastScanNew ?? null}
           lastScanResolved={selectedMachine?.lastScanResolved ?? null}
           lastScanBaseline={selectedMachine?.lastScanBaseline ?? false}
-          onLoadScanRuns={() => api.listScanRuns(selectedMachineId)}
+          onLoadScanRuns={(limit) => api.listScanRuns(selectedMachineId, limit)}
           onLoadScanChanges={(runId) => api.listScanChanges(selectedMachineId, runId)}
         />
       ) : activeNav === "settings" && account ? (
@@ -611,6 +612,8 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           username={account.username}
           onChangePassword={(current, next) => api.changePassword(current, next)}
           onListTokens={() => api.listApiTokens()}
+          onListHostKeys={() => api.listHostKeys()}
+          onForgetHostKey={(hostname, port) => api.forgetHostKey(hostname, port)}
           onCreateToken={(name) => api.createApiToken(name)}
           onRevokeToken={(tokenId) => api.revokeApiToken(tokenId)}
           onBack={() => handleNavigate("fleet")}

@@ -329,3 +329,84 @@ def test_list_all_cves_severity_filter(session, client):
     findings = resp.json()
     assert {f["cve_id"] for f in findings} == {"CVE-2"}
     assert all(f["severity"] == "medium" for f in findings)
+
+
+# --------------------------------------------------------------------------- #
+# GET /api/cves costs the same whatever the fleet size
+# --------------------------------------------------------------------------- #
+def _count_statements(session: Session):
+    """Count SQL statements issued on a session, as a context manager."""
+    from contextlib import contextmanager
+
+    from sqlalchemy import event
+
+    @contextmanager
+    def counter():
+        statements: list[str] = []
+
+        def record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        engine = session.get_bind()
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            yield statements
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+
+    return counter()
+
+
+def _fleet_with_findings(session: Session, machines: int, prefix: str = "m") -> None:
+    repo = Repository(session)
+    for n in range(machines):
+        machine_id = f"{prefix}{n}"
+        _make_machine(session, machine_id, f"host-{prefix}{n}.example.com")
+        repo.save_findings(
+            machine_id,
+            [_finding("CVE-1", 9.5, Severity.CRITICAL, package_identifier="Debian:13:openssl@3.0")],
+        )
+        repo.add_remediation(
+            machine_id,
+            "CVE-1",
+            RemediationInput(status=RemediationStatus.IN_PROGRESS, note="patching"),
+        )
+    session.commit()
+
+
+def test_the_fleet_cve_list_does_not_query_per_machine(session, client):
+    """One machine and ten must cost the same number of statements.
+
+    The per-machine loop this replaced was invisible on a test fixture and grew
+    with the fleet in production, which is exactly the shape of cost nobody
+    notices until someone has fifty hosts.
+    """
+    _fleet_with_findings(session, 1)
+    with _count_statements(session) as one_machine:
+        assert client.get("/api/cves").status_code == 200
+    baseline = len(one_machine)
+
+    _fleet_with_findings(session, 10, prefix="fleet")
+    with _count_statements(session) as ten_machines:
+        assert client.get("/api/cves").status_code == 200
+
+    assert len(ten_machines) == baseline
+
+
+def test_the_fleet_cve_list_still_attributes_remediation_per_machine(session, client):
+    """Batching must not let one machine's record land on another's finding."""
+    repo = Repository(session)
+    _make_machine(session, "m1", "alpha.example.com")
+    _make_machine(session, "m2", "beta.example.com")
+    for machine_id in ("m1", "m2"):
+        repo.save_findings(machine_id, [_finding("CVE-1", 9.5, Severity.CRITICAL)])
+    repo.add_remediation(
+        "m1", "CVE-1", RemediationInput(status=RemediationStatus.REMEDIATED, note="done")
+    )
+    session.commit()
+
+    findings = client.get("/api/cves").json()
+
+    assert len(findings) == 2
+    by_status = sorted(f["remediation_status"] or "none" for f in findings)
+    assert by_status == ["none", "remediated"]

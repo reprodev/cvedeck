@@ -163,6 +163,8 @@ _MACHINE_SUMMARY_KEYS = {
     "kev_count": int,
     # The pinned SSH host key's fingerprint; None until one is pinned.
     "host_key_fingerprint": (str, type(None)),
+    # The key's type, so an operator knows which host key file to compare.
+    "host_key_type": (str, type(None)),
     # What the latest successful scan changed. Null is "not assessed" -- no
     # successful scan, a baseline, or (resolved only) a partial scan.
     "last_scan_new": (int, type(None)),

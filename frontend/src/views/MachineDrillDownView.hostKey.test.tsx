@@ -96,3 +96,35 @@ describe("pinned host key", () => {
     );
   });
 });
+
+describe("the pinned key's type", () => {
+  it("names the key type beside the fingerprint (Req 17.8)", () => {
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        hostname="web-01"
+        findings={[]}
+        hostKeyFingerprint={FINGERPRINT}
+        hostKeyType="ssh-ed25519"
+      />,
+    );
+
+    // The type is what tells an operator which /etc/ssh/ssh_host_*.pub to check.
+    expect(screen.getByTestId("host-key-pin")).toHaveTextContent(
+      `ssh-ed25519 ${FINGERPRINT}`,
+    );
+  });
+
+  it("still renders a pin whose type is unknown", () => {
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        hostname="web-01"
+        findings={[]}
+        hostKeyFingerprint={FINGERPRINT}
+      />,
+    );
+
+    expect(screen.getByTestId("host-key-pin")).toHaveTextContent(FINGERPRINT);
+  });
+});

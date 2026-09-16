@@ -67,6 +67,9 @@ class MachineSummary(BaseModel):
     #: hostname on the configured port, or ``None`` when nothing is pinned
     #: (Req 17.8).
     host_key_fingerprint: str | None = None
+    #: The pinned key's type, e.g. ``ssh-ed25519`` (Req 17.8). Paired with the
+    #: fingerprint because the type is what names the key file on the host.
+    host_key_type: str | None = None
     #: What the latest successful scan changed (Req 18.6). ``None`` when it
     #: cannot say: no successful scan yet, or a baseline. ``last_scan_resolved``
     #: alone is ``None`` after a partial scan, which resolves nothing. ``None``
@@ -147,6 +150,25 @@ class CveFindingOut(BaseModel):
     #: Whether the machine's latest successful scan reported this finding as
     #: new. Always ``False`` after a baseline, which has nothing to compare.
     is_new: bool = False
+
+
+class HostKeyOut(BaseModel):
+    """One pinned SSH host key (Req 17.10).
+
+    ``machine_id`` is the enrolled machine at this address, when there is one.
+    ``None`` means nothing in the fleet matches it -- a pin made by a connection
+    test to an address that was never enrolled, or one on a port the deployment
+    no longer uses. Those are invisible everywhere else, which is why this
+    listing includes them rather than filtering to the current SSH port.
+    """
+
+    hostname: str
+    port: int
+    key_type: str
+    fingerprint_sha256: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    machine_id: str | None = None
 
 
 class ScanRunOut(BaseModel):

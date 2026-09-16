@@ -28,6 +28,11 @@ export default defineConfig({
     // of them over the default. That surfaced as an intermittent failure in
     // ScanFormView -- a test nobody had touched -- which is the worst kind:
     // it trains people to re-run rather than to look.
+    //
+    // This is the outer budget only. What a `findBy*` waits for is
+    // `asyncUtilTimeout`, set in src/test/setup.ts, and it has to stay well
+    // below this number so a missing element fails with the DOM printed rather
+    // than as a bare timeout. Change the two together.
     testTimeout: 20_000,
   },
 });

@@ -451,24 +451,32 @@ environment the app reads, so no alembic.ini edit is needed.
   them in step with pyproject.toml. Do not commit secrets; credentials are passed at
   request time and Credentials uses SecretStr so it is not logged or serialized.
 
-## 5. Known follow-ups / roadmap & research tracks
+## 5. Shipped behaviour, follow-ups & research tracks
+
+This section used to be one list titled "known follow-ups", which by 0.8.0 held
+as much shipped behaviour as roadmap -- an entry marked **Implemented** reads as
+a plan until you notice the word. What has shipped is a constraint on your
+change; what has not is context.
+
+### 5.1 Shipped, and how it must keep behaving
 
 - **Linux-First Execution Focus**: The active production scanner, advisory matching engine (OSV.dev + Ubuntu Tracker), blast-radius reverse dependency graph, and per-distribution remediation commands (`apt`, `dnf`, `apk`, `pacman`, `zypper`) are optimized for Linux, where non-invasive SSH inventory extraction is fully proven. Covered distributions: Debian, Ubuntu, Raspbian, RHEL, CentOS, AlmaLinux, Rocky, Oracle Linux, Amazon Linux, Fedora, Alpine, Arch, openSUSE, SLES, Wolfi, Chainguard.
-- **Windows Research & Engineering Roadmap**:
-  - *Track 1 (WinRM Inbound & Remote Auth)*: WinRM over HTTPS (port 5986), Kerberos SPN auth, and non-domain UAC token filter research (`LocalAccountTokenFilterPolicy`) without altering client host configurations.
-  - *Track 2 (Push-Based Outbound Collector)*: Lightweight standalone PowerShell/Go collector running locally with zero inbound open ports required, pushing WMI/CIM/Registry inventory outbound to `POST /api/scans/ingest`.
-  - *Track 3 (Advisory & CPE Correlation)*: Correlating Windows KB Quality Updates (`Win32_QuickFixEngineering`) and registry packages against Microsoft MSRC APIs and NIST NVD 2.0 CPEs.
-- **SSH Key-Based Remote Authentication Strategy**:
-  - *Phase A (Per-Scan Private Key & Passphrase)*: **Implemented.** Ed25519/ECDSA/RSA in PEM or OpenSSH format via `Credentials.private_key` + `passphrase`, parsed in memory by `parse_private_key`.
-  - *Phase B (Server-Managed Keyring & Fleet Auto-Scan)*: **Implemented.** `CVEDECK_DEFAULT_SSH_KEY_PATH` / `CVEDECK_DEFAULT_SSH_USER`; a target may omit credentials entirely.
-  - *Phase C (Ephemeral Signed SSH Certificates)*: Enterprise CA integration (HashiCorp Vault / Teleport) for zero-trust infrastructure. Still open.
-- Pinned SSH host keys: **Implemented** (Req 17). Both SSH paths connect through
+- **SSH key authentication, Phases A and B**: Ed25519/ECDSA/RSA in PEM or OpenSSH
+  format via `Credentials.private_key` + `passphrase`, parsed in memory by
+  `parse_private_key`; and the server-managed keyring
+  (`CVEDECK_DEFAULT_SSH_KEY_PATH` / `CVEDECK_DEFAULT_SSH_USER`), which lets a
+  target omit credentials entirely.
+- **Pinned SSH host keys** (Req 17). Both SSH paths connect through
   `app/scanner/host_keys.py:connect_pinned`, keyed by `(hostname, port)` in
   `ssh_host_keys`. Trust on first use by default, `CVEDECK_SSH_HOST_KEY_POLICY=strict`
   to refuse unpinned hosts. A changed key is `HOST_KEY_MISMATCH`, never a
-  connection failure, and only `DELETE /api/host-keys/{hostname}` removes a pin.
+  connection failure, and only forgetting a pin removes one.
   Do not add a second SSH connect path that bypasses the helper.
-- Real NVD 2.0 HTTP client: **Implemented** (`NvdHttpClient`, v0.5.0). Opt-in via
+- **A connection test dials what a scan would dial** (Req 10.9): the configured
+  SSH port, or the configured WinRM scheme and port. Both hardcoded their
+  defaults once, and a pre-flight that succeeds over a transport the scan does
+  not use is evidence about the wrong path.
+- **Real NVD 2.0 HTTP client** (`NvdHttpClient`, v0.5.0). Opt-in via
   `CVEDECK_NVD_ENABLED` because NVD allows only 5 requests / 30s without a key
   (50 with one, via `CVEDECK_NVD_API_KEY`). Left off, `wiring.build_nvd_client`
   returns `None`, which the matcher reads as "not configured" rather than "down", so
@@ -476,25 +484,27 @@ environment the app reads, so no alembic.ini edit is needed.
   keyword search, which would attach loosely related CVEs to every host -- and caps
   results at 250, highest CVSS first, since an OS query can legitimately match
   thousands of CVEs spanning a decade.
-- Threat-intel enrichment (KEV + EPSS): **Implemented** (v0.5.0). Unlike OSV, these are
+- **Threat-intel enrichment (KEV + EPSS)** (v0.5.0). Unlike OSV, these are
   small complete files published daily, so they are downloaded whole into
   `kev_entries` / `epss_scores` and joined locally rather than queried per finding.
   Refresh is still manual (`POST /api/feeds/refresh`) -- it becomes the first consumer
   of the scheduler when that lands.
-- Scheduled scanning is still absent, and scans still run **inline inside the HTTP
-  request** (hence `proxy_read_timeout 900s` in DEPLOYMENT.md). Background execution
-  (`scan_jobs` + a worker thread, no Celery/Redis -- one uvicorn worker, one SQLite
-  writer) is the prerequisite for cron scans and progress reporting.
-- Scan history and finding diffs: **Implemented** (Req 18). `Repository.save_findings`
+- **Scan history and finding diffs** (Req 18). `Repository.save_findings`
   returns a `FindingDiff` keyed on CVE + package name (never version), and
   `DeploymentScannerEngine._record_scan_status` writes a `scan_runs` row for every
   attempt. Trust rules: a partial scan resolves nothing and keeps unreported findings,
   a failed scan records no counts, a machine's first successful run is a baseline.
   NULL counts mean "not assessed" and must never be rendered as 0.
-- Phase 2 Unauthenticated Fingerprinting: Extending `NetworkDiscoveryEngine` with deeper
-  banner correlation against NVD CPEs and OSV advisories to flag network-exposed
-  vulnerabilities from service versions discovered during Phase 1 sweeps.
-- No scheduled/automated scanning or remediation (intentional for v1).
+- **Fleet-wide reads are batched.** `GET /api/cves` and `GET /api/machines` cost
+  a fixed number of statements whatever the fleet size, through
+  `latest_successful_runs`, `new_finding_keys_for_runs`,
+  `latest_remediation_records` and `host_key_pins`. A per-machine query inside a
+  fleet-wide loop is invisible on a fixture and grows in production; there is a
+  statement-count test guarding it.
+- **Sync propagates rows, never deletions.** A replaced finding, a pruned scan
+  run and a forgotten host key all stay in the Online_Database. See the
+  methodology document §14 for why, and do not describe the online store as
+  converging on the local one.
 - Schema migrations use Alembic (`backend/alembic.ini`, `backend/app/data/migrations/`).
   `app/data/migrations_runtime.py:upgrade_to_head` runs on first engine use and handles
   three cases: an empty database is created from ORM metadata and stamped `head`; a
@@ -512,6 +522,38 @@ environment the app reads, so no alembic.ini edit is needed.
   are follow-ups; the `users` table already allows more than one row.
 - POST /api/scans accepts target credentials in the request body, so an instance
   beyond a trusted network needs TLS in front of it, login or not.
+
+### 5.2 Not built yet
+
+- **Scheduled scanning.** Scans run **inline inside the HTTP request** (hence
+  `proxy_read_timeout 900s` in DEPLOYMENT.md). Background execution
+  (`scan_jobs` + a worker thread, no Celery/Redis -- one uvicorn worker, one SQLite
+  writer) is the prerequisite for cron scans and progress reporting. Nothing is
+  scheduled and no remediation is automatic; both are deliberate for v1, and the
+  manual feed refresh becomes the scheduler's first consumer when it lands.
+- **Windows Research & Engineering Roadmap**:
+  - *Track 1 (WinRM Inbound & Remote Auth)*: WinRM over HTTPS (port 5986), Kerberos SPN auth, and non-domain UAC token filter research (`LocalAccountTokenFilterPolicy`) without altering client host configurations.
+  - *Track 2 (Push-Based Outbound Collector)*: Lightweight standalone PowerShell/Go collector running locally with zero inbound open ports required, pushing WMI/CIM/Registry inventory outbound to `POST /api/scans/ingest`.
+  - *Track 3 (Advisory & CPE Correlation)*: Correlating Windows KB Quality Updates (`Win32_QuickFixEngineering`) and registry packages against Microsoft MSRC APIs and NIST NVD 2.0 CPEs.
+- **SSH Phase C (Ephemeral Signed SSH Certificates)**: Enterprise CA integration
+  (HashiCorp Vault / Teleport) for zero-trust infrastructure. Still open.
+- **Phase 2 Unauthenticated Fingerprinting**: Extending `NetworkDiscoveryEngine` with deeper
+  banner correlation against NVD CPEs and OSV advisories to flag network-exposed
+  vulnerabilities from service versions discovered during Phase 1 sweeps.
+
+### 5.3 Deferred from 0.8.1, decided rather than missed
+
+- **Blast radius on `GET /api/cves`.** That route omits dependency data, because
+  filling it means loading every machine's inventory -- the per-machine cost 0.8.1
+  removed. The client maps `blast_radius ?? "low"`, so an absent value currently
+  renders as a real "low" and exports as one. Fixing that properly is a wire
+  contract change: absent has to be representable.
+- **A machine page shows only the pin for the configured `CVEDECK_SSH_PORT`.**
+  Pins on other ports are reachable from Settings (Req 17.10) but not from the
+  machine they belong to.
+- **Whether a Windows connection test should be refused** the way Windows scans
+  are (Req 10.8). It connects today, which is what makes the WinRM transport
+  settings meaningful before Track 1 lands; revisit when it does.
 
 ## 6. Workflow expectations
 

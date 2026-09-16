@@ -26,6 +26,7 @@ import type {
   RemediationInput,
   RemediationRecord,
   FindingChangeRow,
+  HostKeyPin,
   ScanOutcome,
   ScanRun,
   ScanTargetInput,
@@ -158,6 +159,7 @@ interface MachineSummaryWire {
   cve_counts: MachineSummary["cveCounts"];
   kev_count?: number;
   host_key_fingerprint?: string | null;
+  host_key_type?: string | null;
   last_scan_new?: number | null;
   last_scan_resolved?: number | null;
   last_scan_baseline?: boolean;
@@ -201,6 +203,17 @@ interface MachineScanWire {
   new_count?: number | null;
   resolved_count?: number | null;
   baseline?: boolean;
+}
+
+/** Wire shape of GET /api/host-keys. */
+interface HostKeyWire {
+  hostname: string;
+  port: number;
+  key_type: string;
+  fingerprint_sha256: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  machine_id: string | null;
 }
 
 /** Wire shape of GET /api/machines/{id}/scans. */
@@ -328,6 +341,7 @@ function toMachineSummary(wire: MachineSummaryWire): MachineSummary {
     },
     kevCount: wire.kev_count ?? 0,
     hostKeyFingerprint: wire.host_key_fingerprint ?? null,
+    hostKeyType: wire.host_key_type ?? null,
     lastScanNew: wire.last_scan_new ?? null,
     lastScanResolved: wire.last_scan_resolved ?? null,
     lastScanBaseline: wire.last_scan_baseline ?? false,
@@ -577,14 +591,33 @@ export class CveScannerApiClient {
     );
   }
 
+  /** GET /api/host-keys -- every pinned SSH host key (Req 17.10). */
+  async listHostKeys(): Promise<HostKeyPin[]> {
+    const wire = await this.request<HostKeyWire[]>("GET", "/api/host-keys");
+    return wire.map((pin) => ({
+      hostname: pin.hostname,
+      port: pin.port,
+      keyType: pin.key_type,
+      fingerprint: pin.fingerprint_sha256,
+      firstSeenAt: pin.first_seen_at,
+      lastSeenAt: pin.last_seen_at,
+      machineId: pin.machine_id,
+    }));
+  }
+
   /**
    * DELETE /api/host-keys/{hostname} -- forget the pinned SSH host key, so the
    * next connection trusts whatever key the host presents (Req 17.7).
+   *
+   * The port is part of the address a key is pinned under, so it travels with
+   * the request; omitted, the server forgets the pin on the configured SSH
+   * port, which is the one a machine page shows.
    */
-  async forgetHostKey(hostname: string): Promise<void> {
+  async forgetHostKey(hostname: string, port?: number): Promise<void> {
+    const query = port === undefined ? "" : `?port=${port}`;
     await this.request<void>(
       "DELETE",
-      `/api/host-keys/${encodeURIComponent(hostname)}`,
+      `/api/host-keys/${encodeURIComponent(hostname)}${query}`,
     );
   }
 

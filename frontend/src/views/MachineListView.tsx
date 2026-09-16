@@ -94,7 +94,7 @@ export function MachineListView({
   const [severityFilter, setSeverityFilter] = useState<Severity | null>(null);
   const [platformFilter, setPlatformFilter] = useState<"all" | "linux" | "windows">("all");
   const [quickFilter, setQuickFilter] = useState<
-    "all" | "exploited" | "critical" | "high" | "attention"
+    "all" | "exploited" | "critical" | "high" | "attention" | "new"
   >("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
@@ -217,6 +217,18 @@ export function MachineListView({
     return parts.length ? parts.join(" · ") : "all hosts scanned recently";
   }, [attention]);
 
+  // Hosts whose latest successful scan found something that the scan before it
+  // did not. A null count is "not assessed" -- a baseline, or no successful
+  // scan -- and must not be read as zero (Req 18.6).
+  const newHostCount = useMemo(
+    () => machines.filter((m) => (m.lastScanNew ?? 0) > 0).length,
+    [machines],
+  );
+  const newFindingCount = useMemo(
+    () => machines.reduce((total, m) => total + (m.lastScanNew ?? 0), 0),
+    [machines],
+  );
+
   const criticalHostCount = useMemo(() => machines.filter((m) => m.cveCounts.critical > 0).length, [machines]);
   const highHostCount = useMemo(() => machines.filter((m) => m.cveCounts.high > 0).length, [machines]);
 
@@ -233,6 +245,9 @@ export function MachineListView({
         return false;
       }
       if (quickFilter === "high" && m.cveCounts.high === 0) {
+        return false;
+      }
+      if (quickFilter === "new" && (m.lastScanNew ?? 0) === 0) {
         return false;
       }
       if (quickFilter === "attention" && !attentionIds.has(m.machineId)) {
@@ -576,6 +591,35 @@ export function MachineListView({
             <Icon name="windows" /> Windows ({windowsCount})
           </button>
         </div>
+
+        {/*
+          Beside the platform filters rather than as a fifth triage card: both
+          of these filter which hosts the table lists, and that card row was
+          deliberately cut from five cards to four -- see .triage-row in
+          index.css for what the fifth one did to the layout.
+
+          Hidden when nothing is new, like the host page's New chip. A fleet
+          where the last round of scanning turned up nothing does not need a
+          control saying so.
+        */}
+        {newHostCount > 0 && (
+          <button
+            type="button"
+            className={`pagination-btn ${quickFilter === "new" ? "active" : ""}`}
+            style={{
+              padding: "0.42rem 0.7rem",
+              fontSize: "0.82rem",
+              background: quickFilter === "new" ? "var(--accent)" : "var(--surface)",
+              color: quickFilter === "new" ? "var(--accent-text)" : "var(--text)",
+              fontWeight: quickFilter === "new" ? 600 : 400,
+            }}
+            aria-pressed={quickFilter === "new"}
+            title={`${newFindingCount} findings these hosts' latest scans found that the scan before did not`}
+            onClick={() => setQuickFilter(quickFilter === "new" ? "all" : "new")}
+          >
+            <Icon name="plus" /> New findings ({newHostCount})
+          </button>
+        )}
 
         {/* The severity dropdown that stood here is now the chip row in the
             findings strip above -- same filter, one control. */}

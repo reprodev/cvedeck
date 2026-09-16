@@ -94,9 +94,13 @@ upgraded from 0.7.3 or earlier has no pins, so its next scan of each host is a
 first use.
 
 **WinRM defaults to HTTP.** Windows scans are refused in this release, so no
-WinRM connection is made by a scan. When Windows support lands, set
-`CVEDECK_WINRM_SCHEME=https` and `CVEDECK_WINRM_PORT=5986` for anything beyond a
-lab.
+WinRM connection is made by a scan — but **a connection test does connect**, and
+on the default `http` transport on port 5985 the NTLM exchange crosses the
+network unencrypted. Set `CVEDECK_WINRM_SCHEME=https` and
+`CVEDECK_WINRM_PORT=5986` before testing a Windows host outside a lab; both
+settings apply to the connection test today, and to scans when Windows matching
+lands. The test names the endpoint it reached, so a result reading `http://…`
+is telling you the password went out in the clear.
 
 **Credentials are held in memory during a scan.** They arrive in the request
 body, are wrapped in `SecretStr` so they are not logged or serialized, and are

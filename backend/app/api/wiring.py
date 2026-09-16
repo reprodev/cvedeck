@@ -38,6 +38,7 @@ from functools import lru_cache
 
 from fastapi import Depends, HTTPException
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .. import config
@@ -52,6 +53,7 @@ from ..scanner.collectors import (
     WindowsCollector,
 )
 from ..scanner.engine import MachineScan, ScannerEngine, ScanResult
+from ..scanner.exceptions import HostKeyMismatchError
 from ..scanner.host_keys import HostKeyStore, PinnedHostKey
 from ..scanner.matcher import NvdClient, OsvClient
 from ..scanner.nvd_client import NvdHttpClient
@@ -69,8 +71,9 @@ class RepositoryHostKeyStore:
     Writes flush and join the caller's transaction like every repository write.
     """
 
-    def __init__(self, repository: Repository) -> None:
+    def __init__(self, repository: Repository, session: Session) -> None:
         self._repository = repository
+        self._session = session
 
     def get(self, hostname: str, port: int) -> PinnedHostKey | None:
         row = self._repository.get_host_key(hostname, port)
@@ -83,13 +86,45 @@ class RepositoryHostKeyStore:
         )
 
     def pin(self, hostname: str, port: int, key: PinnedHostKey) -> None:
-        self._repository.pin_host_key(
-            hostname,
-            port,
-            key_type=key.key_type,
-            key_base64=key.key_base64,
-            fingerprint_sha256=key.fingerprint_sha256,
-        )
+        """Pin a key, tolerating another connection that pinned first (Req 17.9).
+
+        Two first connections to the same new address race: both read no pin,
+        both write, and one loses -- on the unique constraint if the other
+        commit lands after this read, or on the repository's own guard if it
+        lands before. Either way the loser has already completed a handshake
+        with the host, so what matters is whether the two saw the same key.
+
+        The savepoint is load-bearing rather than decorative: a failed flush
+        poisons the surrounding transaction, so without it the request's own
+        commit fails afterwards and the caller sees a server error by a
+        different route.
+        """
+        try:
+            with self._session.begin_nested():
+                self._repository.pin_host_key(
+                    hostname,
+                    port,
+                    key_type=key.key_type,
+                    key_base64=key.key_base64,
+                    fingerprint_sha256=key.fingerprint_sha256,
+                )
+        except (IntegrityError, ValueError):
+            pinned = self.get(hostname, port)
+            if pinned is None:
+                # Not the race: nothing is pinned, so the write failed for a
+                # reason inventing a success here would hide.
+                raise
+            if pinned.key_base64 != key.key_base64:
+                # Compared as key bytes, not as the digest we computed from
+                # them. The other connection saw a different host.
+                raise HostKeyMismatchError(
+                    hostname,
+                    port,
+                    pinned=pinned.fingerprint_sha256,
+                    presented=key.fingerprint_sha256,
+                ) from None
+            # The same key, pinned by whoever got there first (Req 17.2).
+            self.touch(hostname, port)
 
     def touch(self, hostname: str, port: int) -> None:
         self._repository.touch_host_key(hostname, port)
@@ -171,7 +206,7 @@ class DeploymentScannerEngine(ScannerEngine):
         nvd: NvdClient | None = None,
     ) -> None:
         repository = Repository(session)
-        host_keys = RepositoryHostKeyStore(repository)
+        host_keys = RepositoryHostKeyStore(repository, session)
         super().__init__(
             repository=repository,
             credentials_for=_no_credentials,

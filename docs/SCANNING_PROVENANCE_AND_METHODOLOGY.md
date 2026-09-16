@@ -734,12 +734,22 @@ records must survive version upgrades and database restarts:
   database schema matches the current ORM model. Fresh databases are stamped directly
   at `head`, pre-Alembic databases are stamped at the baseline revision before
   upgrading, and already-managed databases are migrated forward idempotently.
-- **Local Source of Truth & Sync Convergence:**
+- **Local Source of Truth & Row Propagation:**
   The local SQLite/PostgreSQL database is the authoritative source of truth. If a remote
   online database (`CVEDECK_ONLINE_DB_URL`) is unreachable during `POST /api/sync`,
-  findings remain marked as `PENDING_SYNC` locally without data loss. When connectivity
-  is restored, the online store converges to the local state, preserving
-  `package_identifier`, `dependency_path_id`, and remediation notes.
+  rows remain marked as `PENDING_SYNC` locally without data loss. When connectivity
+  is restored, every row the local database has created or updated is propagated,
+  preserving `package_identifier`, `dependency_path_id`, and remediation notes.
+
+  **What is propagated is rows, never deletions.** A finding replaced by a later
+  scan, a scan run pruned by the retention limit, and a forgotten host key all
+  remain in the online database after they are gone locally. That is a deliberate
+  limit rather than an oversight: this sync is a one-way mirror driven by a
+  `sync_status` flag on each row, and a deletion leaves no row to carry a flag —
+  so the only way to propagate one would be to have the online side delete
+  whatever it cannot currently see, which is indistinguishable from an
+  interrupted or partial sync. Read the online database as "everything this
+  instance has ever recorded", and the local one as what is true now.
 
 ---
 

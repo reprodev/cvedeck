@@ -1024,6 +1024,14 @@ section {
   padding: var(--space-1) var(--space-2);
 }
 
+.scan-history-more {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin: var(--space-3) 0 0;
+}
+
 .scan-history-changes ul {
   list-style: none;
   margin: 0;

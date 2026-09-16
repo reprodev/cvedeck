@@ -10,9 +10,20 @@ import { relativeTime, remediationStatusLabel, severityLabel, statusLabel, statu
 import { Icon } from "./Icon";
 
 export interface ScanHistoryPanelProps {
-  onLoadRuns: () => Promise<ScanRun[]>;
+  /** Load at most `limit` runs, newest first. */
+  onLoadRuns: (limit: number) => Promise<ScanRun[]>;
   onLoadChanges: (runId: string) => Promise<FindingChangeRow[]>;
 }
+
+/** Runs shown before asking for more. */
+const PAGE_SIZE = 20;
+
+/**
+ * The most this panel will ask for, matching the route's own cap. Retention
+ * (CVEDECK_SCAN_HISTORY_LIMIT) defaults to 50 per host but can be raised, so
+ * "show more" has to stop somewhere rather than promise the whole history.
+ */
+const MAX_RUNS = 200;
 
 /** A count, or a dash that says why there is none. Never a zero standing in for null. */
 function Count({ value, reason }: { value: number | null; reason: string }) {
@@ -39,19 +50,27 @@ function errorText(err: unknown): string {
 
 export function ScanHistoryPanel({ onLoadRuns, onLoadChanges }: ScanHistoryPanelProps) {
   const [runs, setRuns] = useState<ScanRun[] | null>(null);
+  const [limit, setLimit] = useState(PAGE_SIZE);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [changes, setChanges] = useState<Record<string, FindingChangeRow[]>>({});
   const [changesError, setChangesError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      setRuns(await onLoadRuns());
-    } catch (err) {
-      setError(errorText(err));
-    }
-  }, [onLoadRuns]);
+  const load = useCallback(
+    async (next: number) => {
+      setError(null);
+      try {
+        setRuns(await onLoadRuns(next));
+        setLimit(next);
+      } catch (err) {
+        setError(errorText(err));
+      }
+    },
+    [onLoadRuns],
+  );
+
+  // A full page back means the host may have more runs kept than are shown.
+  const mayHaveMore = runs !== null && runs.length >= limit && limit < MAX_RUNS;
 
   const toggleRun = async (runId: string) => {
     if (expanded === runId) {
@@ -75,7 +94,9 @@ export function ScanHistoryPanel({ onLoadRuns, onLoadChanges }: ScanHistoryPanel
       className="card scan-history"
       data-testid="scan-history"
       onToggle={(event) => {
-        if ((event.currentTarget as HTMLDetailsElement).open && runs === null) void load();
+        if ((event.currentTarget as HTMLDetailsElement).open && runs === null) {
+          void load(PAGE_SIZE);
+        }
       }}
     >
       <summary>
@@ -189,6 +210,18 @@ export function ScanHistoryPanel({ onLoadRuns, onLoadChanges }: ScanHistoryPanel
               })}
             </tbody>
           </table>
+          {mayHaveMore && (
+            <p className="scan-history-more">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => void load(MAX_RUNS)}
+              >
+                Show more
+              </button>
+              <span className="hint">Showing the {runs.length} most recent runs.</span>
+            </p>
+          )}
         </div>
       )}
     </details>

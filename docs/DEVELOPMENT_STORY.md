@@ -1170,3 +1170,145 @@ What the project has settled on is simple enough to say: where something
 matters, make it checkable, and then actually check it — `pytest` for behaviour,
 the property tests for the invariants, `check_spec_citations.py` for the spec,
 and the hooks for anything that must never leave.
+
+---
+
+## Chapter 12 — Trusting the host, and remembering the last answer (v0.7.x – v0.8.1)
+
+Five releases happened quickly after publication, and they share a shape with
+everything before them: each fixed something that had been producing a
+confident, wrong answer for months.
+
+0.7.0 put a login in front of an instance that had been open to anyone who could
+reach the port. 0.7.2 found that package names were being read from the *left*
+of an identifier like `Debian:13:openssl@3.5.1`, which yielded `13:openssl`, so
+the generated fix plan asked `apt` to upgrade forty-two packages that do not
+exist — and the plan ran, and reported success, because `apt` is quite happy to
+be told about nothing. 0.7.3 found that advisories were being matched against a
+distribution rather than a distribution *release*, so a fully patched Debian 13
+host was "vulnerable" to everything Debian 14 had fixed at a higher version
+number. For one package, OSV returned 49 advisories asked one way and 25 asked
+the other.
+
+None of those failed. They all produced output that looked like work.
+
+### The check that had to happen before the handshake finished
+
+0.8.0 set out to fix something the security policy had been admitting in writing
+for several releases: both SSH paths used paramiko's `AutoAddPolicy`, so every
+connection trusted whatever key the host presented, and nothing was ever
+remembered. On an untrusted network that is a straightforward interception, and
+the credentials go out during the connection being intercepted.
+
+Pinning the key is the easy half. The half worth writing down is *when* the
+comparison happens. It has to be after the key exchange, so there is a key to
+compare, and before authentication, so a host that fails the comparison never
+receives a password or a signature. paramiko does exactly that, which meant the
+work was to not get in its way — and the one thing that would have got in the
+way was already there. `BadHostKeyException` subclasses `SSHException`, and both
+call sites caught `SSHException` and reported `CONNECTION_FAILURE`. Left alone,
+the feature would have shipped reporting a possible machine-in-the-middle as a
+flaky network, which is the one reading that invites a retry until it works.
+
+So the refusal is caught inside the connect helper and re-raised as something
+that is not a connection error at all, and it has its own status. The dashboard
+paints it amber rather than red, because red in this project means exploitation
+and nothing else, and a changed host key is not an exploit — it is a question
+that needs a person.
+
+The tests are where this chapter's lesson actually landed. Everything else in
+the suite fakes `paramiko.SSHClient`, and a fake client asserting that no
+credential was sent is a fake asserting about itself. The host-key tests run a
+real paramiko server on a loopback port, count authentication attempts on the
+server side, and assert the count did not move when a key changed. The same
+server proved the subtler claim: a host offering both ed25519 and RSA still
+matches an RSA pin, because paramiko puts the pinned type first in negotiation.
+That is a property of a handshake. There was no way to learn it from a mock.
+
+### "Not assessed" is not zero
+
+The other half of 0.8.0 was scan history: every scan recorded, and each one
+diffed against the last so a re-scan can say what a patch cleared.
+
+A diff invites exactly the failure this project keeps meeting. If an advisory
+source does not answer, findings vanish from the results — and a finding that
+vanishes looks identical to a finding that was fixed. The rule that fell out of
+that is one word: a partial scan resolves *nothing*. Its resolved count is not
+zero, it is NULL, and NULL travels all the way to the UI as a dash with a reason
+attached rather than as a number.
+
+Writing it exposed a second-order version of the same problem that the plan had
+not anticipated. A partial scan was going to keep its "nothing resolved" promise
+while still rewriting the findings table with the reduced set — so the findings
+it could not re-check would disappear from the host anyway, and reappear on the
+next complete scan as *new*, with their first-seen dates reset. Two honest-looking
+numbers, both wrong, produced by code that obeyed the rule it was given. A
+partial scan now keeps what it could not re-assess.
+
+The same care decided the baseline. A machine's first successful run has nothing
+to compare against, so it reports neither new nor resolved — which matters most
+for the upgrade, where every existing finding would otherwise be announced as
+new on the first scan after installing the release.
+
+### The same bug, twice, and the one nobody could see
+
+0.8.1 was the tail, and two of its items are worth recording because of how they
+were found.
+
+While wiring the shared pin store, the connection test turned out to dial a
+hardcoded port 22 while scans dialled `CVEDECK_SSH_PORT` — so on a fleet with
+SSH somewhere else, the pre-flight and the scan reached different ports, and the
+"same store" the feature promised covered two different addresses. That was
+fixed in 0.8.0. What was not noticed until a documentation audit two days later
+was that the WinRM branch of the same function had the identical defect twice
+over: a hardcoded port *and* a hardcoded `http://`, while the scanner path
+honoured both settings. An instance configured for HTTPS on 5986, exactly as the
+security policy instructs, still sent its NTLM exchange over plaintext 5985 from
+the pre-flight. The port was hardcoded a second time in the failure message, so
+the message named 5985 whatever had actually been dialled.
+
+One fix, two call sites, and only one of them was looked at. The audit that
+found it was a plain question — "do the docs need updating?" — which is becoming
+a reliable way to find code defects in this project.
+
+The second was invisible by construction. Pins are keyed by address and port,
+and a connection test can create one for a host that was never enrolled. That
+pin then governs whether a future connection is refused, and there was no page
+anywhere that could show it: the machine list only knows about enrolled
+machines, and the machine page only shows the pin for the currently configured
+port. The only way to remove one was to hand-write a DELETE. Settings now lists
+every pin, including the ones with nowhere else to appear, which is the whole
+reason that listing exists.
+
+### A test that failed because the machine was busy
+
+0.8.1 also began with a push being refused. The pre-push hook ran the backend
+suite, then the frontend suite, and one test failed: the first render in the
+end-to-end file, which took 2135ms on a machine that had just spent ninety
+seconds running pytest. Testing-library's `findBy*` gives up after one second.
+
+Every other test in that file passed, at the same degraded speed, because only
+the first render pays the cold cost. The suite had passed five times in a row
+before and after. It would have been easy to re-run the push and move on — and
+that is exactly what a flaky gate teaches everyone to do, which is how a gate
+stops being a gate.
+
+The fix is one line, and the comment beside it is longer than the line, because
+the number needs to justify itself: high enough to survive a loaded machine, and
+well below the test timeout, so that a query which will never match still fails
+with the rendered DOM printed instead of as a bare timeout. A default of one
+second is not a statement about the code. It is a statement about how fast the
+machine was when someone chose it.
+
+### Closing thought
+
+Three releases, and the same sentence keeps fitting: the dangerous failures are
+the ones that produce a plausible number. A fix plan that runs and changes
+nothing. A scan that reports zero because nobody answered. A resolved count of
+zero that means "I did not look". A connection test that succeeds over a
+transport the scan will never use.
+
+The defence has not changed either, and by now it is a habit rather than a
+policy: make the honest answer representable — NULL, a dash, a refusal with its
+own status — and then test the claim against the real thing rather than against
+a stand-in that agrees with you.

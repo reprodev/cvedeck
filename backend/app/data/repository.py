@@ -28,6 +28,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Iterable
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -456,7 +457,7 @@ class Repository:
             status=status,
             sources_ok=sources_ok,
             finding_count=(
-                len(self.get_findings_for_machine(machine_id)) if succeeded else 0
+                self.count_findings_for_machine(machine_id) if succeeded else 0
             ),
             new_count=len(diff.new) if compared else None,
             resolved_count=(
@@ -568,6 +569,37 @@ class Repository:
         )
         return {finding_key(cve, pkg) for cve, pkg in self._session.execute(stmt)}
 
+    def new_finding_keys_for_runs(
+        self, runs: "Iterable[ScanRun]"
+    ) -> dict[str, set[FindingKey]]:
+        """What each run reported as new, keyed by machine (Req 18.6).
+
+        The fleet-wide counterpart of :meth:`new_finding_keys`, so a list
+        covering every machine costs one query rather than one per machine.
+        Chunked like :meth:`_lookup_by_cve_ids`: a fleet has more runs than
+        SQLite will bind parameters for.
+        """
+        by_run = {run.id: run.machine_id for run in runs}
+        if not by_run:
+            return {}
+        keys: dict[str, set[FindingKey]] = {
+            machine_id: set() for machine_id in by_run.values()
+        }
+        run_ids = list(by_run)
+        for start in range(0, len(run_ids), _IN_CLAUSE_CHUNK):
+            chunk = run_ids[start : start + _IN_CLAUSE_CHUNK]
+            stmt = select(
+                ScanFindingChange.scan_run_id,
+                ScanFindingChange.cve_id,
+                ScanFindingChange.package_identifier,
+            ).where(
+                ScanFindingChange.scan_run_id.in_(chunk),
+                ScanFindingChange.change == FindingChange.NEW,
+            )
+            for run_id, cve_id, package_identifier in self._session.execute(stmt):
+                keys[by_run[run_id]].add(finding_key(cve_id, package_identifier))
+        return keys
+
     def get_findings_for_machine(
         self, machine_id: str, severity: Severity | None = None
     ) -> list[CveFinding]:
@@ -582,6 +614,37 @@ class Repository:
             stmt = stmt.where(CveFinding.severity == severity)
         stmt = stmt.order_by(CveFinding.cvss_score.desc(), CveFinding.cve_id)
         return list(self._session.execute(stmt).scalars().all())
+
+    def count_findings_for_machine(
+        self, machine_id: str, severity: Severity | None = None
+    ) -> int:
+        """How many findings a machine has, without loading them.
+
+        The matched pair of :meth:`get_findings_for_machine`: same filters, but
+        it answers the question a scan run asks after every scan, where the rows
+        themselves are never looked at.
+        """
+        stmt = select(func.count(CveFinding.id)).where(
+            CveFinding.machine_id == machine_id
+        )
+        if severity is not None:
+            stmt = stmt.where(CveFinding.severity == severity)
+        return int(self._session.execute(stmt).scalar_one() or 0)
+
+    def latest_remediation_records(self) -> dict[str, dict[str, RemediationRecord]]:
+        """Every machine's current remediation record per CVE, in one query.
+
+        The fleet-wide counterpart of the per-machine map the read routes build.
+        Ordered by ``updated_at`` so the newest record for a (machine, CVE) wins,
+        which is the same tie-break the per-machine version applies.
+        """
+        stmt = select(RemediationRecord).order_by(
+            RemediationRecord.machine_id, RemediationRecord.updated_at
+        )
+        by_machine: dict[str, dict[str, RemediationRecord]] = {}
+        for record in self._session.execute(stmt).scalars():
+            by_machine.setdefault(record.machine_id, {})[record.cve_id] = record
+        return by_machine
 
     # ------------------------------------------------------------------ #
     # Threat-intel feed caches (KEV / EPSS)
@@ -899,15 +962,39 @@ class Repository:
         self._session.flush()
         return True
 
-    def host_key_fingerprints(self, port: int) -> dict[str, str]:
-        """Every pinned fingerprint on a port, by lower-cased hostname.
+    def host_key_pins(self, port: int) -> dict[str, SshHostKey]:
+        """Every pin on a port, by lower-cased hostname.
 
-        One query for the whole fleet view rather than one per machine.
+        One query for the whole fleet view rather than one per machine. The row
+        rather than just the fingerprint, because the machine page shows the key
+        *type* beside it -- that is what says which ``/etc/ssh/ssh_host_*.pub``
+        an operator should run ``ssh-keygen -lf`` against (Req 17.8).
         """
-        stmt = select(SshHostKey.hostname, SshHostKey.fingerprint_sha256).where(
-            SshHostKey.port == port
+        stmt = select(SshHostKey).where(SshHostKey.port == port)
+        return {row.hostname: row for row in self._session.execute(stmt).scalars()}
+
+    def list_host_keys(self) -> list[tuple[SshHostKey, str | None]]:
+        """Every pin, with the id of the machine enrolled at its address (Req 17.10).
+
+        Two queries, never one per pin. A pin whose address matches no enrolled
+        machine comes back with ``None``: those are the ones with nowhere else to
+        appear -- made by a connection test to an address never enrolled, or on a
+        port the deployment has since moved off -- and they are the reason this
+        listing exists.
+        """
+        pins = list(
+            self._session.execute(
+                select(SshHostKey).order_by(SshHostKey.hostname, SshHostKey.port)
+            ).scalars()
         )
-        return dict(self._session.execute(stmt).all())
+        if not pins:
+            return []
+        machines = self._session.execute(
+            select(TargetMachine.hostname, TargetMachine.id)
+        ).all()
+        # Pins are stored lower-cased; machine hostnames are stored as entered.
+        by_hostname = {hostname.strip().lower(): machine_id for hostname, machine_id in machines}
+        return [(pin, by_hostname.get(pin.hostname)) for pin in pins]
 
     def get_machine(self, machine_id: str) -> TargetMachine | None:
         """Read a single machine by id, or ``None`` if it does not exist."""

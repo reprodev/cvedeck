@@ -344,3 +344,29 @@ def test_get_machine_returns_row(session, repo):
     machine = repo.get_machine("m9")
     assert machine is not None
     assert machine.id == "m9"
+
+
+def test_counting_findings_agrees_with_listing_them(session, repo):
+    """The COUNT a scan run records must match what the machine's page lists."""
+    _make_machine(session)
+    _make_machine(session, machine_id="m2", hostname="other.example.com")
+    repo.save_findings(
+        "m1",
+        [
+            FindingInput("CVE-2024-0001", 9.1, Severity.CRITICAL, "osv"),
+            FindingInput("CVE-2024-0002", 5.0, Severity.MEDIUM, "nvd"),
+            FindingInput("CVE-2024-0003", 9.8, Severity.CRITICAL, "osv"),
+        ],
+    )
+    # A second machine's findings must not be counted into the first's.
+    repo.save_findings("m2", [FindingInput("CVE-2024-0009", 7.5, Severity.HIGH, "osv")])
+    session.commit()
+
+    assert repo.count_findings_for_machine("m1") == len(
+        repo.get_findings_for_machine("m1")
+    ) == 3
+    assert repo.count_findings_for_machine("m1", Severity.CRITICAL) == len(
+        repo.get_findings_for_machine("m1", Severity.CRITICAL)
+    ) == 2
+    assert repo.count_findings_for_machine("m2") == 1
+    assert repo.count_findings_for_machine("unknown") == 0

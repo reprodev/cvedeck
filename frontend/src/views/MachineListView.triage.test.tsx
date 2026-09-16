@@ -307,3 +307,44 @@ describe("refused host keys (Req 17.3)", () => {
     expect(visibleHostnames()).toEqual(["rebuilt-01"]);
   });
 });
+
+describe("the new-findings filter (Req 18.6)", () => {
+  const fleetWithNew = () => [
+    makeMachine({ machineId: "a", hostname: "web-01", lastScanNew: 3, lastScanResolved: 0, lastScannedAt: daysAgo(1) }),
+    makeMachine({ machineId: "b", hostname: "db-01", lastScanNew: 0, lastScanResolved: 0, lastScannedAt: daysAgo(1) }),
+    // Never successfully scanned, so "new" is not assessed -- not zero.
+    makeMachine({ machineId: "c", hostname: "new-host", lastScanNew: null, lastScannedAt: daysAgo(1) }),
+  ];
+
+  it("counts hosts, states the findings, and filters to them", async () => {
+    const user = userEvent.setup();
+    render(<MachineListView machines={fleetWithNew()} feeds={USABLE_FEEDS} />);
+
+    const filter = screen.getByRole("button", { name: /New findings \(1\)/ });
+    expect(filter).toHaveAttribute(
+      "title",
+      "3 findings these hosts' latest scans found that the scan before did not",
+    );
+
+    await user.click(filter);
+    expect(visibleHostnames()).toEqual(["web-01"]);
+  });
+
+  it("stays out of the way when the last round of scanning found nothing new", () => {
+    render(
+      <MachineListView
+        machines={[makeMachine({ lastScanNew: 0, lastScannedAt: daysAgo(1) })]}
+        feeds={USABLE_FEEDS}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /New findings/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves the triage row at four cards", () => {
+    // The fifth card was removed from this row once already; see .triage-row.
+    render(<MachineListView machines={fleetWithNew()} feeds={USABLE_FEEDS} />);
+
+    expect(document.querySelectorAll(".triage-card")).toHaveLength(4);
+  });
+});

@@ -30,7 +30,8 @@ from app.api.app import create_app
 from app.api.dependencies import get_session
 from app.api.wiring import RepositoryHostKeyStore, build_collector
 from app.data.repository import Repository
-from app.data.schema import Base
+from app.data.schema import Base, SshHostKey
+from app.data.schema import TargetMachine as TargetMachineRow
 from app.enums import Platform, ScanStatus
 from app.models import Credentials, TargetMachine
 from app.scanner.collectors import LinuxCollector
@@ -421,7 +422,7 @@ def test_a_key_accepted_by_a_connection_test_holds_the_next_scan(session, monkey
         session.commit()
         monkeypatch.setenv("CVEDECK_SSH_PORT", str(second["port"]))
 
-        collector = build_collector(Platform.LINUX, RepositoryHostKeyStore(repo))
+        collector = build_collector(Platform.LINUX, RepositoryHostKeyStore(repo, session))
         engine = ScannerEngine(
             repository=object(),
             credentials_for=lambda _t: Credentials(username="scanner", password=PASSWORD),
@@ -475,3 +476,138 @@ def test_the_machine_summary_carries_the_pinned_fingerprint(session):
     assert by_id["m1"]["host_key_fingerprint"] == "SHA256:abc"
     assert by_id["m2"]["host_key_fingerprint"] is None
     assert client.get("/api/machines/m1").json()["host_key_fingerprint"] == "SHA256:abc"
+
+
+# ---------------------------------------------------------------------------
+# Two connections first-using the same address at once (Req 17.9)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def racing_sessions(tmp_path):
+    """Two sessions over one database file, so the unique constraint really fires.
+
+    An in-memory database shared through a pool would hand both sessions the
+    same connection, and the race being tested is between two of them.
+    """
+    engine = create_engine(f"sqlite:///{(tmp_path / 'race.db').as_posix()}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as first, Session(engine) as second:
+        yield first, second
+
+
+def _store(session: Session) -> RepositoryHostKeyStore:
+    return RepositoryHostKeyStore(Repository(session), session)
+
+
+def _key(material: str = "AAAAC3NzaC1lZDI1NTE5AAAAI") -> PinnedHostKey:
+    return PinnedHostKey(
+        key_type="ssh-ed25519",
+        key_base64=material,
+        fingerprint_sha256=f"SHA256:{material[-8:]}",
+    )
+
+
+def test_a_concurrent_pin_of_the_same_key_is_not_an_error(racing_sessions):
+    """Validates Req 17.9: the loser of the race has seen the same host."""
+    winner, loser = racing_sessions
+    _store(winner).pin("web-01.lan", 22, _key())
+    winner.commit()
+
+    _store(loser).pin("web-01.lan", 22, _key())
+    loser.commit()
+
+    rows = loser.query(SshHostKey).all()
+    assert len(rows) == 1
+    assert rows[0].last_seen_at >= rows[0].first_seen_at
+
+
+def test_a_concurrent_pin_of_a_different_key_is_a_mismatch(racing_sessions):
+    """Validates Req 17.9: two connections that saw different hosts."""
+    winner, loser = racing_sessions
+    _store(winner).pin("web-01.lan", 22, _key("AAAAWINNERKEY"))
+    winner.commit()
+
+    with pytest.raises(HostKeyMismatchError) as caught:
+        _store(loser).pin("web-01.lan", 22, _key("AAAALOSERKEY"))
+
+    assert "SHA256:INNERKEY" in str(caught.value)
+    assert "SHA256:LOSERKEY" in str(caught.value)
+    # The pin that was there first stands; a race never replaces one.
+    (row,) = loser.query(SshHostKey).all()
+    assert row.key_base64 == "AAAAWINNERKEY"
+
+
+def test_the_session_still_commits_after_a_concurrent_pin(racing_sessions):
+    """The savepoint's whole point: a poisoned transaction fails the request later."""
+    winner, loser = racing_sessions
+    _store(winner).pin("web-01.lan", 22, _key())
+    winner.commit()
+
+    _store(loser).pin("web-01.lan", 22, _key())
+    # Unrelated work in the same request must still be committable.
+    Repository(loser).upsert_target_machine("m1", "web-01.lan", Platform.LINUX)
+    loser.commit()
+
+    assert loser.get(TargetMachineRow, "m1") is not None
+
+
+# ---------------------------------------------------------------------------
+# Listing every pin, including the ones with nowhere else to appear (Req 17.10)
+# ---------------------------------------------------------------------------
+
+
+def test_the_listing_includes_pins_no_machine_page_can_show(session):
+    """Validates Req 17.10."""
+    app = override_auth(create_app())
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    repo = Repository(session)
+    repo.upsert_target_machine("m1", "Web-01.lan", Platform.LINUX)
+    _pin(repo, "web-01.lan")            # an enrolled machine, default port
+    _pin(repo, "test-only.lan")         # only ever connection-tested
+    _pin(repo, "web-01.lan", port=2222)  # pinned when the SSH port was 2222
+    session.commit()
+
+    pins = client.get("/api/host-keys").json()
+
+    assert [(p["hostname"], p["port"], p["machine_id"]) for p in pins] == [
+        ("test-only.lan", 22, None),
+        ("web-01.lan", 22, "m1"),
+        ("web-01.lan", 2222, "m1"),
+    ]
+    assert pins[0]["key_type"] == "ssh-ed25519"
+    assert pins[0]["fingerprint_sha256"] == "SHA256:abc"
+    assert pins[0]["first_seen_at"] and pins[0]["last_seen_at"]
+
+
+def test_a_pin_is_forgotten_per_port(session):
+    """Validates Req 17.10: the port is part of the address, so it is part of the delete."""
+    app = override_auth(create_app())
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    repo = Repository(session)
+    _pin(repo, "web-01.lan")
+    _pin(repo, "web-01.lan", port=2222)
+    session.commit()
+
+    assert client.delete("/api/host-keys/web-01.lan", params={"port": 2222}).status_code == 204
+
+    remaining = client.get("/api/host-keys").json()
+    assert [(p["hostname"], p["port"]) for p in remaining] == [("web-01.lan", 22)]
+
+
+def test_the_machine_summary_names_the_key_type(session):
+    """Validates Req 17.8: the type says which host key file to compare."""
+    app = override_auth(create_app())
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    repo = Repository(session)
+    repo.upsert_target_machine("m1", "web-01.lan", Platform.LINUX)
+    _pin(repo, "web-01.lan")
+    session.commit()
+
+    summary = client.get("/api/machines/m1").json()
+
+    assert summary["host_key_type"] == "ssh-ed25519"
+    assert summary["host_key_fingerprint"] == "SHA256:abc"

@@ -74,6 +74,8 @@ export interface MachineDrillDownViewProps {
   lastScanStatus?: string;
   /** SHA-256 fingerprint of the host's pinned SSH host key (Req 17.8). */
   hostKeyFingerprint?: string | null;
+  /** That key's type, e.g. "ssh-ed25519" -- it names the file on the host. */
+  hostKeyType?: string | null;
   /**
    * Forget the pinned host key (Req 17.7). Omitted where forgetting is not
    * allowed, such as demo mode, which hides the action.
@@ -84,7 +86,7 @@ export interface MachineDrillDownViewProps {
   lastScanResolved?: number | null;
   lastScanBaseline?: boolean;
   /** Load the host's scan runs. Omitted, the scan history panel is not shown. */
-  onLoadScanRuns?: () => Promise<ScanRun[]>;
+  onLoadScanRuns?: (limit: number) => Promise<ScanRun[]>;
   /** Load one run's new and resolved findings. */
   onLoadScanChanges?: (runId: string) => Promise<FindingChangeRow[]>;
 }
@@ -143,6 +145,7 @@ export function MachineDrillDownView({
   onSaveRemediation,
   lastScanStatus,
   hostKeyFingerprint = null,
+  hostKeyType = null,
   onForgetHostKey,
   lastScanNew = null,
   lastScanResolved = null,
@@ -546,7 +549,10 @@ export function MachineDrillDownView({
           <span className="host-key-label">
             <Icon name="key" /> SSH host key
           </span>
-          <code>{hostKeyFingerprint}</code>
+          <code>
+            {hostKeyType ? `${hostKeyType} ` : ""}
+            {hostKeyFingerprint}
+          </code>
           {onForgetHostKey && (
             <button
               type="button"

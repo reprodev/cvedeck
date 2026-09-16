@@ -122,3 +122,8 @@ def test_flag_is_off_when_unset(monkeypatch):
     monkeypatch.delenv("CVEDECK_DEMO_MODE", raising=False)
 
     assert config.demo_mode() is False
+
+
+def test_pinned_host_keys_can_be_read_but_not_forgotten(demo):
+    """Req 17.10 is a read; Req 17.7's forget stays refused (Req 15.3)."""
+    assert demo.get("/api/host-keys").status_code == 200

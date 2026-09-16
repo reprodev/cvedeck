@@ -185,6 +185,11 @@ incomplete, so that I do not mistake a partial scan for a clean host.
    vulnerability data THEN the system SHALL refuse the scan and say why, rather
    than complete it and report a result, so that an unassessed host can never be
    presented as clean.
+9. WHEN the system tests a connection to a target THEN it SHALL use the transport,
+   port and scheme that a scan of that platform would use, and SHALL name the
+   endpoint it reached, so that a successful test is evidence about the path the
+   scan takes and no credential is sent over a channel the deployment has
+   configured away.
 
 ### Requirement 11: SSH key-based authentication
 
@@ -390,8 +395,17 @@ credentials I scan with or feed the scanner a false inventory.
 7. THE system SHALL change a pinned key only when a signed-in user explicitly
    forgets it, and SHALL refuse to forget a key in demonstration mode (extends
    Req 15).
-8. THE system SHALL show the fingerprint of the key pinned for a machine, so that
-   it can be compared with the key on the host.
+8. THE system SHALL show the type and fingerprint of the key pinned for a
+   machine, so that it can be compared with the key file on the host.
+9. WHEN two connections to the same unpinned address try to pin at the same time
+   THEN the system SHALL keep one pin, SHALL let the connection that did not
+   write it proceed when the key it saw is the key that was pinned, SHALL refuse
+   that connection as a mismatch when it is not, and SHALL NOT report the race as
+   a server error.
+10. THE system SHALL list every pinned key with its address, port, key type,
+    fingerprint and when it was first and last seen -- including a key pinned for
+    an address no enrolled machine matches, or on a port the deployment no longer
+    uses -- and SHALL let a signed-in user forget any of them (extends Req 17.7).
 
 ### Requirement 18: Scan history and what changed
 

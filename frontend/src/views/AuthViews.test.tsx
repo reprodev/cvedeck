@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "../api/client";
-import type { ApiToken, CreatedApiToken } from "../types";
+import type { ApiToken, CreatedApiToken, HostKeyPin } from "../types";
 import { LoginView } from "./LoginView";
 import { SettingsView } from "./SettingsView";
 import { SetupView } from "./SetupView";
@@ -197,5 +197,106 @@ describe("SettingsView", () => {
     await user.click(screen.getByRole("button", { name: "Change password" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("current password is incorrect");
+  });
+});
+
+describe("SettingsView pinned host keys (Req 17.10)", () => {
+  const enrolled: HostKeyPin = {
+    hostname: "web-01.lan",
+    port: 22,
+    keyType: "ssh-ed25519",
+    fingerprint: "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8",
+    firstSeenAt: "2026-09-10T10:00:00Z",
+    lastSeenAt: "2026-09-15T10:00:00Z",
+    machineId: "m1",
+  };
+  const unenrolled: HostKeyPin = {
+    ...enrolled,
+    hostname: "test-only.lan",
+    port: 2222,
+    machineId: null,
+  };
+
+  function renderHostKeys(overrides: Record<string, unknown> = {}) {
+    const props = {
+      username: "admin",
+      onChangePassword: vi.fn().mockResolvedValue(undefined),
+      onListTokens: vi.fn().mockResolvedValue([]),
+      onCreateToken: vi.fn(),
+      onRevokeToken: vi.fn().mockResolvedValue(undefined),
+      onListHostKeys: vi.fn().mockResolvedValue([enrolled, unenrolled]),
+      onForgetHostKey: vi.fn().mockResolvedValue(undefined),
+      onBack: vi.fn(),
+      ...overrides,
+    };
+    render(<SettingsView {...props} />);
+    return props;
+  }
+
+  it("lists a pin with no enrolled machine, and says so", async () => {
+    renderHostKeys();
+
+    // The pin that no machine page can show is the reason this panel exists.
+    const row = (await screen.findByText("test-only.lan:2222")).closest("tr")!;
+    expect(within(row).getByText("Not enrolled")).toBeInTheDocument();
+    expect(within(row).getByText(/ssh-ed25519 SHA256:/)).toBeInTheDocument();
+    const enrolledRow = screen.getByText("web-01.lan:22").closest("tr")!;
+    expect(within(enrolledRow).getByRole("link", { name: "Open" })).toHaveAttribute(
+      "href",
+      "#/machines/m1",
+    );
+  });
+
+  it("forgets only after confirming, and sends the port it was pinned under", async () => {
+    const user = userEvent.setup();
+    const props = renderHostKeys();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Forget host key for test-only.lan:2222" }),
+    );
+    expect(props.onForgetHostKey).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(props.onForgetHostKey).not.toHaveBeenCalled();
+
+    await user.click(
+      screen.getByRole("button", { name: "Forget host key for test-only.lan:2222" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Forget test-only.lan:2222" }));
+
+    expect(props.onForgetHostKey).toHaveBeenCalledWith("test-only.lan", 2222);
+    // The list is re-read, so a forgotten pin leaves the page.
+    expect(props.onListHostKeys).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the server's reason when a pin cannot be forgotten", async () => {
+    const user = userEvent.setup();
+    renderHostKeys({
+      onForgetHostKey: vi
+        .fn()
+        .mockRejectedValue(new ApiError(404, "No host key is pinned for that address")),
+    });
+
+    await user.click(
+      await screen.findByRole("button", { name: "Forget host key for web-01.lan:22" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Forget web-01.lan:22" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No host key is pinned");
+  });
+
+  it("is absent when the shell does not supply the host key callbacks", () => {
+    render(
+      <SettingsView
+        username="admin"
+        onChangePassword={vi.fn()}
+        onListTokens={vi.fn().mockResolvedValue([])}
+        onCreateToken={vi.fn()}
+        onRevokeToken={vi.fn()}
+        onBack={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("Pinned SSH host keys")).not.toBeInTheDocument();
   });
 });

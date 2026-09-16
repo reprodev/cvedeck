@@ -11,7 +11,7 @@ import type { FormEvent } from "react";
 import { Icon } from "../components/Icon";
 import { useToast } from "../components/Toast";
 import { useClipboard } from "../lib/useClipboard";
-import type { ApiToken, CreatedApiToken } from "../types";
+import type { ApiToken, CreatedApiToken, HostKeyPin } from "../types";
 import { MIN_PASSWORD_LENGTH } from "./SetupView";
 
 export interface SettingsViewProps {
@@ -20,6 +20,10 @@ export interface SettingsViewProps {
   onListTokens: () => Promise<ApiToken[]>;
   onCreateToken: (name: string) => Promise<CreatedApiToken>;
   onRevokeToken: (tokenId: string) => Promise<void>;
+  /** Every pinned SSH host key (Req 17.10). */
+  onListHostKeys?: () => Promise<HostKeyPin[]>;
+  /** Forget one pin. The port is part of the address it is pinned under. */
+  onForgetHostKey?: (hostname: string, port: number) => Promise<void>;
   onBack: () => void;
 }
 
@@ -39,6 +43,8 @@ export function SettingsView({
   onListTokens,
   onCreateToken,
   onRevokeToken,
+  onListHostKeys,
+  onForgetHostKey,
   onBack,
 }: SettingsViewProps) {
   const toast = useToast();
@@ -62,6 +68,12 @@ export function SettingsView({
         onCreateToken={onCreateToken}
         onRevokeToken={onRevokeToken}
       />
+      {onListHostKeys && onForgetHostKey && (
+        <HostKeysPanel
+          onListHostKeys={onListHostKeys}
+          onForgetHostKey={onForgetHostKey}
+        />
+      )}
     </div>
   );
 }
@@ -328,6 +340,156 @@ function TokensPanel({
                         aria-label={`Revoke ${token.name}`}
                       >
                         <Icon name="trash" /> Revoke
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Every pinned SSH host key, and a way to forget one (Req 17.10).
+ *
+ * A machine's page shows the pin for its own address on the configured SSH
+ * port. That leaves two kinds of pin with nowhere to appear: one made by a
+ * connection test to an address nobody enrolled, and one made while
+ * CVEDECK_SSH_PORT was something else. Both still decide whether a future
+ * connection is refused, so both are listed here.
+ *
+ * Forgetting confirms inline rather than in a modal, matching the revoke above
+ * it: this is a list of rows each carrying one destructive action, and the
+ * page should behave the same way throughout.
+ */
+function HostKeysPanel({
+  onListHostKeys,
+  onForgetHostKey,
+}: {
+  onListHostKeys: NonNullable<SettingsViewProps["onListHostKeys"]>;
+  onForgetHostKey: NonNullable<SettingsViewProps["onForgetHostKey"]>;
+}) {
+  const toast = useToast();
+  const [pins, setPins] = useState<HostKeyPin[] | null>(null);
+  const [confirmForget, setConfirmForget] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setPins(await onListHostKeys());
+    } catch (err) {
+      setPins([]);
+      setError(errorText(err, "Pinned host keys could not be loaded."));
+    }
+  }, [onListHostKeys]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const address = (pin: HostKeyPin) => `${pin.hostname}:${pin.port}`;
+
+  const forget = async (pin: HostKeyPin) => {
+    setError(null);
+    try {
+      await onForgetHostKey(pin.hostname, pin.port);
+      setConfirmForget(null);
+      toast.success(
+        `Forgot the host key for ${address(pin)}. The next connection pins whatever key it presents.`,
+      );
+      await load();
+    } catch (err) {
+      setError(errorText(err, "The host key could not be forgotten."));
+    }
+  };
+
+  return (
+    <section className="card settings-panel" aria-labelledby="host-keys-heading">
+      <h3 id="host-keys-heading">
+        <Icon name="lock" /> Pinned SSH host keys
+      </h3>
+      <p className="hint">
+        A host is held to the key pinned here, and refused before any credential is
+        sent if it presents another. Compare a fingerprint with{" "}
+        <code>ssh-keygen -lf /etc/ssh/ssh_host_&lt;type&gt;_key.pub</code> on the host
+        itself. Forget one only when you know why the key changed — the next
+        connection will trust whatever the host presents.
+      </p>
+
+      {error && (
+        <p role="alert" className="error-banner">
+          {error}
+        </p>
+      )}
+
+      {pins === null ? (
+        <p className="hint">Loading host keys…</p>
+      ) : pins.length === 0 ? (
+        <p className="hint">
+          No host keys pinned yet. The first successful scan or connection test to a
+          host pins its key.
+        </p>
+      ) : (
+        <div className="table-scroll">
+          <table className="token-table">
+            <thead>
+              <tr>
+                <th scope="col">Address</th>
+                <th scope="col">Key</th>
+                <th scope="col">First seen</th>
+                <th scope="col">Last seen</th>
+                <th scope="col">Machine</th>
+                <th scope="col">
+                  <span className="visually-hidden">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {pins.map((pin) => (
+                <tr key={address(pin)}>
+                  <td data-label="Address">{address(pin)}</td>
+                  <td data-label="Key">
+                    <code>
+                      {pin.keyType} {pin.fingerprint}
+                    </code>
+                  </td>
+                  <td data-label="First seen">{formatDate(pin.firstSeenAt)}</td>
+                  <td data-label="Last seen">{formatDate(pin.lastSeenAt)}</td>
+                  <td data-label="Machine">
+                    {pin.machineId ? (
+                      <a href={`#/machines/${encodeURIComponent(pin.machineId)}`}>
+                        Open
+                      </a>
+                    ) : (
+                      <span className="hint">Not enrolled</span>
+                    )}
+                  </td>
+                  <td className="token-actions">
+                    {confirmForget === address(pin) ? (
+                      <span className="token-confirm">
+                        <button type="button" onClick={() => void forget(pin)}>
+                          Forget {address(pin)}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => setConfirmForget(null)}
+                        >
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => setConfirmForget(address(pin))}
+                        aria-label={`Forget host key for ${address(pin)}`}
+                      >
+                        <Icon name="trash" /> Forget
                       </button>
                     )}
                   </td>

@@ -8,6 +8,60 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.1] - 2026-09-16
+
+The tail of 0.8.0: a connection test that ignored its own transport settings,
+pinned keys that nothing could show you, and a fleet-wide list that got slower
+with every host.
+
+### Security
+
+- **A Windows connection test now dials the configured WinRM transport.** It
+  hardcoded `http://` on port 5985 while scans have always honoured
+  `CVEDECK_WINRM_SCHEME` and `CVEDECK_WINRM_PORT`, so an instance configured for
+  HTTPS on 5986 still sent its NTLM exchange over plaintext 5985 from the
+  pre-flight. The endpoint it reached is now named in the result, so a run that
+  went out over `http://` says so. Windows scans remain refused.
+
+### Added
+
+- **Settings lists every pinned SSH host key**, with its address and port, key
+  type, fingerprint, when it was first and last seen, and the machine enrolled
+  at that address. A pin made by a connection test to a host nobody enrolled, or
+  made while `CVEDECK_SSH_PORT` was something else, had no page that could show
+  it and no way to be removed from the dashboard. Forgetting one asks for
+  confirmation and sends the port it was pinned under.
+- **The machine page names the key type** beside the fingerprint
+  (`ssh-ed25519 SHA256:…`), which is what says whether to compare against
+  `ssh_host_ed25519_key.pub` or another file on the host.
+- **A "New findings" filter in the fleet toolbar**, listing the hosts whose
+  latest scan found something the scan before it did not. Hidden when nothing is
+  new. A host whose last scan was a baseline counts as not assessed, not as zero.
+- **"Show more" in the scan history panel**, which asked for 20 runs while
+  retention keeps 50.
+
+### Fixed
+
+- **Two connections first reaching the same new host at the same moment** could
+  hit the unique constraint on a pin and surface as a server error, on a scan
+  that had in fact completed a successful handshake. The second connection now
+  proceeds when it saw the same key and is refused as a mismatch when it did not.
+  Neither replaces the pin that got there first.
+- **The fleet-wide CVE list queried per machine.** The "new" badge added in 0.8.0
+  gave `GET /api/cves` three queries per host with findings; it is now a fixed
+  number of statements whatever the fleet size.
+
+### Changed
+
+- **`AGENTS.md` §5 separates what has shipped from what has not**, and records
+  three things 0.8.1 deliberately left alone.
+- **The methodology document no longer says the online database converges on the
+  local one.** Synchronization propagates rows and never deletions, so a replaced
+  finding, a pruned scan run or a forgotten host key stays online after it is
+  gone locally. That was always true and only the code comments said so.
+
+---
+
 ## [0.8.0] - 2026-09-15
 
 CveDeck now remembers each host's SSH key and refuses a host whose key changes,

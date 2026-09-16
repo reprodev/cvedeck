@@ -519,8 +519,19 @@ def test_scan_connection(
     """Pre-flight test connection reachability and credentials for a target.
 
     Performs a fast, non-invasive transport probe without initiating a full CVE scan.
-    SSH connects exactly as a scan does: on the configured port, and holding
-    the host to the same pinned key store (Req 17.6).
+
+    Both platforms dial exactly what a scan of that platform would dial
+    (Req 10.9): SSH on ``CVEDECK_SSH_PORT``, holding the host to the same pinned
+    key store (Req 17.6); WinRM on ``CVEDECK_WINRM_SCHEME`` and
+    ``CVEDECK_WINRM_PORT``. A pre-flight that succeeded over a different
+    transport than the scan uses is evidence about the wrong path -- and on the
+    WinRM side it meant sending a password over a plaintext channel the
+    deployment had configured away.
+
+    Windows *scans* are refused (Req 10.8) while this probe still connects. The
+    refusal is there because a Windows scan would report zero findings, which
+    reads as a clean host; a connection test claims only reachability and
+    authentication, so it cannot be mistaken for one.
     """
     start_time = time.perf_counter()
     target_host = body.hostname.strip()
@@ -547,7 +558,7 @@ def test_scan_connection(
 
     if body.platform == Platform.LINUX:
         port = config.ssh_port()
-        host_keys = RepositoryHostKeyStore(Repository(session))
+        host_keys = RepositoryHostKeyStore(Repository(session), session)
         # Fast TCP pre-flight check
         try:
             with socket.create_connection((target_host, port), timeout=2.5):
@@ -664,8 +675,24 @@ def test_scan_connection(
             client.close()
 
     else:
-        # Windows (WinRM)
-        port = 5985
+        # Windows (WinRM). The deployment's transport, exactly as a scan of this
+        # platform would dial it (Req 10.9) -- this used to be a hardcoded
+        # http://host:5985, so an instance configured for HTTPS on 5986 still
+        # sent its password over plaintext 5985 from here.
+        try:
+            port = config.winrm_port()
+            scheme = config.winrm_scheme()
+        except ValueError as exc:
+            # An unrecognised CVEDECK_WINRM_SCHEME. Reported like every other
+            # refusal on this route rather than as a server error.
+            elapsed = (time.perf_counter() - start_time) * 1000.0
+            return TestConnectionResponse(
+                success=False,
+                status="CONNECTION_FAILURE",
+                message=str(exc),
+                latency_ms=round(elapsed, 2),
+            )
+
         try:
             with socket.create_connection((target_host, port), timeout=2.5):
                 pass
@@ -674,14 +701,19 @@ def test_scan_connection(
             return TestConnectionResponse(
                 success=False,
                 status="CONNECTION_FAILURE",
-                message=f"Port 5985 (WinRM) is unreachable on {target_host} ({exc})",
+                message=f"Port {port} (WinRM) is unreachable on {target_host} ({exc})",
                 latency_ms=round(elapsed, 2),
             )
+
+        # Built before the probe, so the failure handler below can name it even
+        # when the failure was the import itself.
+        # The scheme travels in the message too: an operator who expected HTTPS
+        # should be able to see that this went out over http.
+        endpoint = f"{scheme}://{target_host}:{port}/wsman"
 
         try:
             import winrm
 
-            endpoint = f"http://{target_host}:{port}/wsman"
             session = winrm.Session(
                 endpoint,
                 auth=(username, credentials.password.get_secret_value()),
@@ -700,7 +732,10 @@ def test_scan_connection(
                 return TestConnectionResponse(
                     success=True,
                     status="SUCCESS",
-                    message=f"WinRM authenticated successfully for {username}@{target_host}",
+                    message=(
+                        f"WinRM authenticated successfully for {username}@{target_host} "
+                        f"over {endpoint}"
+                    ),
                     latency_ms=round(elapsed, 2),
                     os_banner=os_banner,
                 )
@@ -717,7 +752,7 @@ def test_scan_connection(
             return TestConnectionResponse(
                 success=False,
                 status="AUTH_FAILURE" if "401" in str(exc) else "CONNECTION_FAILURE",
-                message=f"WinRM probe error: {exc}",
+                message=f"WinRM probe error against {endpoint}: {exc}",
                 latency_ms=round(elapsed, 2),
             )
 
