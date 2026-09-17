@@ -611,3 +611,27 @@ def test_the_machine_summary_names_the_key_type(session):
 
     assert summary["host_key_type"] == "ssh-ed25519"
     assert summary["host_key_fingerprint"] == "SHA256:abc"
+
+
+def test_the_machine_summary_names_the_port_its_pin_is_on(session):
+    """Validates Req 17.11: other ports are told apart by port, not by key."""
+    app = override_auth(create_app())
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    repo = Repository(session)
+    repo.upsert_target_machine("m1", "web-01.lan", Platform.LINUX)
+    repo.upsert_target_machine("m2", "db-01.lan", Platform.LINUX)
+    _pin(repo, "web-01.lan")
+    # The same key on a second port, as one sshd listening twice presents it.
+    _pin(repo, "web-01.lan", port=2222)
+    _pin(repo, "db-01.lan", port=2222)
+    session.commit()
+
+    by_id = {m["machine_id"]: m for m in client.get("/api/machines").json()}
+    assert by_id["m1"]["host_key_port"] == 22
+    # A pin only on another port is not the machine's pin, so no port either.
+    assert by_id["m2"]["host_key_port"] is None
+    assert by_id["m2"]["host_key_fingerprint"] is None
+
+    listed = {(p["machine_id"], p["port"]) for p in client.get("/api/host-keys").json()}
+    assert listed == {("m1", 22), ("m1", 2222), ("m2", 2222)}

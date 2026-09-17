@@ -58,6 +58,8 @@ export interface MachineSummary {
   hostKeyFingerprint: string | null;
   /** The pinned key's type, e.g. "ssh-ed25519" (Req 17.8). */
   hostKeyType: string | null;
+  /** Port of that pin; other ports' pins are listed beside it (Req 17.11). */
+  hostKeyPort: number | null;
   /**
    * What the latest successful scan changed (Req 18.6). Null means not
    * assessed -- no successful scan yet, a baseline, or (resolved only) a

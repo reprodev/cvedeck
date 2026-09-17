@@ -116,6 +116,14 @@
   --warn-text: light-dark(#6E560F, #E8C547);
   --warn-border: light-dark(#D9C68F, #6A5A24);
 
+  /* Impact: what breaks if a package goes. A dependency count is a reason for
+     care, not a threat, so it stays on the warning hue and escalates by weight
+     -- a filled chip, a heavier edge -- rather than by borrowing --exploit.
+     Red on a "high impact" badge put a package with many dependents beside
+     the one CISA says is being exploited, at the same volume. */
+  --impact-high: var(--warn-text);
+  --impact-high-text: light-dark(#FFFFFF, #1B1E1C);
+
   /* Near-square. Equipment has corners; the 10-14px radius everywhere is the
      tell of a template. */
   --radius-sm: 2px;
@@ -1425,9 +1433,9 @@ tbody tr:last-child td {
 }
 
 .badge-blast-high {
-  background: var(--error-bg);
-  color: var(--exploit);
-  border: 1px solid var(--error-border);
+  background: var(--impact-high);
+  color: var(--impact-high-text);
+  border: 1px solid var(--impact-high);
   font-size: var(--text-xs);
   font-weight: 600;
   padding: 0.2rem 0.55rem;
@@ -1629,9 +1637,9 @@ tbody tr:last-child td {
 }
 
 .copy-purge-btn {
-  background: var(--error-bg);
-  border: 1px solid var(--error-border);
-  color: var(--exploit);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-text);
   font-size: var(--text-xs);
   font-weight: 500;
   padding: 0.2rem 0.55rem;
@@ -1640,9 +1648,9 @@ tbody tr:last-child td {
 }
 
 .copy-purge-btn:hover {
-  background: var(--error-bg);
-  color: var(--exploit);
-  border-color: var(--error-border);
+  background: var(--warn-bg);
+  color: var(--impact-high);
+  border-color: var(--impact-high);
 }
 
 .copy-cmd-btn {
@@ -1766,9 +1774,9 @@ tbody tr:last-child td {
 }
 
 .modal-close-btn:hover {
-  background: var(--error-bg);
-  color: var(--exploit);
-  border-color: var(--error-border);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .modal-body {
@@ -1812,6 +1820,24 @@ tbody tr:last-child td {
 .host-key-forget {
   font-size: var(--text-xs);
   padding: var(--space-1) var(--space-2);
+}
+
+/* The same machine's pins on other ports (Req 17.11), one row each, set like
+   the pin above them so the two read as one list. */
+.other-port-pins {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.other-port-pins ul {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+}
+
+.other-port-pins .host-key-pin {
+  margin: 0 0 var(--space-1);
 }
 
 .modal-section {
@@ -1858,8 +1884,9 @@ tbody tr:last-child td {
 }
 
 .warning-card-high {
-  background: var(--error-bg);
-  border: 1px solid var(--error-bg);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-left: 3px solid var(--impact-high);
   border-radius: var(--radius-lg);
   padding: 0.85rem 1rem;
   display: flex;
@@ -1868,7 +1895,7 @@ tbody tr:last-child td {
 }
 
 .warning-card-title-high {
-  color: var(--exploit);
+  color: var(--impact-high);
   font-weight: 600;
   font-size: var(--text-sm);
   display: flex;

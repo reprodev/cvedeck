@@ -197,6 +197,7 @@ class SyncService:
 | PUT | `/api/remediation/{record_id}` | Update remediation record | 4.3 |
 | POST | `/api/scans` | Manually initiate a scan | 1.1, 1.2 |
 | POST | `/api/scans/test-connection` | Pre-flight connectivity & credential validation | 1.1, 9.1 |
+| GET | `/api/host-keys` | Every pinned SSH host key, with the machine at its address | 17.10, 17.11 |
 | DELETE | `/api/host-keys/{hostname}?port=` | Forget a pinned SSH host key | 17.7 |
 | GET | `/api/machines/{machine_id}/scans?limit=` | A machine's scan runs, newest first | 18.1, 18.6 |
 | GET | `/api/machines/{machine_id}/scans/{run_id}/changes` | A run's new and resolved findings | 18.2, 18.6 |
@@ -710,6 +711,11 @@ Both SSH paths used to accept any key a host presented (paramiko's
   pin. Only `DELETE /api/host-keys/{hostname}` removes one, behind login and the
   demo-mode guard (Req 17.7). The machine summary carries the pinned fingerprint
   for the drill-down (Req 17.8).
+- **Other ports on the machine page.** The summary's pin is the one on
+  `CVEDECK_SSH_PORT`, and it carries `host_key_port`. The drill-down lists the
+  machine's pins from `GET /api/host-keys` and shows those on any other port
+  beside it, with their own forget action (Req 17.11). It filters by port, not
+  fingerprint, because one sshd listening on two ports presents one key.
 - **Not synchronized.** Like the auth tables, `ssh_host_keys` has no
   `sync_status`: which keys this instance trusts is its own decision.
 - **Migration.** Revision `b3abe7f1ff0c` adds the table and widens the

@@ -8,6 +8,45 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.3] - 2026-09-17
+
+A release about saying only what is known. Several places filled a missing
+answer with a default that read as a real one, and the colour the dashboard
+reserves for active exploitation had spread to things that are not. No schema
+change and nothing to do on upgrade.
+
+### Fixed
+
+- **The CVE detail dialog no longer offers to purge a package on no evidence.**
+  0.8.2 fixed this in the Dependency Map, but the dialog kept the old test: with
+  no dependency graph it said "Standalone Component", "you can safely remove
+  it", and showed a purge command. It now says the blast radius was not
+  assessed, and offers no purge.
+- **A host that was never scanned no longer exports "Counts Complete: yes".**
+  Its completeness flag is a default, not an answer; it now exports as
+  `not assessed`.
+- **After a baseline scan, findings no longer export "New: no".** A baseline
+  compares with nothing, so that column now reads `not assessed` for it.
+- **A missing completeness flag is read as incomplete, not complete.** The
+  backend always sends it, so nothing changes today; it is the direction a
+  default has to fail.
+- **Red means exploitation again.** A high blast radius, the purge button, the
+  dependency warning card, "Required by N apps", a failed connection test and
+  the dialog's close button all used the exploitation red, so a package with
+  many dependents sat beside a CVE CISA says is being exploited, at the same
+  volume. Impact now stays on the warning colour and stands out by weight —
+  a filled badge and a heavier card edge — and a failed connection test uses
+  the error colour. Fourteen emoji the icon sweep missed, including a red
+  circle on every high blast-radius row, are now icons.
+
+### Added
+
+- **A machine's page shows its SSH host keys pinned on other ports**, each with
+  a confirmed forget. A pin made by a connection test on another port, or before
+  `CVEDECK_SSH_PORT` changed, still decides whether a connection there is
+  refused, and until now it could only be seen from Settings. The machine
+  summary gains `host_key_port`, the port of the pin it already reports.
+
 ## [0.8.2] - 2026-09-16
 
 0.8.0 and 0.8.1 were about what the dashboard shows. This one is about what it

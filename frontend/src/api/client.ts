@@ -160,6 +160,7 @@ interface MachineSummaryWire {
   kev_count?: number;
   host_key_fingerprint?: string | null;
   host_key_type?: string | null;
+  host_key_port?: number | null;
   last_scan_new?: number | null;
   last_scan_resolved?: number | null;
   last_scan_baseline?: boolean;
@@ -332,7 +333,9 @@ function toMachineSummary(wire: MachineSummaryWire): MachineSummary {
     platform: wire.platform,
     lastScanStatus: wire.last_scan_status,
     lastScannedAt: wire.last_scanned_at ?? null,
-    lastScanSourcesOk: wire.last_scan_sources_ok ?? true,
+    // `?? false`, never `?? true`: an absent flag is no evidence that every
+    // advisory source answered, and "complete" is the claim that needs it.
+    lastScanSourcesOk: wire.last_scan_sources_ok ?? false,
     cveCounts: {
       critical: wire.cve_counts.critical,
       high: wire.cve_counts.high,
@@ -342,6 +345,7 @@ function toMachineSummary(wire: MachineSummaryWire): MachineSummary {
     kevCount: wire.kev_count ?? 0,
     hostKeyFingerprint: wire.host_key_fingerprint ?? null,
     hostKeyType: wire.host_key_type ?? null,
+    hostKeyPort: wire.host_key_port ?? null,
     lastScanNew: wire.last_scan_new ?? null,
     lastScanResolved: wire.last_scan_resolved ?? null,
     lastScanBaseline: wire.last_scan_baseline ?? false,
@@ -426,7 +430,8 @@ function toScanOutcome(wire: MachineScanWire): ScanOutcome {
     machineId: wire.machine_id,
     status: wire.status,
     findingCount: wire.finding_count,
-    sourcesOk: wire.sources_ok ?? true,
+    // Absent is not "every source answered" (see toMachineSummary).
+    sourcesOk: wire.sources_ok ?? false,
     unavailableSources: wire.unavailable_sources ?? [],
     message: wire.message ?? null,
     newCount: wire.new_count ?? null,

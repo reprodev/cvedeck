@@ -416,6 +416,15 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
     [api, loadMachines, toast],
   );
 
+  // Stable, so the machine page's list of pins on other ports (Req 17.11) loads
+  // once per machine rather than on every render here. That list toasts its
+  // own result, so this only forgets.
+  const listHostKeys = useCallback(() => api.listHostKeys(), [api]);
+  const forgetHostKeyAt = useCallback(
+    (hostname: string, port: number) => api.forgetHostKey(hostname, port),
+    [api],
+  );
+
   const handleSaveRemediation = useCallback(
     async (
       finding: CveFinding,
@@ -601,6 +610,9 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
               ? () => handleForgetHostKey(selectedMachine.hostname)
               : undefined
           }
+          hostKeyPort={selectedMachine?.hostKeyPort ?? null}
+          onListHostKeys={listHostKeys}
+          onForgetHostKeyAt={capabilities?.demoMode ? undefined : forgetHostKeyAt}
           lastScanNew={selectedMachine?.lastScanNew ?? null}
           lastScanResolved={selectedMachine?.lastScanResolved ?? null}
           lastScanBaseline={selectedMachine?.lastScanBaseline ?? false}

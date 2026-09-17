@@ -142,11 +142,19 @@ export function exportFleetCsv(machines: MachineSummary[]): void {
       m.machineId,
       m.hostname,
       m.platform,
-      m.lastScanStatus || "discovered",
-      m.lastScannedAt || "never",
+      // The backend always sends a status, "never_scanned" included, so there
+      // is nothing to fall back to -- a default here would invent a status.
+      m.lastScanStatus,
+      m.lastScannedAt ?? "never",
       // False means an advisory source was unreachable, so the counts beside
-      // this are a floor rather than a total (Req 10.1).
-      m.lastScanSourcesOk ? "yes" : "no",
+      // this are a floor rather than a total (Req 10.1). A host never scanned
+      // has no counts to be complete: its flag is the backend's default, not
+      // an answer, and "yes" would vouch for zeros nobody measured (Req 8.10).
+      m.lastScannedAt === null
+        ? NOT_ASSESSED
+        : m.lastScanSourcesOk
+          ? "yes"
+          : "no",
       m.cveCounts.critical,
       m.cveCounts.high,
       m.cveCounts.medium,
@@ -179,6 +187,7 @@ export function exportFleetCsv(machines: MachineSummary[]): void {
 export function exportFindingsCsv(
   hostname: string,
   findings: CveFinding[],
+  options: { baseline?: boolean } = {},
 ): void {
   const headers = [
     "CVE ID",
@@ -204,20 +213,23 @@ export function exportFindingsCsv(
     f.cveId,
     f.severity,
     f.cvssScore,
-    f.packageIdentifier || "",
+    f.packageIdentifier ?? "",
     exploitCell(f),
-    f.kevDueDate || "",
+    f.kevDueDate ?? "",
     f.epssScore ?? NOT_CHECKED,
     f.epssPercentile ?? NOT_CHECKED,
-    f.fixStatus || "unknown",
-    f.fixedVersion || "",
+    f.fixStatus ?? "unknown",
+    f.fixedVersion ?? "",
     f.blastRadius ?? NOT_ASSESSED,
-    (f.dependencies || []).join("; "),
-    (f.dependedOnBy || []).join("; "),
-    f.remediationStatus || "open",
-    f.remediationNote || "",
-    f.isNew ? "yes" : "no",
-    f.firstSeenAt || "",
+    (f.dependencies ?? []).join("; "),
+    (f.dependedOnBy ?? []).join("; "),
+    // No record is the same state the view shows as open.
+    f.remediationStatus ?? "open",
+    f.remediationNote ?? "",
+    // A baseline compared with nothing, so its findings are neither new nor
+    // not new, and the backend's false for them is a default (Req 18.6).
+    options.baseline ? NOT_ASSESSED : f.isNew ? "yes" : "no",
+    f.firstSeenAt ?? "",
   ]);
 
   const sanitizedHost = hostname.replace(/[^a-zA-Z0-9_.-]/g, "_");
@@ -252,7 +264,7 @@ export function exportDiscoveryCsv(
 
     return [
       h.ip,
-      h.hostname || "",
+      h.hostname,
       h.osGuess,
       h.respondsToPing ? "Yes" : "No",
       portsStr,

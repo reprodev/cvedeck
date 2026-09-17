@@ -28,6 +28,7 @@ export function makeMachine(
     kevCount: 0,
     hostKeyFingerprint: null,
     hostKeyType: null,
+    hostKeyPort: null,
     lastScanNew: null,
     lastScanResolved: null,
     lastScanBaseline: false,

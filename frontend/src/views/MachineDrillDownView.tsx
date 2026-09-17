@@ -15,6 +15,7 @@ import { filterBySeverity } from "../lib/severity";
 import {
   type CveFinding,
   type FindingChangeRow,
+  type HostKeyPin,
   type Platform,
   type ScanRun,
   type RemediationStatus,
@@ -37,6 +38,7 @@ import { scanDelta } from "../lib/scanDelta";
 import { ScanHistoryPanel } from "../components/ScanHistoryPanel";
 import { RemediationCell } from "../components/RemediationCell";
 import { CveDetailModal } from "../components/CveDetailModal";
+import { OtherPortPins } from "../components/OtherPortPins";
 import { Modal } from "../components/Modal";
 import { Icon } from "../components/Icon";
 import {
@@ -81,6 +83,15 @@ export interface MachineDrillDownViewProps {
    * allowed, such as demo mode, which hides the action.
    */
   onForgetHostKey?: () => Promise<void>;
+  /** Port of the pin above; null when there is none (Req 17.11). */
+  hostKeyPort?: number | null;
+  /**
+   * List every pinned key, to show this machine's pins on other ports
+   * (Req 17.11). Omitted, those are not shown.
+   */
+  onListHostKeys?: () => Promise<HostKeyPin[]>;
+  /** Forget a pin on another port. Omitted where forgetting is not allowed. */
+  onForgetHostKeyAt?: (hostname: string, port: number) => Promise<void>;
   /** What the latest successful scan changed (Req 18.6); null is not assessed. */
   lastScanNew?: number | null;
   lastScanResolved?: number | null;
@@ -147,6 +158,9 @@ export function MachineDrillDownView({
   hostKeyFingerprint = null,
   hostKeyType = null,
   onForgetHostKey,
+  hostKeyPort = null,
+  onListHostKeys,
+  onForgetHostKeyAt,
   lastScanNew = null,
   lastScanResolved = null,
   lastScanBaseline = false,
@@ -503,7 +517,9 @@ export function MachineDrillDownView({
           <button
             type="button"
             className="pagination-btn"
-            onClick={() => exportFindingsCsv(hostname ?? machineId, visibleFindings)}
+            onClick={() => exportFindingsCsv(hostname ?? machineId, visibleFindings, {
+              baseline: lastScanBaseline,
+            })}
             style={{
               padding: "0.55rem 1rem",
               fontSize: "0.85rem",
@@ -566,6 +582,15 @@ export function MachineDrillDownView({
             </button>
           )}
         </div>
+      )}
+
+      {onListHostKeys && (
+        <OtherPortPins
+          machineId={machineId}
+          shownPort={hostKeyFingerprint ? hostKeyPort : null}
+          onListHostKeys={onListHostKeys}
+          onForgetHostKey={onForgetHostKeyAt}
+        />
       )}
 
       {confirmForget && hostKeyFingerprint && (
@@ -924,7 +949,7 @@ export function MachineDrillDownView({
                     }}
                     onClick={() => setBlastFilter("high")}
                   >
-                    🚫 High Blast Radius ({visiblePackageGroups.filter((g) => g.dependedOnBy.length > 0).length})
+                    <Icon name="x-circle" /> High Blast Radius ({visiblePackageGroups.filter((g) => g.dependedOnBy.length > 0).length})
                   </button>
                   <button
                     type="button"
@@ -1027,8 +1052,8 @@ export function MachineDrillDownView({
                         </div>
                       ) : !isLeaf ? (
                         <div className="warning-card-high" style={{ padding: "0.6rem 0.8rem", margin: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--exploit)", marginBottom: "0.3rem" }}>
-                            🚫 HIGH SYSTEM IMPACT — Required by {group.dependedOnBy.length} installed apps:
+                          <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--impact-high)", marginBottom: "0.3rem" }}>
+                            <Icon name="x-circle" /> HIGH SYSTEM IMPACT — Required by {group.dependedOnBy.length} installed apps:
                           </div>
                           <div className="dependency-chips">
                             {group.dependedOnBy.map((app) => (
@@ -1252,11 +1277,11 @@ export function MachineDrillDownView({
                                     scale: "Low (0 apps)" would answer a
                                     question nobody asked (Req 10.10). */}
                                 {group.blastRadius === "high"
-                                  ? `🔴 High (${group.dependedOnBy.length} apps)`
+                                  ? `High (${group.dependedOnBy.length} apps)`
                                   : group.blastRadius === "medium"
-                                  ? `🟡 Moderate (${group.dependedOnBy.length} apps)`
+                                  ? `Moderate (${group.dependedOnBy.length} apps)`
                                   : group.blastRadius === "low"
-                                  ? `🟢 Low (${group.dependedOnBy.length} apps)`
+                                  ? `Low (${group.dependedOnBy.length} apps)`
                                   : "Not assessed"}
                               </span>
                             </td>
@@ -1322,7 +1347,7 @@ export function MachineDrillDownView({
 
                                     <div>
                                       <div className="dependency-section-title">
-                                        <span>🔗 Depended on by Installed Apps ({group.dependedOnBy.length})</span>
+                                        <span><Icon name="branch" /> Depended on by Installed Apps ({group.dependedOnBy.length})</span>
                                       </div>
                                       {group.dependedOnBy.length > 0 ? (
                                         <div className="dependency-chips">
@@ -1498,7 +1523,7 @@ export function MachineDrillDownView({
                                   <span style={{ opacity: 0.85, fontSize: "0.75rem", display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
                                     <Icon name="clock" /> Pending patch
                                     {finding.dependedOnBy && finding.dependedOnBy.length > 0 ? (
-                                      <span style={{ color: "var(--exploit)", fontSize: "0.7rem", fontWeight: 600 }}>
+                                      <span style={{ color: "var(--impact-high)", fontSize: "0.7rem", fontWeight: 600 }}>
                                         (<Icon name="alert" /> Required by {finding.dependedOnBy.length} apps)
                                       </span>
                                     ) : (

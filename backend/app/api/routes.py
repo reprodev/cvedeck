@@ -89,6 +89,7 @@ def _to_machine_summary(
         kev_count=entry.kev_count,
         host_key_fingerprint=pin.fingerprint_sha256 if pin is not None else None,
         host_key_type=pin.key_type if pin is not None else None,
+        host_key_port=pin.port if pin is not None else None,
         last_scan_new=latest_run.new_count if latest_run is not None else None,
         last_scan_resolved=(
             latest_run.resolved_count if latest_run is not None else None

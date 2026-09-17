@@ -64,7 +64,11 @@ export function CveDetailModal({
   const fix = findingFix(finding);
   const elsewhereLabel = fixElsewhereLabel(fix);
   const dependedOnBy = finding.dependedOnBy ?? [];
-  const isLeaf = dependedOnBy.length === 0;
+  // Three states, as in the dependency map. With no graph behind it, an empty
+  // list says nothing about the host, and this dialog acts on it: it offers a
+  // purge command under "you can safely remove it" (Req 10.10).
+  const dependentsKnown = finding.blastRadius !== null;
+  const isLeaf = dependentsKnown && dependedOnBy.length === 0;
   const tooling = getDistroTooling(platform, osName, finding.packageIdentifier);
 
   const nvdUrl = `https://nvd.nist.gov/vuln/detail/${cveId}`;
@@ -136,10 +140,21 @@ export function CveDetailModal({
                 <Icon name="alert" /> Removal & Dependency Impact Assessment
               </span>
             </div>
-            {!isLeaf ? (
+            {!dependentsKnown ? (
+              <div className="warning-card-low" style={{ opacity: 0.85 }}>
+                <div className="warning-card-title-low" style={{ color: "var(--text-dim)" }}>
+                  <span>Blast radius not assessed</span>
+                </div>
+                <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--text-muted)", lineHeight: 1.45 }}>
+                  No inventory has been collected for this host, so nothing is known
+                  about what depends on <strong>{pkgName}</strong>. Scan the host before
+                  removing it.
+                </p>
+              </div>
+            ) : !isLeaf ? (
               <div className="warning-card-high">
                 <div className="warning-card-title-high">
-                  <span>🚫 DO NOT REMOVE THIS PACKAGE (High System Impact)</span>
+                  <span><Icon name="x-circle" /> DO NOT REMOVE THIS PACKAGE (High System Impact)</span>
                 </div>
                 <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--text)", lineHeight: 1.45 }}>
                   This component is actively required by <strong>{dependedOnBy.length} installed applications</strong> on this machine:
@@ -175,7 +190,7 @@ export function CveDetailModal({
           {/* Recommended Remediation Actions */}
           <div className="modal-section">
             <div className="modal-section-title">
-              <span>🛠️ Recommended Remediation Actions ({tooling.label})</span>
+              <span><Icon name="wrench" /> Recommended Remediation Actions ({tooling.label})</span>
             </div>
             <div className="action-card">
               {hasFix ? (
@@ -260,7 +275,7 @@ export function CveDetailModal({
           {/* Official Security Advisory Links */}
           <div className="modal-section">
             <div className="modal-section-title">
-              <span>🌐 Official Security Advisory Intelligence</span>
+              <span><Icon name="external" /> Official Security Advisory Intelligence</span>
             </div>
             <div className="advisory-links-grid">
               <a
@@ -269,7 +284,7 @@ export function CveDetailModal({
                 rel="noopener noreferrer"
                 className="advisory-link-card"
               >
-                <span>🏛️ NIST NVD Database</span>
+                <span><Icon name="list" /> NIST NVD Database</span>
                 <span>↗</span>
               </a>
               <a
@@ -312,7 +327,7 @@ export function CveDetailModal({
           {onSaveRemediation && (
             <div className="modal-section">
               <div className="modal-section-title">
-                <span>📝 Update Audit Record</span>
+                <span><Icon name="list" /> Update Audit Record</span>
               </div>
               <div className="action-card">
                 <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>

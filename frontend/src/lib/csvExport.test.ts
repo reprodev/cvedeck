@@ -162,6 +162,24 @@ describe("csvExport utility", () => {
       expect(kev(unchecked)).toBe("not checked");
     });
 
+    it("writes new-ness after a baseline as unassessed, not as no", async () => {
+      const header = (csv: string) => csv.split("\r\n")[0].split(",");
+      const newCell = (csv: string) =>
+        dataRow(csv).split(",")[header(csv).indexOf("New")];
+
+      const baseline = await capture(() =>
+        exportFindingsCsv("web-01", [makeFinding({ isNew: false })], {
+          baseline: true,
+        }),
+      );
+      const compared = await capture(() =>
+        exportFindingsCsv("web-01", [makeFinding({ isNew: false })]),
+      );
+
+      expect(newCell(baseline)).toBe("not assessed");
+      expect(newCell(compared)).toBe("no");
+    });
+
     it("neutralises a formula pasted into a remediation note", async () => {
       const csv = await capture(() =>
         exportFindingsCsv("web-01", [
@@ -209,6 +227,34 @@ describe("csvExport utility", () => {
       );
 
       expect(dataRow(csv)).toContain("never");
+    });
+
+    it("does not vouch for the counts of a host never scanned", async () => {
+      // The backend defaults sources-ok to true, so a host with no scan at all
+      // arrives looking like one scanned cleanly against every source.
+      const csv = await capture(() =>
+        exportFleetCsv([
+          makeMachine({
+            lastScannedAt: null,
+            lastScanStatus: "never_scanned",
+            lastScanSourcesOk: true,
+          }),
+        ]),
+      );
+
+      const cells = dataRow(csv).split(",");
+      expect(cells[3]).toBe("never_scanned");
+      expect(cells[4]).toBe("never");
+      expect(cells[5]).toBe("not assessed");
+    });
+
+    it("writes the status the backend sent, and invents none", async () => {
+      const csv = await capture(() =>
+        exportFleetCsv([makeMachine({ lastScanStatus: "auth_failure" })]),
+      );
+
+      expect(dataRow(csv).split(",")[3]).toBe("auth_failure");
+      expect(csv).not.toContain("discovered");
     });
   });
 

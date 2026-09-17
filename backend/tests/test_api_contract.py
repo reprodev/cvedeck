@@ -166,6 +166,8 @@ _MACHINE_SUMMARY_KEYS = {
     "host_key_fingerprint": (str, type(None)),
     # The key's type, so an operator knows which host key file to compare.
     "host_key_type": (str, type(None)),
+    # The port that pin is on, so other ports' pins can be told apart from it.
+    "host_key_port": (int, type(None)),
     # What the latest successful scan changed. Null is "not assessed" -- no
     # successful scan, a baseline, or (resolved only) a partial scan.
     "last_scan_new": (int, type(None)),

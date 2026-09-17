@@ -555,9 +555,6 @@ change; what has not is context.
 
 ### 5.3 Deferred, decided rather than missed
 
-- **A machine page shows only the pin for the configured `CVEDECK_SSH_PORT`.**
-  Pins on other ports are reachable from Settings (Req 17.10) but not from the
-  machine they belong to.
 - **Whether a Windows connection test should be refused** the way Windows scans
   are (Req 10.8). It connects today, which is what makes the WinRM transport
   settings meaningful before Track 1 lands; revisit when it does.

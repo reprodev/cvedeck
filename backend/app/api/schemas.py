@@ -70,6 +70,11 @@ class MachineSummary(BaseModel):
     #: The pinned key's type, e.g. ``ssh-ed25519`` (Req 17.8). Paired with the
     #: fingerprint because the type is what names the key file on the host.
     host_key_type: str | None = None
+    #: The port that pin is on, which is the configured SSH port whenever there
+    #: is one. The machine page lists this machine's pins on every other port
+    #: beside it, and needs this to tell them apart without guessing from the
+    #: fingerprint -- one sshd on two ports presents one key (Req 17.11).
+    host_key_port: int | None = None
     #: What the latest successful scan changed (Req 18.6). ``None`` when it
     #: cannot say: no successful scan yet, or a baseline. ``last_scan_resolved``
     #: alone is ``None`` after a partial scan, which resolves nothing. ``None``

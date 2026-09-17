@@ -381,7 +381,7 @@ export function ScanFormView({
                 ? "var(--ok-text)"
                 : isHostKeyStatus(testResult.status)
                   ? "var(--warn-text)"
-                  : "var(--exploit)",
+                  : "var(--error-text)",
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",

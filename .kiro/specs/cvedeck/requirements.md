@@ -413,6 +413,10 @@ credentials I scan with or feed the scanner a false inventory.
     fingerprint and when it was first and last seen -- including a key pinned for
     an address no enrolled machine matches, or on a port the deployment no longer
     uses -- and SHALL let a signed-in user forget any of them (extends Req 17.7).
+11. THE system SHALL show, on a machine's page, every key pinned for that
+    machine's address on a port other than the one whose key it shows, with its
+    port, type and fingerprint, and SHALL let a signed-in user forget any of them
+    there (extends Req 17.8, 17.10).
 
 ### Requirement 18: Scan history and what changed
 

@@ -250,7 +250,7 @@ export function DiscoveryView({
             <div className="severity-kpi-card">
               <div className="severity-kpi-header">
                 <span className="severity-kpi-label">Hosts Scanned</span>
-                <span className="severity-kpi-icon">📡</span>
+                <span className="severity-kpi-icon"><Icon name="radar" /></span>
               </div>
               <div className="severity-kpi-value">{result.totalHostsScanned}</div>
             </div>
@@ -266,7 +266,7 @@ export function DiscoveryView({
             <div className="severity-kpi-card">
               <div className="severity-kpi-header">
                 <span className="severity-kpi-label">Target Subnet</span>
-                <span className="severity-kpi-icon">🌐</span>
+                <span className="severity-kpi-icon"><Icon name="network" /></span>
               </div>
               <div className="severity-kpi-value" style={{ fontSize: "1.1rem" }}>
                 {result.cidr}
@@ -599,7 +599,7 @@ export function DiscoveryView({
                   </>
                 ) : (
                   <div style={{ textAlign: "center", padding: "2rem 1rem", color: "var(--text-muted)" }}>
-                    <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>📡</div>
+                    <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}><Icon name="radar" /></div>
                     <p>Click a host to inspect its services and banners</p>
                   </div>
                 )}

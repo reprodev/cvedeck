@@ -12,6 +12,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { MachineDrillDownView } from "./MachineDrillDownView";
+import { CveDetailModal } from "../components/CveDetailModal";
 import type { CveFinding } from "../types";
 
 function finding(overrides: Partial<CveFinding> = {}): CveFinding {
@@ -113,5 +114,45 @@ describe("MachineDrillDownView blast radius", () => {
     expect(
       within(screen.getByRole("button", { name: /Purge/i })).getByText(/purge/i),
     ).toBeInTheDocument();
+  });
+});
+
+// The detail dialog kept the two-state test after the dependency map was fixed:
+// an empty dependents list read as "standalone", with the purge command under it.
+describe("CveDetailModal blast radius", () => {
+  const openModal = (f: CveFinding) =>
+    render(
+      <CveDetailModal
+        finding={f}
+        platform="linux"
+        osName="Ubuntu"
+        hostname="web-01"
+        onClose={() => {}}
+      />,
+    );
+
+  it("does not call a package standalone when its dependents were never measured", () => {
+    openModal(finding({ blastRadius: null, fixStatus: "none", hasFix: false }));
+
+    expect(screen.getByText(/Blast radius not assessed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Standalone Component/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Purge/i })).not.toBeInTheDocument();
+  });
+
+  it("still offers the purge command for a measured leaf package", () => {
+    openModal(finding({ blastRadius: "low", fixStatus: "none", hasFix: false }));
+
+    expect(screen.getByText(/Standalone Component/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Purge/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Blast radius not assessed/i)).not.toBeInTheDocument();
+  });
+
+  it("warns against removing a package with measured dependents", () => {
+    openModal(
+      finding({ blastRadius: "medium", dependedOnBy: ["nginx", "curl", "git"] }),
+    );
+
+    expect(screen.getByText(/DO NOT REMOVE THIS PACKAGE/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Purge/i })).not.toBeInTheDocument();
   });
 });

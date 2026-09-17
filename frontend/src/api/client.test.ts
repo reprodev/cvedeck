@@ -30,7 +30,7 @@ describe("CveScannerApiClient", () => {
         lastScanStatus: "success",
         // Absent from the wire payload above, so the client defaults them.
         lastScannedAt: null,
-        lastScanSourcesOk: true,
+        lastScanSourcesOk: false,
         cveCounts: { critical: 1, high: 2, medium: 0, low: 3 },
       }),
     ];
@@ -44,6 +44,29 @@ describe("CveScannerApiClient", () => {
       "/api/machines",
       expect.objectContaining({ method: "GET" }),
     );
+  });
+
+  it("reads an absent sources-ok flag as incomplete, and a sent one as sent", async () => {
+    // A missing answer must never be presentable as a good one: "every
+    // advisory source answered" is the claim that needs evidence.
+    const base = {
+      machine_id: "m1",
+      hostname: "host-1",
+      platform: "linux",
+      last_scan_status: "success",
+      cve_counts: { critical: 0, high: 0, medium: 0, low: 0 },
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([base]))
+      .mockResolvedValueOnce(jsonResponse([{ ...base, last_scan_sources_ok: true }]));
+    const client = new CveScannerApiClient({ fetchImpl });
+
+    const [absent] = await client.listMachines();
+    const [sent] = await client.listMachines();
+
+    expect(absent.lastScanSourcesOk).toBe(false);
+    expect(sent.lastScanSourcesOk).toBe(true);
   });
 
   it("calls the global fetch with the global as its receiver when none is injected", async () => {

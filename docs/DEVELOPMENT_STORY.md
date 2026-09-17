@@ -1312,3 +1312,48 @@ The defence has not changed either, and by now it is a habit rather than a
 policy: make the honest answer representable — NULL, a dash, a refusal with its
 own status — and then test the claim against the real thing rather than against
 a stand-in that agrees with you.
+
+## Chapter 13 — Defaults that answered for us (v0.8.2 – v0.8.3)
+
+0.8.2 was about what leaves the product: the CSV export. Its formula guard is
+the obvious security fix, but the one that mattered more was quieter. Blast
+radius defaulted to `low` wherever no dependency graph had been built, and the
+Dependency Map acted on that — a green "standalone component" card with a
+purge command beneath it, recommended on no evidence at all.
+
+### The same bug, one screen over
+
+0.8.3 found it again. The CVE detail dialog had its own copy of the test —
+"nobody depends on this" meant an empty list — and the client turns a missing
+list into an empty one. So the dialog still said "you can safely remove it"
+and offered the purge. Nothing had searched for the other copy, because the fix
+had been written as a fix to a screen rather than to a rule.
+
+The export had the same shape in smaller ways. A host never scanned exported
+"Counts Complete: yes", because the backend's default for the flag is true and
+the export trusted it. A baseline scan compares with nothing, yet every finding
+it found exported "New: no". The client read a missing completeness flag as
+complete. None of these crashed or looked wrong. Each one was a default that
+answered a question nobody had asked.
+
+### The colour that had drifted
+
+The design rule is that red means active exploitation and nothing else,
+because the palette is how the dashboard ranks. By 0.8.3, red was on a high
+blast radius, the purge button, a dependency warning, a failed connection test
+and a close button — and, after a sweep that replaced every emoji with an
+icon, a red-circle emoji still led every high-impact row. Impact moved to the
+warning colour and escalates by weight instead.
+
+This time the rule got a test: `--exploit` only on exploitation selectors,
+never inline, and no pictographs in rendered code. Its first version passed
+while checking nothing, because Vitest hands back a stylesheet imported as raw
+text as an empty string. The first assertion in the file now proves the
+sources were read.
+
+### Closing thought
+
+Twice now, a fix went to the screen where a bug was noticed rather than to
+every place the same assumption lived. The cheap defence is to name the rule
+and search for it before calling the fix finished; the stronger one is a test
+that states the rule instead of the instance.
