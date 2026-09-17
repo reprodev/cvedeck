@@ -116,6 +116,41 @@ def _build_dependency_maps(
     return direct_deps, depended_on_by
 
 
+def _blast_radius(
+    pkg_name: str | None,
+    direct_deps: dict[str, list[str]] | None,
+    depended_on_by: dict[str, list[str]] | None,
+    dependents: list[str],
+) -> str | None:
+    """How much breaks if this package goes, or ``None`` when nobody measured.
+
+    Four ways the question goes unanswered, and every one of them used to score
+    ``low`` -- which the dashboard draws as a green leaf package and offers a
+    purge command for (Req 10.10):
+
+    * no inventory was loaded at all, so there is no graph;
+    * the finding has no package name, which is every OS-level and kernel
+      advisory -- an empty dependents list there describes the finding, not the
+      host;
+    * the package is not in the collected inventory, so its dependents were
+      never looked at (an OSV package name that does not match the installed
+      one lands here);
+    * the inventory carries no dependency data at all. ``apk info -v`` and
+      ``pacman -Q`` report name and version only, so on Alpine and Arch every
+      package looks like a leaf. That is a fact about the package manager's
+      output, not about the host.
+    """
+    if depended_on_by is None or direct_deps is None:
+        return None
+    if pkg_name is None or pkg_name not in direct_deps:
+        return None
+    if not depended_on_by:
+        return None
+    if len(dependents) >= 10:
+        return "high"
+    return "medium" if len(dependents) >= 3 else "low"
+
+
 def _to_finding_out(
     finding: CveFinding,
     remediation_by_cve: dict[str, RemediationRecord],
@@ -141,19 +176,7 @@ def _to_finding_out(
 
     deps = (direct_deps or {}).get(pkg_name, []) if pkg_name else []
     dependents = (depended_on_by or {}).get(pkg_name, []) if pkg_name else []
-    # Only an answer when the dependency graph was actually built. A caller that
-    # passes no maps did not load the machine's inventory, and "nothing depends
-    # on this" is then a statement about the query rather than about the host --
-    # the same distinction the enrichment fields below keep (Req 10.10).
-    blast_radius = (
-        None
-        if depended_on_by is None
-        else (
-            "high"
-            if len(dependents) >= 10
-            else ("medium" if len(dependents) >= 3 else "low")
-        )
-    )
+    blast_radius = _blast_radius(pkg_name, direct_deps, depended_on_by, dependents)
 
     return CveFindingOut(
         cve_id=finding.cve_id,
@@ -303,6 +326,7 @@ def list_machine_scans(
             new_count=run.new_count,
             resolved_count=run.resolved_count,
             baseline=run.baseline,
+            error_detail=run.error_detail,
         )
         for run in repo.list_scan_runs(machine_id, limit)
     ]

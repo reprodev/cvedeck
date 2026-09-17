@@ -47,6 +47,7 @@ from .schema import (
     Package,
     ScanFindingChange,
     ScanRun,
+    SshHostKey,
     TargetMachine,
 )
 
@@ -77,12 +78,33 @@ _HOSTS: list[tuple[str, Platform, str, str, str | None, ScanStatus, float | None
     ("new-host.lan",    Platform.LINUX,   "",                 "",      None,              ScanStatus.NEVER_SCANNED, None, True, None),
     ("pi-sensor.lan",   Platform.LINUX,   "",                 "",      None,              ScanStatus.AUTH_FAILURE, 48, True, None),
     ("bastion.lan",     Platform.LINUX,   "",                 "",      None,              ScanStatus.CONNECTION_FAILURE, 24, True, None),
+    # Refused before authenticating: this host presented a key other than the
+    # pinned one (Req 17.3). Its pin is seeded below, so the machine page can
+    # show what it is held to and offer to forget it.
+    ("vault-01.lan",    Platform.LINUX,   "",                 "",      None,              ScanStatus.HOST_KEY_MISMATCH, 6, True, None),
     # A Windows host enrolled from network discovery. Windows scans are refused
     # (Req 10.8) because collected Windows inventory cannot yet be matched, so
     # the honest state for one is enrolled and never scanned -- a Windows host
     # with findings, or with a scan failure, would imply a capability that does
     # not exist.
     ("dc-01.lan",       Platform.WINDOWS, "",                 "",      None,              ScanStatus.NEVER_SCANNED, None, True, None),
+]
+
+# Pinned SSH host keys (Req 17). Without these the machine pages show no pin,
+# the Settings panel is empty, and the whole pinning feature is invisible in
+# the demo. The last two exist to show the states nothing else can reach: a
+# second port on an enrolled host, and an address no machine matches.
+#
+# (hostname, port, key_type, fingerprint, first_seen_hours_ago)
+_HOST_KEYS: list[tuple[str, int, str, str, float]] = [
+    ("web-01.lan",   22,   "ssh-ed25519", "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", 24 * 30),
+    ("db-primary.lan", 22, "ssh-ed25519", "SHA256:9lJ7Bs0aMIcQKq8eQwDfVYsDKXxQfLMk1pPRr8SD0nE", 24 * 30),
+    ("vault-01.lan", 22,   "ssh-rsa",     "SHA256:0mQ3xVYYFRkGjBb3xHtYJkGRPQ8mKfVHl2kHbdUm7vA", 24 * 45),
+    # The same host on a second port, as an sshd listening twice presents it.
+    ("web-01.lan",   2222, "ssh-ed25519", "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", 24 * 12),
+    # A connection test to an address nobody enrolled: no machine page can show
+    # this one, which is why the Settings listing exists (Req 17.10).
+    ("spare-nic.lan", 22,  "ssh-ed25519", "SHA256:tJ0Yb4cQwVvNn2pLx6RfKmAe1sZgHu9WqDcXoP5iM3U", 24 * 60),
 ]
 
 # (cve_id, cvss, severity, package, fixed_version, kev, epss, percentile)
@@ -126,15 +148,45 @@ _FINDINGS_LINUX: list[tuple[str, float, Severity, str, str | None, bool | None, 
 # render as unknown -- not as a clean bill of health.
 _UNENRICHED_HOSTS = {"nas-01.lan", "build-arm.lan"}
 
-# A few package dependency relationships, so the blast-radius explorer and the
-# dependency map have something real to draw.
+# What each package depends on -- the direction dpkg reports, which the API
+# reverses to answer "what breaks if this goes". The demo used to list it the
+# other way round, so openssl was recorded as depending on nginx.
 _DEPENDENCIES: dict[str, list[str]] = {
-    "openssl": ["nginx", "curl", "bind9"],
-    "glibc": ["nginx", "curl", "openssl", "pam", "util-linux"],
-    "zlib": ["nginx", "curl", "libxml2"],
-    "libxml2": [],
-    "gcc-12": [],
-    "libgcrypt20": [],
+    "nginx": ["openssl", "zlib", "glibc"],
+    "curl": ["openssl", "zlib", "glibc"],
+    "bind9": ["openssl", "glibc"],
+    "openssl": ["glibc"],
+    "pam": ["glibc"],
+    "util-linux": ["glibc"],
+    "libxml2": ["zlib", "glibc"],
+    "gnutls28": ["libgcrypt20", "glibc"],
+    "krb5": ["openssl", "glibc"],
+    "xz-utils": ["glibc"],
+    "libwebp": ["zlib", "glibc"],
+    "expat": ["glibc"],
+    "ncurses": ["glibc"],
+    "zlib": ["glibc"],
+    "libgcrypt20": ["glibc"],
+    "gcc-12": ["glibc"],
+}
+
+# Inventory packages that carry no finding of their own. A real host has
+# hundreds of these, and without them nothing in the demo reaches the ten
+# dependents that make a blast radius high -- so the top tier of the feature
+# the tool is built around could not appear in a screenshot (Req 10.10).
+_EXTRA_PACKAGES: dict[str, list[str]] = {
+    "openssh-server": ["openssl", "glibc", "pam"],
+    "git": ["openssl", "curl", "zlib", "glibc"],
+    "python3.11": ["openssl", "zlib", "expat", "glibc"],
+    "postfix": ["openssl", "glibc", "pam"],
+    "rsync": ["openssl", "zlib", "glibc"],
+    "wget": ["openssl", "zlib", "glibc"],
+    "ldap-utils": ["openssl", "glibc"],
+    "chrony": ["openssl", "glibc"],
+    "apt": ["openssl", "zlib", "glibc"],
+    "systemd": ["openssl", "libgcrypt20", "glibc", "pam"],
+    "sudo": ["pam", "glibc"],
+    "cron": ["pam", "glibc"],
 }
 
 
@@ -298,6 +350,20 @@ def seed_demo_fleet(session: Session) -> int:
         offset = sum(ord(c) for c in hostname) % len(catalogue)
         chosen = [catalogue[(offset + i) % len(catalogue)] for i in range(len(catalogue))]
 
+        # The rest of the inventory, so the dependency graph has the shape a
+        # real host's does. No findings hang off these.
+        for extra, extra_deps in _EXTRA_PACKAGES.items():
+            session.add(
+                Package(
+                    id=_uid(),
+                    inventory_id=inventory.id,
+                    name=extra,
+                    version="1.0-demo",
+                    ecosystem="Debian",
+                    dependencies=",".join(extra_deps) or None,
+                )
+            )
+
         seen: set[str] = set()
         ecosystem = "Debian"
         if hostname == "web-01.lan":
@@ -384,6 +450,24 @@ def seed_demo_fleet(session: Session) -> int:
         elif hostname != "nas-01.lan":
             # nas-01's only run is its month-old baseline.
             session.add(_run(machine, last_scan, finding_count=count))
+
+    # Pins are keyed by address, not by machine, so they are seeded on their own
+    # rather than inside the host loop (Req 17.6).
+    for hostname, port, key_type, fingerprint, first_seen_h in _HOST_KEYS:
+        session.add(
+            SshHostKey(
+                id=_uid(),
+                hostname=hostname,
+                port=port,
+                key_type=key_type,
+                # Not a real key: the demo never connects anywhere, and the
+                # dashboard only ever shows the fingerprint.
+                key_base64="AAAAC3NzaC1lZDI1NTE5AAAAIDEMOkeyDEMOkeyDEMOkeyDEMOkeyDEMO",
+                fingerprint_sha256=fingerprint,
+                first_seen_at=_ago(hours=first_seen_h),
+                last_seen_at=_ago(hours=6),
+            )
+        )
 
     session.flush()
     return len(machines)

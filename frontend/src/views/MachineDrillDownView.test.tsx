@@ -110,12 +110,54 @@ describe("MachineDrillDownView", () => {
   });
 
   it("shows an empty-state message when the machine has no CVEs (Req 3.4)", () => {
-    render(<MachineDrillDownView machineId="m1" findings={[]} />);
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={[]}
+        lastScanStatus="success"
+        lastScanSourcesOk
+      />,
+    );
 
     expect(
-      screen.getByText("No CVEs identified for this machine."),
+      screen.getByText("No CVE findings recorded for this machine."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("does not call an unscanned host clean", () => {
+    // "No CVEs identified for this machine." was shown for a host enrolled
+    // from discovery and never scanned, which is a claim about the host made
+    // from no measurement at all.
+    render(
+      <MachineDrillDownView machineId="m1" findings={[]} lastScanStatus="never_scanned" />,
+    );
+
+    expect(screen.getByText(/has not been scanned yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/not the same as finding nothing/i)).toBeInTheDocument();
+  });
+
+  it("says a failed scan failed, rather than reporting no findings", () => {
+    render(
+      <MachineDrillDownView machineId="m1" findings={[]} lastScanStatus="auth_failure" />,
+    );
+
+    expect(
+      screen.getByText(/last scan did not complete: authentication failed/i),
+    ).toBeInTheDocument();
+  });
+
+  it("says an undercount is an undercount when a source did not answer", () => {
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={[]}
+        lastScanStatus="success"
+        lastScanSourcesOk={false}
+      />,
+    );
+
+    expect(screen.getByText(/undercount rather than a clean result/i)).toBeInTheDocument();
   });
 
   it("filters the CVE rows by severity (Req 3.3)", async () => {

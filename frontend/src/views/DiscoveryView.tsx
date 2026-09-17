@@ -334,11 +334,11 @@ export function DiscoveryView({
                   <table>
                     <thead>
                       <tr>
-                        <th>IP Address</th>
-                        <th>Hostname</th>
-                        <th>OS</th>
-                        <th>Open Ports</th>
-                        <th>Actions</th>
+                        <th scope="col">IP Address</th>
+                        <th scope="col">Hostname</th>
+                        <th scope="col">OS</th>
+                        <th scope="col">Open Ports</th>
+                        <th scope="col">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -351,16 +351,16 @@ export function DiscoveryView({
                             className={`master-row ${selectedHost?.ip === host.ip ? "selected" : ""}`}
                             onClick={() => setSelectedHost(host)}
                           >
-                            <td style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                            <td data-label="IP address" style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
                               {host.ip}
                             </td>
-                            <td>{host.hostname || "—"}</td>
-                            <td>
+                            <td data-label="Hostname">{host.hostname || "—"}</td>
+                            <td data-label="OS">
                               <span title={host.osGuess}>
                                 <Icon name={osIcon(host.osGuess)} /> {host.osGuess}
                               </span>
                             </td>
-                            <td>
+                            <td data-label="Open ports">
                               <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
                                 {host.openPorts.map((port) => (
                                   <span
@@ -378,7 +378,7 @@ export function DiscoveryView({
                                 )}
                               </div>
                             </td>
-                            <td>
+                            <td data-label="Actions">
                               <div
                                 style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}
                                 onClick={(e) => e.stopPropagation()}

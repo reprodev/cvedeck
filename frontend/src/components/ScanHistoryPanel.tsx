@@ -130,10 +130,10 @@ export function ScanHistoryPanel({ onLoadRuns, onLoadChanges }: ScanHistoryPanel
                 return (
                   <Fragment key={run.runId}>
                     <tr>
-                      <td title={new Date(run.scannedAt).toLocaleString()}>
+                      <td data-label="Scanned" title={new Date(run.scannedAt).toLocaleString()}>
                         {relativeTime(run.scannedAt)}
                       </td>
-                      <td>
+                      <td data-label="Result">
                         <span className={`badge badge-status-${statusTone(run.status)}`}>
                           {statusLabel(run.status)}
                         </span>
@@ -143,25 +143,34 @@ export function ScanHistoryPanel({ onLoadRuns, onLoadChanges }: ScanHistoryPanel
                             <Icon name="alert" /> Partial
                           </span>
                         )}
+                        {/* "Failed" alone does not tell a bad password from an
+                            unreachable port or a refused key (Req 18.10). */}
+                        {run.errorDetail && (
+                          <p className="scan-history-reason">{run.errorDetail}</p>
+                        )}
                       </td>
-                      <td>
+                      <td data-label="Findings">
                         <Count
                           value={run.status === "success" ? run.findingCount : null}
                           reason={notAssessed(run, "new")}
                         />
                       </td>
-                      <td>
+                      <td data-label="New">
                         <Count value={run.newCount} reason={notAssessed(run, "new")} />
                       </td>
-                      <td>
+                      <td data-label="Resolved">
                         <Count value={run.resolvedCount} reason={notAssessed(run, "resolved")} />
                       </td>
-                      <td>
+                      <td data-label="Changes">
                         {hasChanges && (
                           <button
                             type="button"
                             className="btn-secondary scan-history-toggle"
                             aria-expanded={open}
+                            aria-controls={`scan-changes-${run.runId}`}
+                            // Every row's button read "Show changes", so a
+                            // screen reader announced N identical buttons.
+                            aria-label={`${open ? "Hide" : "Show"} changes for the scan ${relativeTime(run.scannedAt)}`}
                             onClick={() => void toggleRun(run.runId)}
                           >
                             {open ? "Hide changes" : "Show changes"}
@@ -171,7 +180,7 @@ export function ScanHistoryPanel({ onLoadRuns, onLoadChanges }: ScanHistoryPanel
                     </tr>
                     {open && (
                       <tr className="scan-history-changes">
-                        <td colSpan={6}>
+                        <td colSpan={6} id={`scan-changes-${run.runId}`}>
                           {changesError && <p role="alert">{changesError}</p>}
                           {!rows && !changesError && <p className="hint">Loading...</p>}
                           {rows && (

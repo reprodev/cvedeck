@@ -10,6 +10,9 @@ and ``AUTH_FAILURE``) without aborting a batch scan:
   Interface, so it is intentionally not redefined here.
 - ``AuthError`` (defined below) is raised when the target is reachable but
   authentication fails (bad username/password/key).
+- ``InventoryUnavailableError`` is raised when the host authenticated but no
+  package inventory could be read, which must never be recorded as a scan that
+  found nothing.
 """
 
 from __future__ import annotations
@@ -26,6 +29,30 @@ class AuthError(CollectorError):
     the supplied credentials. The ScannerEngine maps this to an
     ``AUTH_FAILURE`` status for the affected target (Req 1.5).
     """
+
+
+class InventoryUnavailableError(CollectorError):
+    """The host authenticated but its package inventory could not be read.
+
+    Maps to ``INVENTORY_UNAVAILABLE``. Every package manager the collector
+    knows failed, or the command returned nothing parsable: an unsupported
+    distribution, a package database that is locked or corrupt, a restricted
+    shell, or a container with no package manager at all.
+
+    Deliberately not an empty inventory. Zero packages is indistinguishable
+    from a clean host to everything downstream -- the matcher queries nothing,
+    the scan records success, and every finding recorded by the previous scan
+    is deleted and reported as resolved. An unanswered question is not an
+    answer (Req 1.7), the same rule ``OsvUnavailableError`` exists to keep.
+    """
+
+    def __init__(self, hostname: str, *, detail: str | None = None) -> None:
+        super().__init__(
+            f"no package inventory could be read from {hostname}"
+            + (f": {detail}" if detail else "")
+        )
+        self.hostname = hostname
+        self.detail = detail
 
 
 class HostKeyError(CollectorError):

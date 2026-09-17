@@ -30,6 +30,7 @@ const machinesWire = [
     hostname: "web-01",
     platform: "linux",
     last_scan_status: "success",
+    last_scanned_at: "2026-09-16T09:00:00Z",
     cve_counts: { critical: 2, high: 3, medium: 1, low: 4 },
   },
   {
@@ -37,6 +38,7 @@ const machinesWire = [
     hostname: "db-01",
     platform: "windows",
     last_scan_status: "connection_failure",
+    last_scanned_at: "2026-09-16T09:00:00Z",
     cve_counts: { critical: 0, high: 1, medium: 5, low: 0 },
   },
 ];

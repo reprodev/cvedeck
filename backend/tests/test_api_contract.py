@@ -561,6 +561,83 @@ def test_a_collected_inventory_yields_a_measured_blast_radius(session, client):
     assert len(findings[0]["depended_on_by"]) == 10
 
 
+def test_a_finding_with_no_package_has_no_blast_radius(session, client):
+    """Validates Req 10.10: an OS-level advisory is not a leaf package.
+
+    A kernel or distribution advisory carries no package identifier, so there
+    is nothing to look up in the graph. Scoring that as "low (0 apps)" put a
+    green leaf badge and a purge command on findings that name no package.
+    """
+    _make_machine(session, "m1", "alpha.example.com")
+    repo = Repository(session)
+    repo.save_inventory(
+        DomainInventory(
+            machine_id="m1",
+            os_info=OsInfo(name="Ubuntu", version="22.04"),
+            packages=[
+                DomainPackage(name="openssl", version="3.0.2"),
+                DomainPackage(name="nginx", version="1.24", dependencies=["openssl"]),
+                DomainPackage(name="curl", version="7.88", dependencies=["openssl"]),
+                DomainPackage(name="wget", version="1.21", dependencies=["openssl"]),
+            ],
+        )
+    )
+    repo.save_findings(
+        "m1",
+        [
+            _finding("CVE-kernel", 7.8, Severity.HIGH),
+            _finding(
+                "CVE-openssl", 9.8, Severity.CRITICAL, package_identifier="deb:openssl@3.0.2"
+            ),
+            _finding(
+                "CVE-ghost", 5.0, Severity.MEDIUM, package_identifier="deb:not-installed@1.0"
+            ),
+        ],
+    )
+    session.commit()
+
+    by_id = {
+        f["cve_id"]: f
+        for f in _assert_json_response(client.get("/api/machines/m1/cves"))
+    }
+
+    assert by_id["CVE-kernel"]["blast_radius"] is None
+    # A package the inventory never mentioned was never measured either.
+    assert by_id["CVE-ghost"]["blast_radius"] is None
+    # The measured one still answers, or the rule above has only moved the lie.
+    assert by_id["CVE-openssl"]["blast_radius"] == "medium"
+
+
+def test_an_inventory_without_dependency_data_has_no_blast_radius(session, client):
+    """Validates Req 10.10: Alpine and Arch report no dependencies at all.
+
+    ``apk info -v`` and ``pacman -Q`` emit name and version only, so every
+    package on those hosts arrives with an empty dependency list. Scoring that
+    as low would make every package on an Alpine host a purgeable leaf.
+    """
+    _make_machine(session, "m1", "alpine.example.com")
+    repo = Repository(session)
+    repo.save_inventory(
+        DomainInventory(
+            machine_id="m1",
+            os_info=OsInfo(name="Alpine Linux", version="3.19"),
+            packages=[
+                DomainPackage(name="musl", version="1.2.4"),
+                DomainPackage(name="busybox", version="1.36.1"),
+            ],
+        )
+    )
+    repo.save_findings(
+        "m1",
+        [_finding("CVE-musl", 7.5, Severity.HIGH, package_identifier="apk:musl@1.2.4")],
+    )
+    session.commit()
+
+    findings = _assert_json_response(client.get("/api/machines/m1/cves"))
+
+    assert findings[0]["blast_radius"] is None
+
+
 def test_all_cves_response_matches_documented_shape(session, client):
     """The collection CVE endpoint returns documented-shape JSON objects."""
     _make_machine(session, "m1", "alpha.example.com")

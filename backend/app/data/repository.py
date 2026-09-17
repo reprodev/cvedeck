@@ -95,6 +95,22 @@ def _new_id() -> str:
     return uuid.uuid4().hex
 
 
+#: How much of a failure message a scan run keeps (Req 18.10). Long enough for
+#: "SSH host key for host:22 has changed: pinned ..., presented ...", short
+#: enough that a host echoing a wall of text cannot bloat the history.
+_ERROR_DETAIL_LIMIT = 500
+
+
+def _truncate(text: str | None, limit: int) -> str | None:
+    """Trim a message to ``limit`` characters, marking that it was cut."""
+    if text is None:
+        return None
+    stripped = text.strip()
+    if not stripped:
+        return None
+    return stripped if len(stripped) <= limit else stripped[: limit - 1] + "…"
+
+
 @dataclass(frozen=True)
 class FindingInput:
     """A CVE finding to persist for a machine.
@@ -438,6 +454,7 @@ class Repository:
         scanned_at: datetime,
         diff: FindingDiff | None,
         keep: int,
+        error_detail: str | None = None,
     ) -> ScanRun:
         """Record one scan attempt and what it changed (Req 18.1, 18.2).
 
@@ -446,6 +463,10 @@ class Repository:
         an answer it does not have. Keeps the newest ``keep`` runs for the
         machine, and never prunes its latest successful one, which the "new"
         badges are read from (Req 18.7).
+
+        ``error_detail`` is why a failed attempt failed (Req 18.10), truncated
+        so a chatty host cannot fill the row, and dropped entirely on success:
+        a successful run has nothing to explain.
         """
         succeeded = status is ScanStatus.SUCCESS and diff is not None
         baseline = succeeded and diff.baseline
@@ -465,6 +486,11 @@ class Repository:
             ),
             baseline=baseline,
             sync_status=SyncStatus.PENDING_SYNC,
+            error_detail=(
+                None
+                if status is ScanStatus.SUCCESS
+                else _truncate(error_detail, _ERROR_DETAIL_LIMIT)
+            ),
         )
         self._session.add(run)
         if compared:

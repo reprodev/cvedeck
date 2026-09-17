@@ -180,7 +180,10 @@ export function MachineListView({
     const failed = machines.filter(
       (m) =>
         m.lastScanStatus === "connection_failure" ||
-        m.lastScanStatus === "auth_failure",
+        m.lastScanStatus === "auth_failure" ||
+        // The host answered and authenticated, but nothing could be read from
+        // it. A failure, not a quiet zero-finding success (Req 1.7).
+        m.lastScanStatus === "inventory_unavailable",
     );
     const stale = machines.filter(
       (m) => m.lastScanStatus === "success" && isStale(m.lastScannedAt),
@@ -628,7 +631,7 @@ export function MachineListView({
           <button
             type="button"
             className="pagination-btn"
-            onClick={() => exportFleetCsv(filteredMachines)}
+            onClick={() => exportFleetCsv(filteredMachines, { intelUsable })}
             style={{
               padding: "0.55rem 0.9rem",
               fontSize: "0.85rem",
@@ -884,15 +887,28 @@ export function MachineListView({
                   </td>
                   {visibleSeverities.map((severity) => {
                     const count = machine.cveCounts[severity];
+                    // A host nobody has scanned has no counts. Four zeros are
+                    // the same shape as a clean host, and this row is what the
+                    // eye and the column sort go to (Req 10.10).
+                    const measured = machine.lastScannedAt !== null;
                     return (
                       <td key={severity} data-col={severity} data-label={severityLabel(severity)}>
-                        <span
-                          className={`badge ${
-                            count > 0 ? `badge-${severity}` : ""
-                          }`}
-                        >
-                          {count}
-                        </span>
+                        {measured ? (
+                          <span
+                            className={`badge ${
+                              count > 0 ? `badge-${severity}` : ""
+                            }`}
+                          >
+                            {count}
+                          </span>
+                        ) : (
+                          <span
+                            className="kev-unknown"
+                            title="This host has never been scanned, so nothing has been counted. This is not evidence that it is clear."
+                          >
+                            —
+                          </span>
+                        )}
                       </td>
                     );
                   })}

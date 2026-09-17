@@ -610,6 +610,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
               ? () => handleForgetHostKey(selectedMachine.hostname)
               : undefined
           }
+          lastScanSourcesOk={selectedMachine?.lastScanSourcesOk}
           hostKeyPort={selectedMachine?.hostKeyPort ?? null}
           onListHostKeys={listHostKeys}
           onForgetHostKeyAt={capabilities?.demoMode ? undefined : forgetHostKeyAt}

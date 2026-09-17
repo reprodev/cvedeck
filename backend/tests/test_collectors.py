@@ -26,7 +26,7 @@ from app.scanner.collectors import (
     WindowsCollector,
     get_collector,
 )
-from app.scanner.exceptions import AuthError
+from app.scanner.exceptions import AuthError, InventoryUnavailableError
 
 
 # ---------------------------------------------------------------------------
@@ -216,10 +216,12 @@ def test_linux_auth_failure_raises_auth_error():
 
 
 def test_linux_os_release_fallback_to_unknown():
+    # Packages present: a host whose os-release is unreadable is still scannable,
+    # and an empty package list is refused separately (Req 1.7).
     fake = FakeSSHClient(
         {
             _linux_cmd("os"): b"",
-            _linux_cmd("pkg"): b"",
+            _linux_cmd("pkg"): b"curl\t7.88.1\tlibc6\n",
         }
     )
     collector = LinuxCollector(ssh_client_factory=lambda: fake)
@@ -227,7 +229,7 @@ def test_linux_os_release_fallback_to_unknown():
     inv = collector.collect(LINUX_TARGET, CREDS)
     assert inv.os_info.name == "unknown"
     assert inv.os_info.version == "unknown"
-    assert inv.packages == []
+    assert [p.name for p in inv.packages] == ["curl"]
 
 
 def _linux_cmd(which: str) -> str:
@@ -426,3 +428,90 @@ def test_reboot_required_is_none_when_undeterminable():
         f"ID=ubuntu\n{marker}\n6.1.0\n{marker}\nunknown"
     )
     assert reboot is None
+
+
+# ---------------------------------------------------------------------------
+# An unreadable package inventory is refused, never reported as an empty one
+# (Req 1.7)
+# ---------------------------------------------------------------------------
+
+
+class _FakeChannel:
+    def __init__(self, exit_status: int) -> None:
+        self._exit_status = exit_status
+
+    def recv_exit_status(self) -> int:
+        return self._exit_status
+
+
+class _FakeChannelFileWithStatus(_FakeChannelFile):
+    """stdout that can report an exit status, as paramiko's does."""
+
+    def __init__(self, data: bytes, exit_status: int) -> None:
+        super().__init__(data)
+        self.channel = _FakeChannel(exit_status)
+
+
+class FailingPackageClient(FakeSSHClient):
+    """A host where every package manager arm fails."""
+
+    def __init__(self, os_output: bytes, *, stderr: bytes, exit_status: int) -> None:
+        super().__init__({})
+        self._os_output = os_output
+        self._stderr = stderr
+        self._exit_status = exit_status
+
+    def exec_command(self, command, timeout=None):
+        self.commands.append(command)
+        if command == _linux_cmd("os"):
+            return None, _FakeChannelFile(self._os_output), _FakeChannelFile(b"")
+        return (
+            None,
+            _FakeChannelFileWithStatus(b"", self._exit_status),
+            _FakeChannelFile(self._stderr),
+        )
+
+
+def test_a_host_with_no_readable_packages_is_refused_not_reported_empty():
+    """Validates Req 1.7."""
+    fake = FailingPackageClient(
+        b'NAME="Debian GNU/Linux"\nVERSION_ID="12"\n',
+        stderr=b"dpkg: error: dpkg frontend lock is locked by another process\n",
+        exit_status=127,
+    )
+    collector = LinuxCollector(ssh_client_factory=lambda: fake)
+
+    with pytest.raises(InventoryUnavailableError) as excinfo:
+        collector.collect(LINUX_TARGET, CREDS)
+
+    message = str(excinfo.value)
+    assert LINUX_TARGET.hostname in message
+    # The reason travels with it, so a scan run can say why it failed.
+    assert "127" in message
+    assert "frontend lock" in message
+
+
+def test_the_refusal_carries_no_exit_status_when_the_channel_cannot_report_one():
+    """Validates Req 1.7: an unknown exit status is not read as success."""
+    fake = FakeSSHClient(
+        {_linux_cmd("os"): b'NAME="Alpine Linux"\n', _linux_cmd("pkg"): b""}
+    )
+    collector = LinuxCollector(ssh_client_factory=lambda: fake)
+
+    with pytest.raises(InventoryUnavailableError):
+        collector.collect(LINUX_TARGET, CREDS)
+
+
+def test_output_that_parses_to_no_packages_is_also_refused():
+    """Validates Req 1.7: unparsable output is not an empty inventory."""
+    fake = FakeSSHClient(
+        {
+            _linux_cmd("os"): b'NAME="Debian GNU/Linux"\n',
+            # A banner, a warning, anything without a tab-separated pair.
+            _linux_cmd("pkg"): b"bash: dpkg-query: command not found\n",
+        }
+    )
+    collector = LinuxCollector(ssh_client_factory=lambda: fake)
+
+    with pytest.raises(InventoryUnavailableError):
+        collector.collect(LINUX_TARGET, CREDS)

@@ -285,6 +285,11 @@ class ScanRun(Base):
     sync_status: Mapped[SyncStatus] = mapped_column(
         SqlEnum(SyncStatus, name="sync_status"), nullable=False
     )
+    #: Why a failed run failed, as the scanner reported it (Req 18.10). ``None``
+    #: for a run that succeeded. Without it the history says only "Failed",
+    #: which does not tell a bad password from an unreachable port. Bounded
+    #: and free of credentials, like ``FeedRefresh.error_detail``.
+    error_detail: Mapped[str | None] = mapped_column(String, nullable=True)
 
     machine: Mapped[TargetMachine] = relationship(back_populates="scan_runs")
     changes: Mapped[list[ScanFindingChange]] = relationship(

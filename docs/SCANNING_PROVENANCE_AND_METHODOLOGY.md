@@ -276,8 +276,9 @@ To prevent accidental system service outages during remediation audits, CveDeck 
 
 ### A. Real-Time Removal & Impact Assessment
 Before purging or modifying any software component, operators must assess whether active services rely on it. CveDeck dynamically calculates:
-- **High-Impact Warning (`🚫 DO NOT REMOVE THIS PACKAGE`):** When the component has active reverse-dependencies (`depended_on_by.length > 0`, such as `libssl3` needed by `curl`, `git`, or `nginx`), removal is explicitly discouraged to prevent breaking critical services.
-- **Standalone Safety Check (`⚠️ CHECK USAGE BEFORE PURGING`):** When the package has zero dependents on the machine (`depended_on_by.length === 0`), operators are prompted to confirm whether the service/tool is actively used before issuing a purge.
+- **Impact tier:** How many installed packages declare a dependency on the component decides the warning, in the same three tiers the badge shows — high at ten or more dependents, moderate at three or more, low below that. A package with three dependents reads "Moderate system impact" in both places; the card used to shout "high" for any dependent at all, contradicting the badge beside it.
+- **Standalone Safety Check (`CHECK USAGE BEFORE PURGING`):** When the package has zero dependents on the machine (`depended_on_by.length === 0`) *and* the dependency graph was actually built, operators are prompted to confirm whether the service/tool is actively used before issuing a purge.
+- **Not assessed:** Where no dependency graph exists — no collected inventory, a finding with no package name, a package manager that reports no dependencies — the impact is stated as unassessed and no purge is offered. An empty dependents list is not evidence that nothing depends on the package.
 
 ### B. Upstream Intelligence Direct Links
 Every CVE identifier across all dashboard views opens an interactive investigation drawer linking directly to authoritative sources:

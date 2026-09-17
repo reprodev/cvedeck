@@ -8,6 +8,58 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.4] - 2026-09-17
+
+A release about saying only what was measured. 0.8.2 and 0.8.3 each fixed one
+instance of that rule; a sweep for the rest found more, including one that lost
+data. **Adds a database migration**, applied automatically on start.
+
+### Fixed
+
+- **A host that cannot be inventoried is no longer recorded as a clean host.**
+  The package command is a `dpkg || rpm || apk || pacman` chain and its exit
+  status was never read, so a host where all four failed -- an unsupported
+  distribution, a locked package database, a restricted shell, a container with
+  no package manager -- returned empty output. That became an inventory of zero
+  packages, a successful scan with complete counts, and, because the scan
+  appeared to find nothing, **every finding from the previous scan was deleted
+  and reported as resolved**. Such a scan is now recorded as
+  `inventory_unavailable` with the reason, and writes nothing. The package
+  parser was also loose enough to read `bash: dpkg-query: command not found` as
+  a package; a version must now contain a digit.
+- **An unmeasured blast radius no longer reads as "low".** Only one of the four
+  ways it goes unmeasured returned null. A finding with no package name -- every
+  kernel and OS-level advisory -- scored "low (0 apps)", as did a package absent
+  from the collected inventory. On Alpine and Arch, whose package managers
+  report no dependencies at all, every package looked like a purgeable leaf.
+- **A failed scan run says why it failed.** The history recorded failures but
+  showed only "Failed", which does not tell a bad password from an unreachable
+  port or a refused host key. The reason is kept with the run, bounded and
+  without credentials.
+- **The fleet export no longer writes "Exploited (KEV) = 0" when no intel feed
+  has loaded**, and a host that was never scanned no longer shows four zero
+  severity counts in the table or the export.
+- **The impact card, badge and dialog now agree.** A package with three
+  dependents showed a "Moderate (3 apps)" badge beside a card reading "HIGH
+  SYSTEM IMPACT"; the card asked only whether anything depended on the package.
+- **The CVE dialog's mitigations no longer skip a number.** They were numbered
+  by hand while the options were conditional, so a package with dependents saw
+  a list starting at "2.".
+- **An empty findings list is no longer reported as a clean host.** "No CVEs
+  identified for this machine" was shown for a host that had never been scanned
+  and for one whose every scan had failed.
+
+### Changed
+
+- **The demo fleet can show what the product is about.** Its dependency graph
+  topped out at three dependents, so a high blast radius was unreachable, and
+  it recorded dependencies backwards. It also had no SSH host keys at all, so
+  the pinning feature and the whole Settings panel were empty. Both are fixed,
+  including a host refused for a changed key.
+- **Tables that reflow into cards on a phone label their cells**, and each scan
+  history row's changes button names its own scan rather than reading "Show
+  changes" like every other.
+
 ## [0.8.3] - 2026-09-17
 
 A release about saying only what is known. Several places filled a missing

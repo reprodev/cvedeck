@@ -248,6 +248,42 @@ describe("csvExport utility", () => {
       expect(cells[5]).toBe("not assessed");
     });
 
+    it("writes no exploited count when no intel feed has loaded", async () => {
+      // The fleet view draws a dash here without a feed; a spreadsheet has no
+      // tooltip, so a 0 would read as "this host is clear" (Req 8.10).
+      const csv = await capture(() =>
+        exportFleetCsv([makeMachine({ kevCount: 0 })], { intelUsable: false }),
+      );
+      const withFeed = await capture(() =>
+        exportFleetCsv([makeMachine({ kevCount: 0 })], { intelUsable: true }),
+      );
+
+      const header = csv.split("\r\n")[0].split(",");
+      const cell = (text: string) =>
+        dataRow(text).split(",")[header.indexOf("Exploited (KEV)")];
+      expect(cell(csv)).toBe("not checked");
+      // A feed that did load still answers zero, or the fix only moved the lie.
+      expect(cell(withFeed)).toBe("0");
+    });
+
+    it("writes no counts for a host that was never scanned", async () => {
+      const csv = await capture(() =>
+        exportFleetCsv([
+          makeMachine({
+            lastScannedAt: null,
+            lastScanStatus: "never_scanned",
+            cveCounts: { critical: 0, high: 0, medium: 0, low: 0 },
+          }),
+        ]),
+      );
+
+      const header = csv.split("\r\n")[0].split(",");
+      const cells = dataRow(csv).split(",");
+      for (const column of ["Critical CVEs", "High CVEs", "Medium CVEs", "Low CVEs", "Total Findings"]) {
+        expect(cells[header.indexOf(column)]).toBe("not assessed");
+      }
+    });
+
     it("writes the status the backend sent, and invents none", async () => {
       const csv = await capture(() =>
         exportFleetCsv([makeMachine({ lastScanStatus: "auth_failure" })]),

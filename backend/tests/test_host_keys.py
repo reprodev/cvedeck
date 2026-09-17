@@ -36,7 +36,11 @@ from app.enums import Platform, ScanStatus
 from app.models import Credentials, TargetMachine
 from app.scanner.collectors import LinuxCollector
 from app.scanner.engine import ScannerEngine
-from app.scanner.exceptions import HostKeyMismatchError, HostKeyUnknownError
+from app.scanner.exceptions import (
+    HostKeyMismatchError,
+    HostKeyUnknownError,
+    InventoryUnavailableError,
+)
 from app.scanner.host_keys import (
     POLICY_STRICT,
     PinnedHostKey,
@@ -215,9 +219,13 @@ def test_a_successful_scan_pins_through_the_collector():
     store = MemoryStore()
     target = TargetMachine(id="m1", hostname=HOST, platform=Platform.LINUX)
     with ssh_server(key) as server:
-        LinuxCollector(port=server["port"], host_key_store=store).collect(
-            target, Credentials(username="scanner", password=PASSWORD)
-        )
+        # The stub server runs no commands, so the collect itself refuses for
+        # want of an inventory (Req 1.7) -- after the key was pinned, which is
+        # what this test is about.
+        with pytest.raises(InventoryUnavailableError):
+            LinuxCollector(port=server["port"], host_key_store=store).collect(
+                target, Credentials(username="scanner", password=PASSWORD)
+            )
 
     assert store.get(HOST, server["port"]).fingerprint_sha256 == fingerprint(key)
 

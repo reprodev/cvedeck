@@ -1357,3 +1357,64 @@ Twice now, a fix went to the screen where a bug was noticed rather than to
 every place the same assumption lived. The cheap defence is to name the rule
 and search for it before calling the fix finished; the stronger one is a test
 that states the rule instead of the instance.
+
+## Chapter 14 — The scan that resolved everything (v0.8.4)
+
+Two releases had each fixed one place where a missing answer was presentable as
+a good one. That is the sort of pattern that deserves a search rather than a
+third instance, so this release started with one: every default, every `?? 0`,
+every empty list that a screen then described as a finding.
+
+The worst of it was not in the dashboard.
+
+### Four package managers, none of them checked
+
+The Linux collector asks for packages with a chain: `dpkg-query || rpm || apk
+|| pacman`. Whichever answers first wins, and if none does, the command exits
+non-zero with nothing on stdout. Nothing read that exit status. Nothing read
+stderr either.
+
+So a host with a locked dpkg database, or a restricted shell, or an unsupported
+distribution, returned an empty string. The parser turned that into zero
+packages. The matcher had nothing to query, so it reported that every source
+answered. The engine recorded a success with complete counts. And
+`save_findings`, seeing a successful scan with no findings, deleted every
+finding the previous scan had recorded and reported them all as resolved.
+
+A scan that could not see the host at all produced a green row, a zero, and a
+history entry reading "42 resolved". Everything downstream behaved correctly
+given its input; the only lie was at the very edge, where an unanswered
+question was turned into an empty list.
+
+The fix is one rule stated in one place — an inventory of zero packages from a
+host that authenticated is a refusal, not a result — and the collector now
+carries the reason with it, which is what made the scan-history column that had
+been deferred twice worth building at last.
+
+### The parser that read stderr as software
+
+While proving the refusal, a test fed the collector what a real host actually
+prints when `dpkg-query` is missing: `bash: dpkg-query: command not found`. It
+came back as a package named `bash:` at version `dpkg-query:`. The whitespace
+fallback in the parser was permissive enough to accept any two words, so
+advisories had been matched against lines of shell error text.
+
+### The demo could not show the feature
+
+The release ended somewhere unexpected: the demo data. Blast radius is high at
+ten dependents, and the seeded graph topped out at three, so the top tier of
+the feature the tool argues for had never appeared in a screenshot. The seed
+also had no SSH host keys at all, which meant the pinning work of 0.8.0 through
+0.8.3 was invisible in the demo that sells it.
+
+A demo is not decoration. It is the only view of the product most people will
+ever have, and a state it cannot reach is a state nobody will believe.
+
+### Closing thought
+
+The rule has not changed since Chapter 13 — make the honest answer
+representable, then test the claim rather than the instance — but this release
+added the second half in earnest. There is now a test that says red is only for
+exploitation, a test that says a reflowing table labels its cells, and a test
+that says a host which cannot be read is not a host with nothing on it. Each
+one replaces a fix to a screen with a rule about the product.

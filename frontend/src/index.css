@@ -1032,6 +1032,17 @@ section {
   padding: var(--space-1) var(--space-2);
 }
 
+/* Why a run failed, under its status badge (Req 18.10). Quiet and wrapped: it
+   is a sentence from the host, not a label, and some of them are long. */
+.scan-history-reason {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+  max-width: 48ch;
+  overflow-wrap: anywhere;
+}
+
 .scan-history-more {
   display: flex;
   align-items: center;
@@ -1901,6 +1912,39 @@ tbody tr:last-child td {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+/* The middle tier, between the filled high card and the quiet low one: the
+   warning ground without the heavy edge (Req 10.10). */
+.warning-card-medium {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+/* Mitigations to try where no package update exists. An ordered list, so the
+   numbering is the browser's and cannot skip one. */
+.mitigation-list {
+  list-style: decimal inside;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mitigation-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: var(--surface-muted);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-lg);
 }
 
 .warning-card-low {

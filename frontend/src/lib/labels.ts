@@ -23,6 +23,8 @@ export function statusLabel(status: string): string {
       return "Could not connect";
     case "auth_failure":
       return "Authentication failed";
+    case "inventory_unavailable":
+      return "No inventory could be read";
     case "host_key_mismatch":
       return "Host key changed";
     case "host_key_unknown":

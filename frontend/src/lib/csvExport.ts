@@ -113,8 +113,16 @@ function getTimestampStr(): string {
  * Carries when each host was scanned and whether its counts are complete. A
  * sheet of counts with neither is undatable: month-old numbers read as current,
  * and an undercount from an unreachable advisory source reads as a clean host.
+ *
+ * ``intelUsable`` is whether any threat-intel feed has loaded. The fleet view
+ * draws a dash in the exploited column without one; the export wrote 0, which
+ * in a spreadsheet with no tooltip is a claim that every host is clear.
  */
-export function exportFleetCsv(machines: MachineSummary[]): void {
+export function exportFleetCsv(
+  machines: MachineSummary[],
+  options: { intelUsable?: boolean } = {},
+): void {
+  const { intelUsable = true } = options;
   const headers = [
     "Machine ID",
     "Hostname",
@@ -155,12 +163,20 @@ export function exportFleetCsv(machines: MachineSummary[]): void {
         : m.lastScanSourcesOk
           ? "yes"
           : "no",
-      m.cveCounts.critical,
-      m.cveCounts.high,
-      m.cveCounts.medium,
-      m.cveCounts.low,
-      total,
-      m.kevCount,
+      // A host nobody has scanned has no counts, and four zeros beside
+      // "never" read as a clean host rather than an unmeasured one (Req 8.10).
+      ...(m.lastScannedAt === null
+        ? [NOT_ASSESSED, NOT_ASSESSED, NOT_ASSESSED, NOT_ASSESSED, NOT_ASSESSED]
+        : [
+            m.cveCounts.critical,
+            m.cveCounts.high,
+            m.cveCounts.medium,
+            m.cveCounts.low,
+            total,
+          ]),
+      // Counting only what a feed confirmed: with no feed loaded, zero is the
+      // absence of an answer rather than a clean host (Req 8.10).
+      intelUsable ? m.kevCount : NOT_CHECKED,
       // Null is "not assessed" -- a baseline, a partial scan, or no successful
       // scan yet -- and a zero here would be a different claim (Req 18.6).
       countCell(m.lastScanNew),

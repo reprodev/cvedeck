@@ -16,6 +16,9 @@ describe("statusLabel", () => {
     expect(statusLabel("never_scanned")).toBe("Never scanned");
     expect(statusLabel("connection_failure")).toBe("Could not connect");
     expect(statusLabel("auth_failure")).toBe("Authentication failed");
+    // A host that answered but could not be inventoried: a failure of its own,
+    // never a scan that found nothing (Req 1.7).
+    expect(statusLabel("inventory_unavailable")).toBe("No inventory could be read");
   });
 
   it("passes through an unrecognized status rather than hiding it", () => {

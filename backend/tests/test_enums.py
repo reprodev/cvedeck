@@ -34,6 +34,7 @@ def test_scan_status_values():
         "success",
         "connection_failure",
         "auth_failure",
+        "inventory_unavailable",
         "host_key_mismatch",
         "host_key_unknown",
     }

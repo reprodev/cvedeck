@@ -425,3 +425,77 @@ def test_the_scan_history_migration_round_trips(tmp_path):
         cfg = alembic_config()
         cfg.attributes["connection"] = connection
         command.upgrade(cfg, "head")
+
+
+# --------------------------------------------------------------------------- #
+# Req 18.10: a failed run says why
+# --------------------------------------------------------------------------- #
+
+
+def test_a_failed_run_keeps_the_reason_it_failed():
+    """Validates Req 18.10."""
+    with _session() as session:
+        _machine(session)
+        repo = Repository(session)
+
+        repo.record_scan_run(
+            "m1",
+            status=ScanStatus.AUTH_FAILURE,
+            sources_ok=True,
+            scanned_at=datetime.now(timezone.utc),
+            diff=None,
+            keep=50,
+            error_detail="password authentication rejected for scanner@web-01.lan",
+        )
+        session.flush()
+
+        run = repo.list_scan_runs("m1", 10)[0]
+        assert run.status is ScanStatus.AUTH_FAILURE
+        assert (
+            run.error_detail
+            == "password authentication rejected for scanner@web-01.lan"
+        )
+
+
+def test_a_successful_run_keeps_no_reason():
+    """Validates Req 18.10: a run that worked has nothing to explain."""
+    with _session() as session:
+        _machine(session)
+        repo = Repository(session)
+        diff = repo.save_findings("m1", [_finding("CVE-2026-0001")])
+
+        repo.record_scan_run(
+            "m1",
+            status=ScanStatus.SUCCESS,
+            sources_ok=True,
+            scanned_at=diff.scanned_at,
+            diff=diff,
+            keep=50,
+            # Even where a caller passes one through, success drops it.
+            error_detail="stale message from an earlier attempt",
+        )
+        session.flush()
+
+        assert repo.list_scan_runs("m1", 10)[0].error_detail is None
+
+
+def test_a_chatty_host_cannot_fill_the_history_row():
+    """Validates Req 18.10: the reason is bounded."""
+    with _session() as session:
+        _machine(session)
+        repo = Repository(session)
+
+        repo.record_scan_run(
+            "m1",
+            status=ScanStatus.CONNECTION_FAILURE,
+            sources_ok=True,
+            scanned_at=datetime.now(timezone.utc),
+            diff=None,
+            keep=50,
+            error_detail="x" * 5000,
+        )
+        session.flush()
+
+        detail = repo.list_scan_runs("m1", 10)[0].error_detail
+        assert len(detail) == 500
+        assert detail.endswith("…")

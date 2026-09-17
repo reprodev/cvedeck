@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.routes import _parse_fixed_version
 from app.data.demo_seed import fleet_is_empty, seed_demo_fleet
-from app.data.schema import Base, CveFinding, Inventory, TargetMachine
+from app.data.schema import Base, CveFinding, Inventory, Package, SshHostKey, TargetMachine
 from app.enums import ScanStatus
 
 
@@ -221,3 +221,74 @@ def test_fleet_is_dense_enough_to_need_prioritising(session):
     assert len(exploited) >= 10
     # And the exploited ones must not be everywhere, or ranking by them is moot.
     assert len(exploited) < len(findings) / 2
+
+
+def test_the_demo_can_show_a_high_blast_radius(session):
+    """Validates Req 10.10: the top tier has to be reachable to be believed.
+
+    Ten dependents is the threshold, and the seeded dependency graph topped out
+    at three, so the feature the product argues for could not appear in a
+    screenshot.
+    """
+    seed_demo_fleet(session)
+    session.commit()
+
+    inventory = (
+        session.query(Inventory)
+        .join(TargetMachine)
+        .filter(TargetMachine.hostname == "web-01.lan")
+        .one()
+    )
+    packages = session.query(Package).filter(Package.inventory_id == inventory.id).all()
+
+    dependents: dict[str, int] = {}
+    for package in packages:
+        for dep in (package.dependencies or "").split(","):
+            if dep:
+                dependents[dep] = dependents.get(dep, 0) + 1
+
+    assert max(dependents.values()) >= 10
+    # And the direction is the one dpkg reports: things depend on openssl.
+    assert dependents["openssl"] >= 10
+
+
+def test_the_demo_has_pinned_host_keys_including_the_unreachable_states(session):
+    """Validates Req 17.8, 17.10, 17.11.
+
+    Without pins the Settings panel and every machine page's key block are
+    empty, so the whole pinning feature is invisible in the demo.
+    """
+    seed_demo_fleet(session)
+    session.commit()
+
+    pins = session.query(SshHostKey).all()
+    by_address = {(p.hostname, p.port) for p in pins}
+    hostnames = {m.hostname for m in session.query(TargetMachine).all()}
+
+    assert ("web-01.lan", 22) in by_address
+    # A second port on an enrolled host: only the machine page's other-ports
+    # list can show this one.
+    assert ("web-01.lan", 2222) in by_address
+    # An address no machine matches: only the Settings listing can show it.
+    assert any(hostname not in hostnames for hostname, _ in by_address)
+    assert all(pin.fingerprint_sha256.startswith("SHA256:") for pin in pins)
+
+
+def test_the_demo_includes_a_refused_host_key(session):
+    """Validates Req 15.5, 17.3: the refusal state is part of the fleet."""
+    seed_demo_fleet(session)
+    session.commit()
+
+    refused = (
+        session.query(TargetMachine)
+        .filter(TargetMachine.last_scan_status == ScanStatus.HOST_KEY_MISMATCH)
+        .all()
+    )
+
+    assert len(refused) == 1
+    # A refused scan never reached the host, so it has no findings of its own.
+    assert (
+        session.query(CveFinding).filter(CveFinding.machine_id == refused[0].id).count()
+        == 0
+    )
+

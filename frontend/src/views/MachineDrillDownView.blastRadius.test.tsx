@@ -147,12 +147,57 @@ describe("CveDetailModal blast radius", () => {
     expect(screen.queryByText(/Blast radius not assessed/i)).not.toBeInTheDocument();
   });
 
-  it("warns against removing a package with measured dependents", () => {
+  it("warns in the tier the badge shows, not always the top one", () => {
+    // Three dependents is Moderate. The card used to read "DO NOT REMOVE THIS
+    // PACKAGE (High System Impact)" for any dependent at all, contradicting the
+    // badge beside it.
     openModal(
       finding({ blastRadius: "medium", dependedOnBy: ["nginx", "curl", "git"] }),
     );
 
-    expect(screen.getByText(/DO NOT REMOVE THIS PACKAGE/)).toBeInTheDocument();
+    expect(screen.getByText(/Moderate system impact/i)).toBeInTheDocument();
+    expect(screen.queryByText(/High system impact/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/3 installed applications/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Purge/i })).not.toBeInTheDocument();
+  });
+
+  it("numbers the mitigations from what actually rendered", () => {
+    // Non-leaf and non-Ubuntu used to render a single option numbered "2.",
+    // because the numbers were literals and the purge option above them was
+    // conditional.
+    openModal(
+      finding({
+        blastRadius: "medium",
+        dependedOnBy: ["nginx", "curl", "git"],
+        fixStatus: "none",
+        hasFix: false,
+      }),
+    );
+
+    const mitigations = screen
+      .getAllByRole("listitem")
+      .filter((li) => li.closest("ol") !== null);
+
+    // Not a leaf, so the purge option that used to be "1." is absent, and what
+    // remains must not start at "2.". The numbering is the list's now, so no
+    // item carries a literal number at all.
+    expect(mitigations.length).toBeGreaterThan(0);
+    for (const item of mitigations) {
+      expect(item.textContent?.trimStart()).not.toMatch(/^\d+\./);
+    }
+    expect(mitigations[mitigations.length - 1]).toHaveTextContent(
+      /distribution upgrade|distro updates/i,
+    );
+  });
+
+  it("says high only when the graph measured high", () => {
+    openModal(
+      finding({
+        blastRadius: "high",
+        dependedOnBy: Array.from({ length: 12 }, (_, i) => `app${i}`),
+      }),
+    );
+
+    expect(screen.getByText(/High system impact/i)).toBeInTheDocument();
   });
 });

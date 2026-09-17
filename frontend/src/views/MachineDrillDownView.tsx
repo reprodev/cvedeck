@@ -33,12 +33,13 @@ import {
   hasFix as findingHasFix,
 } from "../lib/remediation";
 import { useClipboard } from "../lib/useClipboard";
-import { isHostKeyStatus, relativeTime, remediationStatusLabel, severityLabel } from "../lib/labels";
+import { isHostKeyStatus, relativeTime, remediationStatusLabel, severityLabel, statusLabel } from "../lib/labels";
 import { scanDelta } from "../lib/scanDelta";
 import { ScanHistoryPanel } from "../components/ScanHistoryPanel";
 import { RemediationCell } from "../components/RemediationCell";
 import { CveDetailModal } from "../components/CveDetailModal";
 import { OtherPortPins } from "../components/OtherPortPins";
+import { impactBadgeLabel, impactTone } from "../lib/impact";
 import { Modal } from "../components/Modal";
 import { Icon } from "../components/Icon";
 import {
@@ -83,6 +84,8 @@ export interface MachineDrillDownViewProps {
    * allowed, such as demo mode, which hides the action.
    */
   onForgetHostKey?: () => Promise<void>;
+  /** False when the last scan ran against an unreachable advisory source. */
+  lastScanSourcesOk?: boolean;
   /** Port of the pin above; null when there is none (Req 17.11). */
   hostKeyPort?: number | null;
   /**
@@ -158,6 +161,7 @@ export function MachineDrillDownView({
   hostKeyFingerprint = null,
   hostKeyType = null,
   onForgetHostKey,
+  lastScanSourcesOk,
   hostKeyPort = null,
   onListHostKeys,
   onForgetHostKeyAt,
@@ -168,6 +172,24 @@ export function MachineDrillDownView({
   onLoadScanChanges,
 }: MachineDrillDownViewProps) {
   const delta = scanDelta({ lastScanNew, lastScanResolved, lastScanBaseline });
+  // What an empty list actually means for this host. "No CVEs identified" is a
+  // claim about the host, and it was made for a host nobody had scanned, and
+  // for one whose every scan had failed (Req 10.10, 1.4, 1.5, 1.7).
+  const scanned = lastScanStatus === "success";
+  const emptyTitle =
+    lastScanStatus === undefined || lastScanStatus === "never_scanned"
+      ? "This host has not been scanned yet."
+      : scanned
+        ? "No CVE findings recorded for this machine."
+        : `The last scan did not complete: ${statusLabel(lastScanStatus).toLowerCase()}.`;
+  const emptyDetail =
+    lastScanStatus === undefined || lastScanStatus === "never_scanned"
+      ? "Nothing has been assessed on it, which is not the same as finding nothing. Run a scan to see where it stands."
+      : scanned
+        ? lastScanSourcesOk === false
+          ? "The last scan ran against an advisory source that did not answer, so this is an undercount rather than a clean result. Scan again once the source is reachable."
+          : "The last scan completed and matched nothing. If an advisory source had been unreachable, the fleet view would show a partial-results warning for this host."
+        : "The findings shown here are whatever the last successful scan recorded; a failed scan neither adds nor clears any. Fix the cause and scan again.";
   const [newOnly, setNewOnly] = useState(false);
   const [confirmForget, setConfirmForget] = useState(false);
   const [forgetting, setForgetting] = useState(false);
@@ -720,7 +742,7 @@ export function MachineDrillDownView({
       )}
 
       {findings.length === 0 ? (
-        <p>No CVEs identified for this machine.</p>
+        <EmptyState title={emptyTitle}>{emptyDetail}</EmptyState>
       ) : (
         <>
           {patchCounts.newerRelease.size > 0 && (
@@ -1051,21 +1073,28 @@ export function MachineDrillDownView({
                           </div>
                         </div>
                       ) : !isLeaf ? (
-                        <div className="warning-card-high" style={{ padding: "0.6rem 0.8rem", margin: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--impact-high)", marginBottom: "0.3rem" }}>
-                            <Icon name="x-circle" /> HIGH SYSTEM IMPACT — Required by {group.dependedOnBy.length} installed apps:
-                          </div>
-                          <div className="dependency-chips">
-                            {group.dependedOnBy.map((app) => (
-                              <span key={app} className="dependency-chip dependent-app">
-                                {app}
-                              </span>
-                            ))}
-                          </div>
-                          <div style={{ fontSize: "0.74rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
-                            Do not purge. Apply selective package upgrade when patched.
-                          </div>
-                        </div>
+                        (() => {
+                          // The same tier the badge shows, so a "Moderate"
+                          // package cannot carry a "HIGH SYSTEM IMPACT" card.
+                          const tone = impactTone(group.blastRadius)!;
+                          return (
+                            <div className={tone.cardClass} style={{ padding: "0.6rem 0.8rem", margin: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: "0.82rem", color: tone.colorVar, marginBottom: "0.3rem" }}>
+                                <Icon name="x-circle" /> {tone.heading} — required by {group.dependedOnBy.length} installed {group.dependedOnBy.length === 1 ? "app" : "apps"}:
+                              </div>
+                              <div className="dependency-chips">
+                                {group.dependedOnBy.map((app) => (
+                                  <span key={app} className="dependency-chip dependent-app">
+                                    {app}
+                                  </span>
+                                ))}
+                              </div>
+                              <div style={{ fontSize: "0.74rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
+                                {tone.advice}
+                              </div>
+                            </div>
+                          );
+                        })()
                       ) : (
                         <div className="warning-card-low" style={{ padding: "0.6rem 0.8rem", margin: 0 }}>
                           <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--ok-text)", marginBottom: "0.2rem" }}>
@@ -1221,7 +1250,7 @@ export function MachineDrillDownView({
                       return (
                         <Fragment key={pkgName}>
                           <tr>
-                            <td>
+                            <td data-label="Affected package">
                               <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>
                                 <Icon name="package" /> {pkgName}
                               </div>
@@ -1236,7 +1265,7 @@ export function MachineDrillDownView({
                                 </button>
                               )}
                             </td>
-                            <td>
+                            <td data-label="Vulnerabilities">
                               <button
                                 type="button"
                                 className="badge badge-platform"
@@ -1248,27 +1277,22 @@ export function MachineDrillDownView({
                                 {group.findings.length === 1 ? "CVE" : "CVEs"} ↗
                               </button>
                             </td>
-                            <td>
+                            <td data-label="Max severity">
                               <span className={`badge badge-${group.highestSeverity}`}>
                                 {severityLabel(group.highestSeverity)}
                               </span>
                             </td>
-                            <td>
+                            <td data-label="Top score">
                               <span className="cvss-score-pill">{group.maxScore}</span>
                             </td>
-                            <td>
+                            <td data-label="Blast radius">
                               <span
                                 className={
-                                  group.blastRadius === "high"
-                                    ? "badge-blast-high"
-                                    : group.blastRadius === "medium"
-                                    ? "badge-blast-medium"
-                                    : group.blastRadius === "low"
-                                    ? "badge-blast-low"
-                                    : "badge-blast-unknown"
+                                  impactTone(group.blastRadius)?.badgeClass ??
+                                  "badge-blast-unknown"
                                 }
                                 title={
-                                  group.blastRadius === null
+                                  impactTone(group.blastRadius) === null
                                     ? "No inventory has been collected for this host, so nothing is known about what depends on this package."
                                     : undefined
                                 }
@@ -1276,16 +1300,15 @@ export function MachineDrillDownView({
                                 {/* Null is its own state, not the bottom of the
                                     scale: "Low (0 apps)" would answer a
                                     question nobody asked (Req 10.10). */}
-                                {group.blastRadius === "high"
-                                  ? `High (${group.dependedOnBy.length} apps)`
-                                  : group.blastRadius === "medium"
-                                  ? `Moderate (${group.dependedOnBy.length} apps)`
-                                  : group.blastRadius === "low"
-                                  ? `Low (${group.dependedOnBy.length} apps)`
-                                  : "Not assessed"}
+                                {(() => {
+                                  const tone = impactTone(group.blastRadius);
+                                  return tone === null
+                                    ? "Not assessed"
+                                    : impactBadgeLabel(tone, group.dependedOnBy.length);
+                                })()}
                               </span>
                             </td>
-                            <td>
+                            <td data-label="Remediation">
                               {hasFix ? (
                                 <button
                                   type="button"

@@ -49,6 +49,7 @@ from app.scanner.exceptions import (
     AuthError,
     HostKeyMismatchError,
     HostKeyUnknownError,
+    InventoryUnavailableError,
 )
 from app.scanner.matcher import (
     Finding,
@@ -229,7 +230,8 @@ class ScannerEngine:
         """Run ``_scan_one`` for a target, isolating recoverable failures.
 
         Maps ``ConnectionError`` -> ``CONNECTION_FAILURE`` (Req 1.4),
-        ``AuthError`` -> ``AUTH_FAILURE`` (Req 1.5, 9.4), and a refused SSH
+        ``AuthError`` -> ``AUTH_FAILURE`` (Req 1.5, 9.4), an unreadable package
+        inventory -> ``INVENTORY_UNAVAILABLE`` (Req 1.7), and a refused SSH
         host key -> ``HOST_KEY_MISMATCH`` / ``HOST_KEY_UNKNOWN`` (Req 17.3,
         17.5); records the status
         and returns the outcome rather than propagating, so one bad key or
@@ -255,6 +257,12 @@ class ScannerEngine:
             scan = MachineScan(
                 machine_id=target.id,
                 status=ScanStatus.HOST_KEY_UNKNOWN,
+                error=exc,
+            )
+        except InventoryUnavailableError as exc:
+            scan = MachineScan(
+                machine_id=target.id,
+                status=ScanStatus.INVENTORY_UNAVAILABLE,
                 error=exc,
             )
         except ConnectionError as exc:

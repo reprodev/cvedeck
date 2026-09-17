@@ -356,6 +356,7 @@ The `CveFinding.dependency_path_id` → `DependencyPath` relationship, plus `Dep
 |-----------|----------|-------------|
 | Target unreachable | Record `CONNECTION_FAILURE` for that target, continue batch | 1.4 |
 | Target auth fails | Record `AUTH_FAILURE` for that target, continue batch | 1.5 |
+| Target authenticates but no package inventory can be read | Record `INVENTORY_UNAVAILABLE` with the reason, save nothing, resolve nothing, continue batch | 1.7 |
 | Target presents a key other than its pinned SSH host key | Refuse before authenticating, record `HOST_KEY_MISMATCH`, continue batch | 17.3 |
 | Target has no pinned key under the `strict` policy | Refuse before authenticating, record `HOST_KEY_UNKNOWN`, continue batch | 17.5 |
 | NVD or OSV unreachable | Record `DATA_SOURCE_UNAVAILABLE`, complete matching against the reachable source | 2.5 |
@@ -738,6 +739,12 @@ could say what changed (Req 18).
   which writes a `scan_runs` row and, for a compared run, one
   `scan_finding_changes` row per new or resolved finding. The change rows are
   snapshots, because a resolved finding no longer exists (Req 18.1, 18.2).
+- **Why a run failed.** `MachineScan.message` already carried the reason to the
+  scan response and was then dropped, so the history said only "Failed".
+  `record_scan_run` stores it as `scan_runs.error_detail`, truncated to 500
+  characters and cleared on success, and the panel prints it under the status
+  badge (Req 18.10). It is the collector's own message, which names hosts and
+  ports but no credential.
 - **Trust rules.** The engine works out which sources failed *before* saving,
   and a partial scan saves with `suppress_resolved`: findings it reported are
   rewritten, findings it did not are kept, nothing is resolved, and the run's

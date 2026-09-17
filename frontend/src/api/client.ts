@@ -227,6 +227,7 @@ interface ScanRunWire {
   new_count: number | null;
   resolved_count: number | null;
   baseline: boolean;
+  error_detail?: string | null;
 }
 
 /** Wire shape of GET /api/machines/{id}/scans/{run_id}/changes. */
@@ -644,6 +645,7 @@ export class CveScannerApiClient {
       newCount: run.new_count,
       resolvedCount: run.resolved_count,
       baseline: run.baseline,
+      errorDetail: run.error_detail ?? null,
     }));
   }
 

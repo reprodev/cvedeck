@@ -22,6 +22,8 @@ import {
 } from "../lib/remediation";
 import { severityLabel } from "../lib/labels";
 import { Icon } from "./Icon";
+import type { IconName } from "./Icon";
+import { impactTone } from "../lib/impact";
 
 export interface CveDetailModalProps {
   finding: CveFinding;
@@ -68,8 +70,57 @@ export function CveDetailModal({
   // list says nothing about the host, and this dialog acts on it: it offers a
   // purge command under "you can safely remove it" (Req 10.10).
   const dependentsKnown = finding.blastRadius !== null;
+  const tone = impactTone(finding.blastRadius);
   const isLeaf = dependentsKnown && dependedOnBy.length === 0;
   const tooling = getDistroTooling(platform, osName, finding.packageIdentifier);
+
+  // What can be done where no package update exists, in the order to try them.
+  // Only the options that apply are built, so nothing numbers around a gap.
+  const mitigations: {
+    key: string;
+    title: string;
+    detail: string;
+    command: string;
+    buttonClass: string;
+    buttonLabel: string;
+    icon: IconName;
+  }[] = [
+    ...(isLeaf
+      ? [
+          {
+            key: "purge-cmd",
+            title: "Purge if unused",
+            detail: "Remove the package if this host does not need it",
+            command: tooling.purgeCmd(pkgName),
+            buttonClass: "copy-purge-btn",
+            buttonLabel: "Copy purge",
+            icon: "trash" as IconName,
+          },
+        ]
+      : []),
+    ...(tooling.isUbuntu
+      ? [
+          {
+            key: "pro-cmd",
+            title: "Ubuntu Pro (ESM)",
+            detail: "Check for extended security backports",
+            command: "sudo pro status && sudo pro enable esm-apps",
+            buttonClass: "copy-cmd-btn",
+            buttonLabel: "Check Pro",
+            icon: "copy" as IconName,
+          },
+        ]
+      : []),
+    {
+      key: "dist-cmd",
+      title: tooling.isUbuntu ? "OS distribution upgrade" : "Check distro updates",
+      detail: "Check for upstream distribution updates",
+      command: tooling.checkUpdateCmd(pkgName),
+      buttonClass: "copy-cmd-btn",
+      buttonLabel: "Copy check command",
+      icon: "copy" as IconName,
+    },
+  ];
 
   const nvdUrl = `https://nvd.nist.gov/vuln/detail/${cveId}`;
   const ubuntuUrl = `https://ubuntu.com/security/${cveId}`;
@@ -151,13 +202,20 @@ export function CveDetailModal({
                   removing it.
                 </p>
               </div>
-            ) : !isLeaf ? (
-              <div className="warning-card-high">
-                <div className="warning-card-title-high">
-                  <span><Icon name="x-circle" /> DO NOT REMOVE THIS PACKAGE (High System Impact)</span>
+            ) : !isLeaf && tone !== null ? (
+              <div className={tone.cardClass}>
+                {/* The tier the badge shows, not "high" for any dependent at
+                    all: three dependents is Moderate in both places. */}
+                <div className="warning-card-title-high" style={{ color: tone.colorVar }}>
+                  <span><Icon name="x-circle" /> {tone.heading}</span>
                 </div>
                 <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--text)", lineHeight: 1.45 }}>
-                  This component is actively required by <strong>{dependedOnBy.length} installed applications</strong> on this machine:
+                  This component is required by{" "}
+                  <strong>
+                    {dependedOnBy.length} installed{" "}
+                    {dependedOnBy.length === 1 ? "application" : "applications"}
+                  </strong>{" "}
+                  on this machine:
                 </p>
                 <div className="dependency-chips" style={{ marginTop: "0.35rem" }}>
                   {dependedOnBy.map((app) => (
@@ -167,7 +225,7 @@ export function CveDetailModal({
                   ))}
                 </div>
                 <p style={{ margin: "0.35rem 0 0", fontSize: "0.78rem", color: "var(--text-muted)" }}>
-                  Removing or purging this package will break dependent applications. Wait for an official upstream patch or upgrade the host OS.
+                  {tone.advice}
                 </p>
               </div>
             ) : (
@@ -222,51 +280,31 @@ export function CveDetailModal({
                     </div>
                   )}
 
-                  {isLeaf && (
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", background: "var(--surface-muted)", padding: "0.5rem 0.75rem", borderRadius: "6px" }}>
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>1. Purge If Unused</div>
-                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Remove package if not required</div>
-                      </div>
-                      <button
-                        type="button"
-                        className="copy-purge-btn"
-                        onClick={() => copyAction(tooling.purgeCmd(pkgName), "purge-cmd")}
-                      >
-                        {copiedAction === "purge-cmd" ? <><Icon name="check" /> Copied!</> : <><Icon name="trash" /> Copy Purge</>}
-                      </button>
-                    </div>
-                  )}
-
-                  {tooling.isUbuntu && (
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", background: "var(--surface-muted)", padding: "0.5rem 0.75rem", borderRadius: "6px" }}>
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>2. Ubuntu Pro (ESM)</div>
-                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Check for extended security backports</div>
-                      </div>
-                      <button
-                        type="button"
-                        className="copy-cmd-btn"
-                        onClick={() => copyAction("sudo pro status && sudo pro enable esm-apps", "pro-cmd")}
-                      >
-                        {copiedAction === "pro-cmd" ? <><Icon name="check" /> Copied!</> : <><Icon name="copy" /> Check Pro</>}
-                      </button>
-                    </div>
-                  )}
-
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", background: "var(--surface-muted)", padding: "0.5rem 0.75rem", borderRadius: "6px" }}>
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>{tooling.isUbuntu ? "3. OS Distribution Upgrade" : "2. Check Distro Updates"}</div>
-                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Check for upstream distribution updates</div>
-                    </div>
-                    <button
-                      type="button"
-                      className="copy-cmd-btn"
-                      onClick={() => copyAction(tooling.checkUpdateCmd(pkgName), "dist-cmd")}
-                    >
-                      {copiedAction === "dist-cmd" ? <><Icon name="check" /> Copied!</> : <><Icon name="copy" /> {tooling.checkUpdateCmd}</>}
-                    </button>
-                  </div>
+                  {/* An ordered list, so the numbers come from what actually
+                      rendered. Hardcoded "1."/"2."/"3." skipped a number
+                      whenever the purge option was hidden, which is every
+                      package something else depends on. */}
+                  <ol className="mitigation-list">
+                    {mitigations.map((option) => (
+                      <li key={option.key}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>{option.title}</div>
+                          <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{option.detail}</div>
+                        </div>
+                        <button
+                          type="button"
+                          className={option.buttonClass}
+                          onClick={() => copyAction(option.command, option.key)}
+                        >
+                          {copiedAction === option.key ? (
+                            <><Icon name="check" /> Copied!</>
+                          ) : (
+                            <><Icon name={option.icon} /> {option.buttonLabel}</>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
               )}
             </div>

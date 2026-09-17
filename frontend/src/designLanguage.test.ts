@@ -67,6 +67,31 @@ describe("design language", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("labels every table cell that reflows into a card", () => {
+    // At phone width `.table-container` tables become cards: the header row is
+    // visually hidden and each cell prints `attr(data-label)` instead. A cell
+    // without one renders as an unlabelled value under no heading at all.
+    const offenders: string[] = [];
+    for (const [path, text] of Object.entries(sources)) {
+      if (!text.includes("table-container")) continue;
+      // Body cells only: `<td` inside a row, not the `<th>` header cells.
+      const cells = text.match(/<td(\s[^>]*)?>/g) ?? [];
+      for (const cell of cells) {
+        // `host-col` and `select-col` are exempt in the stylesheet itself: the
+        // hostname is the card's title and the checkbox needs no label, so both
+        // have `::before { display: none }`. A cell spanning the row is the
+        // expanded drawer, which carries its own heading.
+        const exempt =
+          /className="(host-col|select-col)"/.test(cell) || cell.includes("colSpan");
+        if (!cell.includes("data-label") && !exempt) {
+          offenders.push(`${path} ${cell}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
   it("renders no emoji", () => {
     const offenders: string[] = [];
     for (const [path, text] of Object.entries(sources)) {

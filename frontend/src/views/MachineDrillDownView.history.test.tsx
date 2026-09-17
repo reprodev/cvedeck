@@ -13,9 +13,9 @@ const findings = [
 ];
 
 const runs: ScanRun[] = [
-  { runId: "r3", scannedAt: "2026-09-15T10:00:00Z", status: "success", sourcesOk: false, findingCount: 2, newCount: 1, resolvedCount: null, baseline: false },
-  { runId: "r2", scannedAt: "2026-09-14T10:00:00Z", status: "connection_failure", sourcesOk: true, findingCount: 0, newCount: null, resolvedCount: null, baseline: false },
-  { runId: "r1", scannedAt: "2026-09-10T10:00:00Z", status: "success", sourcesOk: true, findingCount: 1, newCount: null, resolvedCount: null, baseline: true },
+  { runId: "r3", scannedAt: "2026-09-15T10:00:00Z", status: "success", sourcesOk: false, findingCount: 2, newCount: 1, resolvedCount: null, baseline: false, errorDetail: null },
+  { runId: "r2", scannedAt: "2026-09-14T10:00:00Z", status: "connection_failure", sourcesOk: true, findingCount: 0, newCount: null, resolvedCount: null, baseline: false, errorDetail: "could not connect to web-01.lan:22" },
+  { runId: "r1", scannedAt: "2026-09-10T10:00:00Z", status: "success", sourcesOk: true, findingCount: 1, newCount: null, resolvedCount: null, baseline: true, errorDetail: null },
 ];
 
 const changes: FindingChangeRow[] = [
@@ -84,12 +84,39 @@ describe("scan history panel", () => {
     );
 
     await user.click(screen.getByText("Scan history"));
-    await user.click(await screen.findByRole("button", { name: "Show changes" }));
+    // Each toggle names its own row, so several rows' buttons are tellable
+    // apart by a screen reader.
+    await user.click(await screen.findByRole("button", { name: /^Show changes for the scan/ }));
 
     expect(onLoadScanChanges).toHaveBeenCalledWith("r3");
     const resolved = (await screen.findByText("CVE-2026-0009")).closest("li")!;
     expect(resolved).toHaveAttribute("data-change", "resolved");
     expect(resolved).toHaveTextContent("Cleared by this scan; its remediation record is still In Progress.");
+  });
+});
+
+describe("why a run failed (Req 18.10)", () => {
+  it("shows the reason beside the failed status, and none for a success", async () => {
+    const user = userEvent.setup();
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={findings}
+        onLoadScanRuns={vi.fn().mockResolvedValue(runs)}
+        onLoadScanChanges={vi.fn().mockResolvedValue(changes)}
+      />,
+    );
+
+    await user.click(screen.getByText("Scan history"));
+
+    // "Could not connect" alone does not say which host or port refused.
+    expect(
+      await screen.findByText("could not connect to web-01.lan:22"),
+    ).toBeInTheDocument();
+    const failedRow = screen.getByText("Could not connect").closest("tr")!;
+    const successRow = screen.getAllByText("Success")[0].closest("tr")!;
+    expect(within(failedRow as HTMLElement).getByText(/could not connect to/)).toBeInTheDocument();
+    expect(within(successRow as HTMLElement).queryByText(/could not connect to/)).toBeNull();
   });
 });
 
@@ -103,6 +130,7 @@ describe("more runs than a page", () => {
     newCount: 0,
     resolvedCount: 0,
     baseline: false,
+    errorDetail: null,
   }));
 
   it("asks for more only when a full page came back (Req 18.7)", async () => {

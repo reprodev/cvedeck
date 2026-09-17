@@ -42,6 +42,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 4. IF the Scanner_Engine cannot establish a connection to a Target_Machine, THEN THE Scanner_Engine SHALL record a connection failure status for that Target_Machine and continue scanning remaining Target_Machines.
 5. IF authentication to a Target_Machine fails, THEN THE Scanner_Engine SHALL record an authentication failure status for that Target_Machine.
 6. WHEN a Scan completes for a Target_Machine, THE Scanner_Engine SHALL persist the collected Inventory to the Local_Database.
+7. IF a Target_Machine authenticates but no package inventory can be read from it — every supported package manager failing, or returning nothing that parses as a package — THEN THE Scanner_Engine SHALL record the Scan as an inventory failure carrying the reason, and SHALL NOT persist an empty Inventory, report the Scan as successful, or treat findings from the previous Scan as resolved, since a host that could not be inventoried is not a host with nothing installed.
 
 ### Requirement 2: CVE Matching from Public Data Sources
 
@@ -457,3 +458,8 @@ lists by hand.
    Online_Database like other scan data (extends Req 5).
 9. THE system SHALL NOT change a remediation record because a scan resolved its
    finding (extends Req 4).
+10. WHEN a Scan of a Target_Machine does not succeed, THE system SHALL keep the
+    reason with that run and show it in the machine's scan history, bounded in
+    length and carrying no credential, so that a failed run says whether the
+    host was unreachable, rejected the credentials, presented a different host
+    key, or could not be inventoried, rather than only that it failed.

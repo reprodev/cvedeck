@@ -22,6 +22,7 @@ import re
 
 import io
 import socket
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Protocol
 
@@ -31,7 +32,7 @@ import winrm
 from app.enums import Platform
 from app.models import Credentials, Inventory, OsInfo, Package, TargetMachine
 
-from .exceptions import AuthError
+from .exceptions import AuthError, InventoryUnavailableError
 from .host_keys import POLICY_TOFU, HostKeyStore, connect_pinned
 from .releases import UBUNTU_CODENAMES, ubuntu_ecosystem
 
@@ -241,7 +242,7 @@ class LinuxCollector:
             context_output = _run_ssh_command(
                 client, _LINUX_CONTEXT_CMD, timeout=self._command_timeout
             )
-            packages_output = _run_ssh_command(
+            packages = _run_ssh_command_detailed(
                 client, _LINUX_PACKAGES_CMD, timeout=self._command_timeout
             )
         finally:
@@ -249,26 +250,78 @@ class LinuxCollector:
 
         os_release, kernel_version, reboot_required = _split_context(context_output)
         os_info, eco = _parse_os_release(os_release)
+        parsed = _parse_linux_packages(packages.stdout, default_ecosystem=eco)
+        if not parsed:
+            # Every arm of the package command failed, or none of its output
+            # parsed. Reporting that as an empty inventory would delete this
+            # host's findings and call them resolved (Req 1.7).
+            raise InventoryUnavailableError(
+                target.hostname, detail=packages.failure_detail()
+            )
         return Inventory(
             machine_id=target.id,
             os_info=os_info,
-            packages=_parse_linux_packages(packages_output, default_ecosystem=eco),
+            packages=parsed,
             kernel_version=kernel_version,
             reboot_required=reboot_required,
             collected_at=datetime.now(timezone.utc),
         )
 
 
+#: How much of a command's stderr is kept for a failure message. Enough to
+#: carry "dpkg: error: dpkg frontend lock is locked by another process", short
+#: enough that a chatty host cannot fill the scan-run row it ends up in.
+_STDERR_DETAIL_LIMIT = 300
+
+
+@dataclass(frozen=True)
+class _CommandResult:
+    """One remote command's output, with what it said about failing.
+
+    ``exit_status`` is ``None`` when the channel could not report one, which is
+    not evidence of success -- hence the empty-inventory check stands on its own
+    rather than on this field.
+    """
+
+    stdout: str
+    stderr: str
+    exit_status: int | None
+
+    def failure_detail(self) -> str | None:
+        """A short reason for a caller to show a person, or ``None``."""
+        first_line = next(
+            (line.strip() for line in self.stderr.splitlines() if line.strip()), ""
+        )
+        detail = first_line[:_STDERR_DETAIL_LIMIT]
+        if self.exit_status not in (None, 0):
+            status = f"the package command exited {self.exit_status}"
+            return f"{status} ({detail})" if detail else status
+        return detail or None
+
+
 def _run_ssh_command(client: "paramiko.SSHClient", command: str, timeout: float = _COMMAND_TIMEOUT) -> str:
     """Execute a command over SSH and return its decoded stdout."""
+    return _run_ssh_command_detailed(client, command, timeout=timeout).stdout
+
+
+def _run_ssh_command_detailed(
+    client: "paramiko.SSHClient", command: str, timeout: float = _COMMAND_TIMEOUT
+) -> _CommandResult:
+    """Execute a command over SSH and return stdout, stderr and exit status.
+
+    The exit status is read through ``getattr`` because it lives on the
+    channel behind the stdout file, which not every client object exposes.
+    """
     try:
-        _stdin, stdout, _stderr = client.exec_command(command, timeout=timeout)
+        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
         raw = stdout.read()
+        raw_err = stderr.read() if stderr is not None else b""
+        channel = getattr(stdout, "channel", None)
+        recv_exit_status = getattr(channel, "recv_exit_status", None)
+        exit_status = recv_exit_status() if callable(recv_exit_status) else None
     except (paramiko.SSHException, socket.error, OSError) as exc:
         raise ConnectionError(f"command failed over SSH: {command!r}") from exc
-    if isinstance(raw, bytes):
-        return raw.decode("utf-8", errors="replace")
-    return str(raw)
+    return _CommandResult(_decode(raw), _decode(raw_err), exit_status)
 
 
 def _split_context(output: str) -> tuple[str, str | None, bool | None]:
@@ -446,6 +499,14 @@ def _parse_linux_packages(
 
         if not name or not version:
             continue
+        # The whitespace fallback above is permissive enough to read a shell
+        # error as a package: "bash: dpkg-query: command not found" parses to
+        # name "bash:", version "dpkg-query:". Every real package version from
+        # dpkg, rpm, apk and pacman contains a digit, and a scan is better off
+        # finding nothing here -- which is now refused (Req 1.7) -- than
+        # matching advisories against a line of stderr.
+        if not any(char.isdigit() for char in version):
+            continue
         dependencies = _parse_dependencies(deps_str)
         packages.append(
             Package(
@@ -536,10 +597,16 @@ class WindowsCollector:
         os_output = _run_ps(session, _WINDOWS_OS_PS, target.hostname)
         packages_output = _run_ps(session, _WINDOWS_PACKAGES_PS, target.hostname)
 
+        packages = _parse_windows_packages(packages_output)
+        if not packages:
+            # Same rule as the Linux collector: nothing readable is not the
+            # same claim as nothing installed (Req 1.7).
+            raise InventoryUnavailableError(target.hostname)
+
         return Inventory(
             machine_id=target.id,
             os_info=_parse_windows_os(os_output),
-            packages=_parse_windows_packages(packages_output),
+            packages=packages,
             collected_at=datetime.now(timezone.utc),
         )
 

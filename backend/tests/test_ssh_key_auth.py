@@ -115,7 +115,9 @@ class _FakeSshClient:
         self.connect_kwargs = kwargs
 
     def exec_command(self, command, timeout=None):
-        return None, io.BytesIO(b""), io.BytesIO(b"")
+        # One package: an empty inventory is refused (Req 1.7), and these
+        # tests are about which credential reaches connect().
+        return None, io.BytesIO(b"curl\t7.88.1\n"), io.BytesIO(b"")
 
     def close(self):
         self.closed = True

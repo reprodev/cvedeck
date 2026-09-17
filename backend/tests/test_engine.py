@@ -23,7 +23,7 @@ from app.data.repository import FindingInput
 from app.enums import Platform, ScanStatus, Severity, SourceStatus
 from app.models import Credentials, Inventory, OsInfo, Package, TargetMachine
 from app.scanner.engine import ScannerEngine
-from app.scanner.exceptions import AuthError
+from app.scanner.exceptions import AuthError, InventoryUnavailableError
 from app.scanner.matcher import Finding, MatchResult
 
 
@@ -226,6 +226,36 @@ def test_auth_error_records_auth_failure():
     scan = result.machine_scans[0]
     assert scan.status is ScanStatus.AUTH_FAILURE
     assert isinstance(scan.error, AuthError)
+
+
+def test_an_unreadable_inventory_fails_the_scan_and_resolves_nothing():
+    """Validates Req 1.7.
+
+    The failure mode this guards is not a crash: an empty inventory was saved
+    as a successful scan with nothing found, which deleted every finding the
+    previous scan recorded and reported them resolved.
+    """
+    repo = FakeRepository()
+    engine = ScannerEngine(
+        repository=repo,
+        credentials_for=_creds,
+        matcher=FakeMatcher([_finding("m1", "CVE-2024-0001")]),
+        collector_factory=lambda platform: FakeCollector(
+            error=InventoryUnavailableError("host", detail="the package command exited 127")
+        ),
+    )
+    target = TargetMachine(id="m1", hostname="host", platform=Platform.LINUX)
+
+    scan = engine.scan([target]).machine_scans[0]
+
+    assert scan.status is ScanStatus.INVENTORY_UNAVAILABLE
+    assert isinstance(scan.error, InventoryUnavailableError)
+    assert "127" in str(scan.error)
+    assert scan.inventory is None
+    # Nothing written: no empty inventory, and no finding write that would have
+    # taken the previous scan's findings with it.
+    assert repo.saved_inventories == []
+    assert repo.saved_findings == {}
 
 
 def test_failure_never_aborts_the_batch():

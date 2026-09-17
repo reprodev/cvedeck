@@ -198,6 +198,8 @@ class ScanRunOut(BaseModel):
     new_count: int | None = None
     resolved_count: int | None = None
     baseline: bool = False
+    #: Why a failed run failed (Req 18.10); ``None`` when it succeeded.
+    error_detail: str | None = None
 
 
 class FindingChangeOut(BaseModel):

@@ -284,6 +284,9 @@ class DeploymentScannerEngine(ScannerEngine):
             scanned_at=scan.diff.scanned_at if scan.diff is not None else now,
             diff=scan.diff,
             keep=config.scan_history_limit(),
+            # The same text the scan response shows, kept with the run so the
+            # history can still say why a week later (Req 18.10).
+            error_detail=scan.message,
         )
 
 

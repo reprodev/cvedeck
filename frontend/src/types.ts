@@ -8,6 +8,13 @@ export type Platform = "linux" | "windows";
 /** Severity band derived from a CVE's CVSS score. */
 export type Severity = "critical" | "high" | "medium" | "low";
 
+/**
+ * How much of the host breaks if a package goes: 10 or more dependents is
+ * high, 3 or more moderate, below that low. Null, never a tier, when no
+ * dependency graph was built (Req 10.10).
+ */
+export type BlastRadius = "low" | "medium" | "high";
+
 /** Ordered list of all severity levels (highest to lowest). */
 export const SEVERITIES: readonly Severity[] = [
   "critical",
@@ -121,7 +128,7 @@ export interface CveFinding {
    * as unassessed, not as low (Req 10.10). Same rule as the enrichment fields
    * below: an unanswered question is not a reassuring answer.
    */
-  blastRadius?: "low" | "medium" | "high" | null;
+  blastRadius?: BlastRadius | null;
 
   // --- Threat-intel enrichment ---------------------------------------------
   // Every field here is nullable, and null means "not enriched" -- NOT "safe".
@@ -177,6 +184,8 @@ export interface ScanRun {
   /** Null when not assessed: a failed scan, a baseline, or a partial scan. */
   resolvedCount: number | null;
   baseline: boolean;
+  /** Why a failed run failed; null when it succeeded (Req 18.10). */
+  errorDetail: string | null;
 }
 
 /** A finding that appeared or cleared in one scan run (Req 18.2). */

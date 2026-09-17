@@ -36,6 +36,11 @@ class ScanStatus(str, Enum):
     every freshly enrolled host render as a red failure before anything had
     been attempted -- the distinction Req 10.4 exists to preserve.
 
+    ``INVENTORY_UNAVAILABLE`` is a host that authenticated but whose package
+    inventory could not be read (Req 1.7). It is not a success with nothing
+    found: an empty inventory would delete every finding recorded by the last
+    scan and report them resolved.
+
     ``HOST_KEY_MISMATCH`` and ``HOST_KEY_UNKNOWN`` are refusals, not failures
     to connect (Req 17.3, 17.5): the host answered, with a key other than the
     pinned one, or with a key when policy requires one to be pinned already.
@@ -45,6 +50,7 @@ class ScanStatus(str, Enum):
     SUCCESS = "success"
     CONNECTION_FAILURE = "connection_failure"
     AUTH_FAILURE = "auth_failure"
+    INVENTORY_UNAVAILABLE = "inventory_unavailable"
     HOST_KEY_MISMATCH = "host_key_mismatch"
     HOST_KEY_UNKNOWN = "host_key_unknown"
 
