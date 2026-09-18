@@ -29,7 +29,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import config
-from ..data.repository import FindingKey, MachineListEntry, Repository, finding_key
+from ..data.repository import (
+    FindingKey,
+    MachineListEntry,
+    Repository,
+    finding_key,
+    severity_order,
+)
 from ..data.schema import (
     CveFinding,
     RemediationRecord,
@@ -83,6 +89,7 @@ def _to_machine_summary(
         last_scan_sources_ok=machine.last_scan_sources_ok,
         cve_counts=SeverityCounts(
             critical=counts.critical,
+            unscored=counts.unscored,
             high=counts.high,
             medium=counts.medium,
             low=counts.low,
@@ -434,7 +441,14 @@ def list_cves(
     stmt = select(CveFinding)
     if severity is not None:
         stmt = stmt.where(CveFinding.severity == severity)
-    stmt = stmt.order_by(CveFinding.cvss_score.desc(), CveFinding.cve_id, CveFinding.id)
+    # Severity rank first, so the ordering is the same on SQLite and
+    # PostgreSQL and an unscored finding is not buried (Req 10.11, 10.12).
+    stmt = stmt.order_by(
+        severity_order(CveFinding.severity),
+        CveFinding.cvss_score.desc().nullsfirst(),
+        CveFinding.cve_id,
+        CveFinding.id,
+    )
     total = session.execute(
         select(func.count()).select_from(stmt.order_by(None).subquery())
     ).scalar_one()

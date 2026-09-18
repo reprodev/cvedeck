@@ -214,14 +214,13 @@ class SyncService:
 | GET | `/api/auth/tokens` | List API tokens (never their secrets) | 16.7 |
 | POST | `/api/auth/tokens` | Create an API token; the secret is shown once | 16.7 |
 | DELETE | `/api/auth/tokens/{token_id}` | Revoke an API token | 16.7 |
+| GET | `/api/health` | Liveness probe for container orchestrators and reverse proxies | operational |
 
 Only `/api/cves` is paged. The others answer for one machine, one fleet roster
 or one account, which are bounded by how many hosts a person enrolled; the
 fleet-wide finding list is the one whose size is a multiple of both. Adding a
 cap to a route the dashboard reads would silently truncate a view, which is the
 failure this project spends most of its effort avoiding.
-| POST | `/api/sync` | Manually trigger synchronization | 5.2 |
-| GET | `/api/health` | Liveness probe for container orchestrators and reverse proxies | operational |
 
 All responses are Pydantic models serialized to JSON (Req 6.5). Unknown machine ids return HTTP 404 (Req 6.4).
 
@@ -419,6 +418,8 @@ A dual approach is used. Property-based tests (minimum 100 iterations each, tagg
 
 *For any* CVSS score in the range 0.0 to 10.0, `derive_severity` SHALL return exactly one Severity level matching the documented CVSS band boundaries (0.0–3.9 Low, 4.0–6.9 Medium, 7.0–8.9 High, 9.0–10.0 Critical).
 
+`derive_severity`'s domain is scores only. Unscored lies outside it — it is the absence of a score rather than a region of the range — so it is resolved by `resolve_severity`, not produced here. See Property 15.
+
 **Validates: Requirements 2.4**
 
 ### Property 5: Graceful degradation on unavailable data sources
@@ -429,7 +430,7 @@ A dual approach is used. Property-based tests (minimum 100 iterations each, tagg
 
 ### Property 6: Severity-grouped counts are accurate
 
-*For any* set of findings for a machine, the severity-grouped counts SHALL equal the actual tally of findings per severity level, and the sum of the four counts SHALL equal the total number of findings.
+*For any* set of findings for a machine, the severity-grouped counts SHALL equal the actual tally of findings per severity level, and the sum of the five counts SHALL equal the total number of findings. A finding falls in exactly one band, Unscored included, so no finding is omitted from the tally or counted twice.
 
 **Validates: Requirements 3.2**
 
@@ -441,9 +442,9 @@ A dual approach is used. Property-based tests (minimum 100 iterations each, tagg
 
 ### Property 8: Finding rendering and serialization completeness
 
-*For any* finding presented in the drill-down view or serialized in an API response, the output SHALL include the CVE identifier, the Severity_Level, and the CVSS_Score.
+*For any* finding presented in the drill-down view or serialized in an API response, the output SHALL include the CVE identifier, the Severity_Level, and the CVSS_Score — the score being an explicit null exactly when the Severity_Level is Unscored, and a number otherwise. The key is always present, so a client is never left to read an absent score as a zero.
 
-**Validates: Requirements 3.5, 6.2**
+**Validates: Requirements 3.5, 6.2, 10.11**
 
 ### Property 9: Remediation persistence reflects last write
 
@@ -484,6 +485,14 @@ A dual approach is used. Property-based tests (minimum 100 iterations each, tagg
 
 ---
 
+
+### Property 15: A finding's score is measured or absent, never substituted
+
+*For any* advisory payload, the parser SHALL return a CVSS_Score only when the payload carries one that parses under its own version's specification; the resulting finding's Severity_Level SHALL equal the payload's qualitative band when it publishes one, SHALL be derived from the score when it publishes a score and no band, and SHALL be Unscored exactly when it publishes neither.
+
+This is the enrichment invariant applied to the field the entire triage ranking is built on. Before 0.8.6 an advisory with no severity data was given a CVSS_Score of 5.0, and a qualitative "HIGH" was given 8.0 — figures no feed published, indistinguishable afterwards from measured ones.
+
+**Validates: Requirements 2.6, 2.7**
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).

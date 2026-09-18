@@ -9,7 +9,6 @@ CVE IDs, CVSS base scores, and package identifiers (Req 2.2, 2.3, 7.1).
 
 from __future__ import annotations
 
-import math
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -18,7 +17,12 @@ import httpx
 
 from app.models import Package
 from app.package_identifier import parse_package_name
-from app.scanner.matcher import RawAdvisory
+from app.enums import SEVERITY_RANK, Severity
+from app.scanner.cvss import (
+    cvss_v3_base_score,
+    cvss_v4_base_score,
+)
+from app.scanner.matcher import RawAdvisory, derive_severity
 from app.scanner.releases import (
     Release,
     host_releases,
@@ -36,91 +40,117 @@ _BATCH_CHUNK_SIZE = 500
 _DEFAULT_POOL_SIZE = 50
 
 
-def _parse_cvss_v3_vector(vector: str) -> float:
-    """Calculate the CVSS v3.x base score from a standard vector string.
+#: Qualitative severity words, longest-distinguishing substring first, mapped
+#: to the band they name. These are what a feed publishes when it has an
+#: opinion but no vector -- several distribution trackers never publish one.
+_QUALITATIVE_BANDS: tuple[tuple[str, Severity], ...] = (
+    ("CRIT", Severity.CRITICAL),
+    ("HIGH", Severity.HIGH),
+    ("MOD", Severity.MEDIUM),
+    ("MED", Severity.MEDIUM),
+    ("LOW", Severity.LOW),
+)
 
-    Parses vector strings such as ``CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H``
-    and implements the official CVSS v3.1 specification formula.
+
+def _qualitative_band(text: object) -> Severity | None:
+    """The band a feed's severity word names, or ``None`` if it names none."""
+    word = str(text or "").upper()
+    for needle, band in _QUALITATIVE_BANDS:
+        if needle in word:
+            return band
+    return None
+
+
+def parse_cvss(vuln: dict[str, Any]) -> tuple[float | None, Severity | None]:
+    """What an OSV record actually says about how bad a vulnerability is.
+
+    Returns the published CVSS score and the published qualitative band, each
+    ``None`` when the record does not carry it. The three shapes that come back
+    are the three that exist in the data (Req 2.6, 2.7):
+
+    - ``(score, None)`` -- a vector or numeric score was published.
+    - ``(None, band)`` -- only a word: "HIGH", "Moderate". The band is real and
+      is passed through; the number is *not* reconstructed from it. This branch
+      used to return 8.0 for "HIGH", a figure no one published and which was
+      then indistinguishable from a measured 8.0.
+    - ``(None, None)`` -- the record says nothing about severity. Previously
+      5.0, which read back as Medium.
+
+    A vector that does not parse is skipped rather than substituted, so a
+    record carrying both an unreadable vector and a usable word still yields
+    the word.
     """
-    if not vector.startswith("CVSS:3."):
-        return 5.0
-
-    try:
-        metrics = dict(part.split(":", 1) for part in vector.split("/") if ":" in part)
-        av_map = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
-        ac_map = {"L": 0.77, "H": 0.44}
-        ui_map = {"N": 0.85, "R": 0.62}
-        scope = metrics.get("S", "U")
-        pr_map = {
-            "N": 0.85,
-            "L": 0.68 if scope == "C" else 0.62,
-            "H": 0.50 if scope == "C" else 0.27,
-        }
-        cia_map = {"H": 0.56, "L": 0.22, "N": 0.0}
-
-        av = av_map.get(metrics.get("AV", "N"), 0.85)
-        ac = ac_map.get(metrics.get("AC", "L"), 0.77)
-        pr = pr_map.get(metrics.get("PR", "N"), 0.85)
-        ui = ui_map.get(metrics.get("UI", "N"), 0.85)
-        c = cia_map.get(metrics.get("C", "N"), 0.0)
-        i = cia_map.get(metrics.get("I", "N"), 0.0)
-        a = cia_map.get(metrics.get("A", "N"), 0.0)
-
-        iss = 1.0 - ((1.0 - c) * (1.0 - i) * (1.0 - a))
-        if iss <= 0:
-            return 0.0
-
-        if scope == "U":
-            impact = 6.42 * iss
-        else:
-            impact = 7.52 * (iss - 0.029) - 3.25 * ((iss - 0.02) ** 15)
-
-        exploitability = 8.22 * av * ac * pr * ui
-        if impact <= 0:
-            return 0.0
-
-        if scope == "U":
-            base = min(impact + exploitability, 10.0)
-        else:
-            base = min(1.08 * (impact + exploitability), 10.0)
-
-        return round(min(10.0, max(0.0, math.ceil(base * 10.0) / 10.0)), 1)
-    except Exception:
-        return 5.0
-
-
-def _parse_cvss_score(vuln: dict[str, Any]) -> float:
-    """Extract or calculate a CVSS numeric score (0.0 to 10.0) from an OSV record."""
-    # 1. Check structured severity vectors
+    # 1. Structured severity entries: a vector, or a bare number.
     severities = vuln.get("severity") or []
     if isinstance(severities, list):
         for sev in severities:
-            if isinstance(sev, dict):
-                score_str = sev.get("score", "")
-                if isinstance(score_str, str) and score_str.startswith("CVSS:3."):
-                    return _parse_cvss_v3_vector(score_str)
-                try:
-                    val = float(score_str)
-                    if 0.0 <= val <= 10.0:
-                        return val
-                except ValueError:
-                    pass
+            if not isinstance(sev, dict):
+                continue
+            score_str = sev.get("score", "")
+            if not isinstance(score_str, str):
+                continue
+            if score_str.startswith("CVSS:4."):
+                parsed = cvss_v4_base_score(score_str)
+                if parsed is not None:
+                    return parsed, None
+                continue
+            if score_str.startswith("CVSS:3."):
+                parsed = cvss_v3_base_score(score_str)
+                if parsed is not None:
+                    return parsed, None
+                continue
+            try:
+                val = float(score_str)
+            except (TypeError, ValueError):
+                continue
+            if 0.0 <= val <= 10.0:
+                return val, None
 
-    # 2. Check database_specific severity string
-    db_spec = vuln.get("database_specific") or {}
+    # 2. A qualitative severity, from the database-specific block or from the
+    #    per-ecosystem block several distribution feeds use instead.
+    db_spec = vuln.get("database_specific")
     if isinstance(db_spec, dict):
-        db_sev = str(db_spec.get("severity", "")).upper()
-        if "CRIT" in db_sev:
-            return 9.5
-        if "HIGH" in db_sev:
-            return 8.0
-        if "MOD" in db_sev or "MED" in db_sev:
-            return 5.5
-        if "LOW" in db_sev:
-            return 2.5
+        band = _qualitative_band(db_spec.get("severity"))
+        if band is not None:
+            return None, band
 
-    # 3. Fallback default
-    return 5.0
+    affected = vuln.get("affected") or []
+    if isinstance(affected, list):
+        for entry in affected:
+            if not isinstance(entry, dict):
+                continue
+            eco_spec = entry.get("ecosystem_specific")
+            if not isinstance(eco_spec, dict):
+                continue
+            band = _qualitative_band(eco_spec.get("severity"))
+            if band is not None:
+                return None, band
+
+    # 3. The record says nothing. That is the answer (Req 2.7).
+    return None, None
+
+
+def _severity_rank(advisory: RawAdvisory) -> tuple[int, float]:
+    """Order two advisories for the same CVE and package, worst first.
+
+    Total, which is the point. The comparison this replaced was
+    ``adv.cvss_score > existing.cvss_score``, and once a score may be absent
+    that raises ``TypeError`` -- which ``Matcher`` classes as a defect rather
+    than an outage and re-raises, so ``ScannerEngine``'s per-target fault
+    isolation would report the host as a connection failure. A single
+    CVSS:4.0-only advisory would have made a reachable host look unreachable.
+
+    Ranks by band first so an unscored advisory is not silently outranked by
+    any record that happens to carry a number (Req 10.11).
+    """
+    band = advisory.severity
+    if band is None:
+        band = (
+            Severity.UNSCORED
+            if advisory.cvss_score is None
+            else derive_severity(advisory.cvss_score)
+        )
+    return SEVERITY_RANK[band], -(advisory.cvss_score or 0.0)
 
 
 def _resolve_cve_id(vuln: dict[str, Any]) -> str:
@@ -704,10 +734,12 @@ class OsvHttpClient:
                     continue
             if tracked and _covers_family_but_not_release(vuln, pkg, tracked):
                 continue
+            score, band = parse_cvss(vuln)
             advisories.append(
                 RawAdvisory(
                     cve_id=_resolve_cve_id(vuln),
-                    cvss_score=_parse_cvss_score(vuln),
+                    cvss_score=score,
+                    severity=band,
                     package_identifier=base_pkg_id + fix_suffix(vuln, pkg, eco, release_ecos),
                 )
             )
@@ -729,7 +761,7 @@ class OsvHttpClient:
                     and (not existing.package_identifier or "fixed in" not in existing.package_identifier)
                 ):
                     dedup_map[key] = adv
-                elif adv.cvss_score > existing.cvss_score:
+                elif _severity_rank(adv) < _severity_rank(existing):
                     dedup_map[key] = adv
 
         return list(dedup_map.values())

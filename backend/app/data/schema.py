@@ -206,7 +206,11 @@ class CveFinding(Base):
     # Indexed because enrichment joins the whole finding set against the KEV and
     # EPSS caches by CVE id after every scan.
     cve_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    cvss_score: Mapped[float] = mapped_column(Float, nullable=False)
+    # Nullable because not every advisory publishes a score, and a substituted
+    # one is indistinguishable from a measured one (Req 2.7). Null is "nobody
+    # published a number", never zero and never a mid-range guess; the severity
+    # column still carries a band whenever the feed named one.
+    cvss_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     severity: Mapped[Severity] = mapped_column(
         SqlEnum(Severity, name="severity"), nullable=False
     )
@@ -318,7 +322,9 @@ class ScanFindingChange(Base):
     severity: Mapped[Severity] = mapped_column(
         SqlEnum(Severity, name="severity"), nullable=False
     )
-    cvss_score: Mapped[float] = mapped_column(Float, nullable=False)
+    # Nullable for the same reason as on CveFinding: a change record quotes the
+    # score the finding had, and that may be no score at all (Req 2.7).
+    cvss_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     kev_listed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     sync_status: Mapped[SyncStatus] = mapped_column(
         SqlEnum(SyncStatus, name="sync_status"), nullable=False

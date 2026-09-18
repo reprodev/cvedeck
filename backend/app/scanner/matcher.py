@@ -4,6 +4,9 @@ This module houses the pure logic that turns collected inventory and raw
 vulnerability data into findings. It provides:
 
 - ``derive_severity``: maps a CVSS base score to a ``Severity`` band.
+- ``resolve_severity``: decides a finding's band from the score and the
+  qualitative severity the advisory published, either of which may be
+  absent.
 - ``NvdClient`` / ``OsvClient`` protocols: the data-source client contracts the
   Matcher depends on (OS-level CVEs from NVD, package-level advisories from OSV).
 - ``RawCve`` / ``RawAdvisory``: normalized raw records returned by the clients.
@@ -28,6 +31,10 @@ from app.models import Inventory, OsInfo, Package
 # than the documented 0.0-3.9 / 4.0-6.9 / ... closed intervals) makes the
 # function total over the entire continuous [0.0, 10.0] range, including the
 # fractional gaps between the one-decimal band edges (e.g. 3.95).
+#
+# Severity.UNSCORED is deliberately absent: these are bands *of the CVSS
+# range*, and an advisory with no score is not somewhere in that range. See
+# resolve_severity, which is the entry point that handles its absence.
 _SEVERITY_BANDS: tuple[tuple[float, Severity], ...] = (
     (9.0, Severity.CRITICAL),
     (7.0, Severity.HIGH),
@@ -76,6 +83,36 @@ def derive_severity(cvss_score: float) -> Severity:
     return Severity.LOW
 
 
+def resolve_severity(
+    cvss_score: float | None, band: Severity | None = None
+) -> Severity:
+    """Decide a finding's Severity_Level from what the advisory actually said.
+
+    Total over every combination, and the only place the three cases are
+    resolved:
+
+    - a qualitative band, with or without a score: the band the feed published
+      wins. It is a statement by the advisory's author, and deriving a band
+      from a score we then had to invent is how the invented score got in
+      (Req 2.6).
+    - a score and no band: the band is derived from the score, as always.
+    - neither: ``UNSCORED``. Not ``MEDIUM``, and not the lowest band (Req 2.7).
+
+    Args:
+        cvss_score: The published CVSS base score, or ``None`` if the advisory
+            carries none that could be parsed.
+        band: The qualitative severity the feed named, if it named one.
+
+    Returns:
+        The Severity_Level to record.
+    """
+    if band is not None:
+        return band
+    if cvss_score is None:
+        return Severity.UNSCORED
+    return derive_severity(cvss_score)
+
+
 # --- Raw records returned by the data-source clients -----------------------
 
 
@@ -83,21 +120,27 @@ class RawCve(BaseModel):
     """A raw OS-level CVE record as returned by an ``NvdClient``.
 
     This is the normalized shape the Matcher consumes from NVD. It carries the
-    CVE identifier and its CVSS base score; the Matcher derives the
-    ``Severity`` band from ``cvss_score`` (Req 2.3, 2.4).
+    CVE identifier and its CVSS base score, either of which the source may
+    leave unstated; the Matcher resolves the ``Severity`` band from both
+    (Req 2.3, 2.4, 2.6, 2.7).
     """
 
     model_config = ConfigDict(frozen=True)
 
     cve_id: str
-    cvss_score: float
+    cvss_score: float | None
+    #: The qualitative band the source published, when it published one
+    #: instead of (or alongside) a score. Carried here rather than resolved at
+    #: the client, so the Matcher stays the single place severity is decided.
+    severity: Severity | None = None
 
 
 class RawAdvisory(BaseModel):
     """A raw package-level advisory as returned by an ``OsvClient``.
 
-    Carries the CVE identifier, its CVSS base score, and the package identifier
-    the advisory applies to. The package identifier is preserved on the
+    Carries the CVE identifier, its CVSS base score (absent when the advisory
+    publishes none), the qualitative band it named if any, and the package
+    identifier the advisory applies to. The package identifier is preserved on the
     resulting finding so package-level findings remain traceable to the
     affected software (Req 7.1).
     """
@@ -105,7 +148,9 @@ class RawAdvisory(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     cve_id: str
-    cvss_score: float
+    cvss_score: float | None
+    #: See :attr:`RawCve.severity`.
+    severity: Severity | None = None
     package_identifier: str
 
 
@@ -154,7 +199,9 @@ class Finding(BaseModel):
 
     machine_id: str
     cve_id: str
-    cvss_score: float
+    #: ``None`` when the advisory publishes no score; see ``severity``, which
+    #: is always set (Req 2.7).
+    cvss_score: float | None
     severity: Severity
     source: str
     package_identifier: str | None = None
@@ -224,7 +271,7 @@ class Matcher:
                             machine_id=machine_id,
                             cve_id=raw.cve_id,
                             cvss_score=raw.cvss_score,
-                            severity=derive_severity(raw.cvss_score),
+                            severity=resolve_severity(raw.cvss_score, raw.severity),
                             source=_SOURCE_NVD,
                             package_identifier=None,
                         )
@@ -254,7 +301,7 @@ class Matcher:
                             machine_id=machine_id,
                             cve_id=raw.cve_id,
                             cvss_score=raw.cvss_score,
-                            severity=derive_severity(raw.cvss_score),
+                            severity=resolve_severity(raw.cvss_score, raw.severity),
                             source=_SOURCE_OSV,
                             package_identifier=raw.package_identifier,
                         )

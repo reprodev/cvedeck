@@ -11,7 +11,8 @@ The test generates arbitrary findings across several machines, seeds them via
 the repository into an in-memory SQLite session wired into a FastAPI
 ``TestClient``, then calls the per-machine CVE endpoint (Req 6.2) and the
 all-CVEs endpoint, asserting every serialized finding carries a non-empty
-``cve_id``, a valid ``severity``, and a numeric ``cvss_score``.
+``cve_id``, a valid ``severity``, and a ``cvss_score`` that is numeric, or
+null exactly when the severity is ``unscored``.
 """
 
 from __future__ import annotations
@@ -56,12 +57,16 @@ def _findings(draw) -> FindingInput:
     """
     severity = draw(st.sampled_from(list(Severity)))
     source = draw(st.sampled_from(["nvd", "osv"]))
+    # An unscored finding is one with no score -- that is what the band means
+    # (Req 2.7). Drawing a score for it would generate a row the scanner can
+    # never produce and would leave the null path untested.
+    cvss_score = None if severity is Severity.UNSCORED else draw(_cvss_scores)
     package_identifier = (
         draw(st.text(min_size=1, max_size=40)) if source == "osv" else None
     )
     return FindingInput(
         cve_id=draw(_cve_ids),
-        cvss_score=draw(_cvss_scores),
+        cvss_score=cvss_score,
         severity=severity,
         source=source,
         package_identifier=package_identifier,
@@ -101,9 +106,18 @@ def _assert_serialized_finding_complete(finding: dict) -> None:
     assert finding.get("severity") in _VALID_SEVERITIES, (
         "serialized finding must include a valid severity"
     )
-    assert isinstance(finding.get("cvss_score"), (int, float)), (
-        "serialized finding must include a numeric cvss_score"
-    )
+    # A score is numeric, or explicitly null for an unscored finding -- and the
+    # key is always present either way, so a client is never left to read an
+    # absent score as a zero (Req 2.7, 10.11).
+    assert "cvss_score" in finding, "serialized finding must include cvss_score"
+    if finding["severity"] == Severity.UNSCORED.value:
+        assert finding["cvss_score"] is None, (
+            "an unscored finding must serialize a null score, not a number"
+        )
+    else:
+        assert isinstance(finding["cvss_score"], (int, float)), (
+            "a scored finding must serialize a numeric cvss_score"
+        )
 
 
 @settings()

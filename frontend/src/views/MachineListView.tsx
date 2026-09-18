@@ -106,6 +106,7 @@ export function MachineListView({
   const fleetTotals = useMemo(() => {
     const totals = {
       critical: 0,
+      unscored: 0,
       high: 0,
       medium: 0,
       low: 0,
@@ -113,12 +114,17 @@ export function MachineListView({
     };
     for (const m of machines) {
       totals.critical += m.cveCounts.critical;
+      totals.unscored += m.cveCounts.unscored;
       totals.high += m.cveCounts.high;
       totals.medium += m.cveCounts.medium;
       totals.low += m.cveCounts.low;
     }
     totals.totalFindings =
-      totals.critical + totals.high + totals.medium + totals.low;
+      totals.critical +
+      totals.unscored +
+      totals.high +
+      totals.medium +
+      totals.low;
     return totals;
   }, [machines]);
 
@@ -147,9 +153,16 @@ export function MachineListView({
       // the same ranking the findings table uses, applied to hosts. Alphabetical
       // by hostname is a filing order, not a triage order: it buried an actively
       // exploited host eleventh out of twelve.
+      // Unscored sits between critical and high here too, so a host whose
+      // findings nobody has measured does not sort as though it had none
+      // (Req 10.11).
       risk: (m: MachineSummary) =>
-        m.kevCount * 1_000_000 + m.cveCounts.critical * 1_000 + m.cveCounts.high,
+        m.kevCount * 1_000_000 +
+        m.cveCounts.critical * 1_000 +
+        m.cveCounts.unscored * 100 +
+        m.cveCounts.high,
       critical: (m: MachineSummary) => m.cveCounts.critical,
+      unscored: (m: MachineSummary) => m.cveCounts.unscored,
       high: (m: MachineSummary) => m.cveCounts.high,
       medium: (m: MachineSummary) => m.cveCounts.medium,
       low: (m: MachineSummary) => m.cveCounts.low,

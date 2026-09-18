@@ -341,6 +341,7 @@ function toMachineSummary(wire: MachineSummaryWire): MachineSummary {
     lastScanSourcesOk: wire.last_scan_sources_ok ?? false,
     cveCounts: {
       critical: wire.cve_counts.critical,
+      unscored: wire.cve_counts.unscored,
       high: wire.cve_counts.high,
       medium: wire.cve_counts.medium,
       low: wire.cve_counts.low,
@@ -359,7 +360,9 @@ function toCveFinding(wire: CveFindingWire): CveFinding {
   return {
     cveId: wire.cve_id,
     severity: wire.severity,
-    cvssScore: wire.cvss_score,
+    // `?? null`, never `?? 0`: an absent score means no one published one,
+    // and 0.0 is a measurement meaning "no impact" (Req 2.7).
+    cvssScore: wire.cvss_score ?? null,
     packageIdentifier: wire.package_identifier ?? null,
     packageName: wire.package_name ?? null,
     fixedVersion: wire.fixed_version ?? null,
@@ -669,7 +672,7 @@ export class CveScannerApiClient {
       packageIdentifier: c.package_identifier,
       packageName: c.package_name,
       severity: c.severity,
-      cvssScore: c.cvss_score,
+      cvssScore: c.cvss_score ?? null,
       kevListed: c.kev_listed,
       remediationStatus: c.remediation_status,
     }));

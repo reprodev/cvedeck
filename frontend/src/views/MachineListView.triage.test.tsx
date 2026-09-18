@@ -44,28 +44,28 @@ function fleet(): MachineSummary[] {
       machineId: "exploited",
       hostname: "db-primary",
       kevCount: 2,
-      cveCounts: { critical: 5, high: 3, medium: 0, low: 0 },
+      cveCounts: { critical: 5, unscored: 0, high: 3, medium: 0, low: 0 },
       lastScannedAt: daysAgo(1),
     }),
     makeMachine({
       machineId: "critical-only",
       hostname: "app-01",
       kevCount: 0,
-      cveCounts: { critical: 4, high: 2, medium: 0, low: 0 },
+      cveCounts: { critical: 4, unscored: 0, high: 2, medium: 0, low: 0 },
       lastScannedAt: daysAgo(1),
     }),
     makeMachine({
       machineId: "high-only",
       hostname: "cache-01",
       kevCount: 0,
-      cveCounts: { critical: 0, high: 3, medium: 0, low: 0 },
+      cveCounts: { critical: 0, unscored: 0, high: 3, medium: 0, low: 0 },
       lastScannedAt: daysAgo(1),
     }),
     makeMachine({
       machineId: "stale",
       hostname: "nas-01",
       lastScannedAt: daysAgo(30),
-      cveCounts: { critical: 1, high: 0, medium: 0, low: 0 },
+      cveCounts: { critical: 1, unscored: 0, high: 0, medium: 0, low: 0 },
     }),
     makeMachine({
       machineId: "failed",
@@ -127,7 +127,7 @@ describe("fleet summary units", () => {
   it("uses a singular unit for a single host", () => {
     render(
       <MachineListView
-        machines={[makeMachine({ kevCount: 1, cveCounts: { critical: 1, high: 0, medium: 0, low: 0 } })]}
+        machines={[makeMachine({ kevCount: 1, cveCounts: { critical: 1, unscored: 0, high: 0, medium: 0, low: 0 } })]}
         feeds={USABLE_FEEDS}
       />,
     );
@@ -190,13 +190,13 @@ describe("risk ordering", () => {
         machineId: "many-crit",
         hostname: "aaa-noisy",
         kevCount: 0,
-        cveCounts: { critical: 99, high: 0, medium: 0, low: 0 },
+        cveCounts: { critical: 99, unscored: 0, high: 0, medium: 0, low: 0 },
       }),
       makeMachine({
         machineId: "one-kev",
         hostname: "zzz-exploited",
         kevCount: 1,
-        cveCounts: { critical: 1, high: 0, medium: 0, low: 0 },
+        cveCounts: { critical: 1, unscored: 0, high: 0, medium: 0, low: 0 },
       }),
     ];
 

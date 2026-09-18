@@ -22,14 +22,14 @@ const machines: MachineSummary[] = [
     hostname: "web-01",
     platform: "linux",
     lastScanStatus: "success",
-    cveCounts: { critical: 2, high: 3, medium: 1, low: 4 },
+    cveCounts: { critical: 2, unscored: 0, high: 3, medium: 1, low: 4 },
   }),
   makeMachine({
     machineId: "m2",
     hostname: "db-01",
     platform: "windows",
     lastScanStatus: "connection_failure",
-    cveCounts: { critical: 0, high: 1, medium: 5, low: 0 },
+    cveCounts: { critical: 0, unscored: 0, high: 1, medium: 5, low: 0 },
   }),
 ];
 
@@ -55,14 +55,16 @@ describe("MachineListView", () => {
     expect(webRow).not.toBeNull();
     const webCells = within(webRow as HTMLElement).getAllByRole("cell");
     // Cells: hostname, platform, status, last scanned, exploited, critical,
-    // high, medium, low.
+    // unscored, high, medium, low — unscored sits between critical and high,
+    // which is the triage rank (Req 10.11).
     expect(webCells[1]).toHaveTextContent("linux");
     // The status column renders a human label, not the raw enum value.
     expect(webCells[2]).toHaveTextContent("Success");
     expect(webCells[5]).toHaveTextContent("2"); // critical
-    expect(webCells[6]).toHaveTextContent("3"); // high
-    expect(webCells[7]).toHaveTextContent("1"); // medium
-    expect(webCells[8]).toHaveTextContent("4"); // low
+    expect(webCells[6]).toHaveTextContent("0"); // unscored
+    expect(webCells[7]).toHaveTextContent("3"); // high
+    expect(webCells[8]).toHaveTextContent("1"); // medium
+    expect(webCells[9]).toHaveTextContent("4"); // low
   });
 
   it("renders a header column for each severity level (Req 3.2)", () => {

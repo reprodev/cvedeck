@@ -13,7 +13,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 - **Target_Machine**: A Windows or Linux host that the CVE_Scanner_System scans remotely.
 - **CVE**: A Common Vulnerabilities and Exposures entry identifying a specific known vulnerability.
 - **CVSS_Score**: The Common Vulnerability Scoring System numeric score used to derive a severity level.
-- **Severity_Level**: One of the categories Critical, High, Medium, or Low, derived from the CVSS_Score.
+- **Severity_Level**: One of the categories Critical, Unscored, High, Medium, or Low. Derived from the CVSS_Score where one is published, taken from the advisory where it publishes a qualitative severity instead, and Unscored where it publishes neither. A Severity_Level and a CVSS_Score are independent: a finding may carry a band with no score.
 - **NVD**: The National Vulnerability Database, a public source for OS-level CVEs and CVSS severity scoring.
 - **OSV_Source**: The OSV.dev public database, used for software and package-level vulnerability matching.
 - **Local_Database**: The database instance residing on the central server.
@@ -55,6 +55,8 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 3. WHEN a CVE is identified for a Target_Machine, THE Scanner_Engine SHALL record the CVE identifier, the associated CVSS_Score, and the affected Target_Machine.
 4. WHEN a CVE has an associated CVSS_Score, THE Scanner_Engine SHALL derive the Severity_Level as Critical, High, Medium, or Low from the CVSS_Score.
 5. IF a public data source is unreachable during a Scan, THEN THE Scanner_Engine SHALL record a data-source-unavailable status and complete matching against any reachable data source.
+6. WHERE an advisory names a qualitative severity but publishes no CVSS_Score that can be parsed under its own version of the CVSS specification, THE Scanner_Engine SHALL record that Severity_Level and SHALL record no CVSS_Score, rather than substituting a number from within the band.
+7. IF a CVE has neither a CVSS_Score that can be parsed nor a qualitative severity, THEN THE Scanner_Engine SHALL record its Severity_Level as Unscored and its CVSS_Score as absent, and SHALL NOT substitute a default score, so that an unmeasured finding is never presentable as a measured one.
 
 ### Requirement 3: Machine List and Severity Filtering
 
@@ -200,6 +202,14 @@ incomplete, so that I do not mistake a partial scan for a clean host.
    assessment as unassessed rather than as its lowest value, and the dashboard
    and its exports SHALL present it as unassessed, so that a question nobody
    asked is never answered reassuringly (extends the enrichment invariant).
+11. WHERE a CVE_Finding has no CVSS_Score, THE Web_Dashboard, THE Backend_API and
+   their exports SHALL present it as unscored rather than as any numeric value,
+   and SHALL rank it below Critical and above High, since an unmeasured finding
+   could be either (extends the enrichment invariant).
+12. WHERE CVE_Findings are ordered by CVSS_Score, THE CVE_Scanner_System SHALL
+   place a finding that has no score explicitly and identically on every
+   supported database, rather than inheriting the store's default ordering for
+   absent values.
 
 ### Requirement 11: SSH key-based authentication
 

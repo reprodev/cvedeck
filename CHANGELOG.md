@@ -8,6 +8,118 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.6] - 2026-09-18
+
+A score CveDeck does not have is now absent rather than invented. This finishes
+the sweep 0.8.2-0.8.5 began, in the last place it was still running: the
+severity a finding is given. **Includes a database migration.**
+
+### Fixed
+
+- **An advisory with no published severity is no longer reported as Medium.**
+  The OSV parser substituted a CVSS score of 5.0 whenever a record carried no
+  severity data, and `derive_severity` turned that into Medium -- a
+  measurement-shaped answer to a question the advisory never answered, and
+  indistinguishable in the API, the dashboard and the CSV export from a record
+  OSV genuinely scored 5.0. Three more paths reached the same 5.0: an
+  unparseable vector, a vector whose prefix was not `CVSS:3.`, and any
+  arithmetic that raised.
+
+  A severity and a score are now independent facts, because that is what the
+  data is. A finding carries a band whenever a feed published one and a score
+  whenever a feed published one, and either may be absent. A finding with
+  neither is **Unscored**, which is a new Severity_Level.
+
+- **A qualitative severity no longer carries an invented number.** A feed
+  publishing the word "HIGH" and no vector -- which several distribution
+  trackers do -- had that word converted to 8.0, and "CRITICAL", "MODERATE" and
+  "LOW" to 9.5, 5.5 and 2.5. The band was real; the figure was not, and
+  afterwards nothing distinguished it from a measured one. The band is now
+  recorded as published and the score is left absent. The parser also reads the
+  per-ecosystem severity block several distribution feeds use instead of the
+  database-specific one.
+
+- **CVSS v4.0 vectors are read instead of discarded.** The vector parser
+  accepted only a `CVSS:3.` prefix, so every advisory published with a v4 vector
+  and no v3 fallback -- an increasing share of them -- fell through to the
+  substituted 5.0 and was reported as Medium whatever it actually was. There is
+  now a full v4.0 implementation: the MacroVector reduction, the 270-entry
+  lookup table from specification section 8.2, and the severity-distance
+  interpolation, ported from the FIRST reference calculator and checked against
+  it over the whole base-metric space.
+
+- **An unrecognised metric value no longer scores as the most favourable one.**
+  Each CVSS metric was looked up with a default, so a garbled vector took
+  `AV:N`, `AC:L` and `PR:N` -- the highest-scoring value of each -- and produced
+  a confident number from a string nobody could read. A vector with an unknown
+  value, or missing a mandatory metric, is now unreadable, which means unscored.
+  The v3 engine also uses the specification's `Roundup` function rather than a
+  plain ceiling.
+
+- **Findings are ordered the same way on SQLite and PostgreSQL.** Ordering was
+  `cvss_score DESC` alone, and the two stores disagree about where a null goes:
+  SQLite sorts NULL lowest so DESC trails it, PostgreSQL defaults to NULLS FIRST.
+  The same fleet would have been triaged in two different orders depending on
+  which database it was in. Every finding query now ranks by severity first and
+  states its null ordering explicitly.
+
+- **Deduplicating advisories no longer risks reporting a reachable host as
+  unreachable.** Two advisories for the same CVE and package were compared with
+  `>` on their scores. Against an absent score that raises `TypeError`, which
+  the matcher classifies as a defect rather than an outage and re-raises, so the
+  scanner's per-target fault isolation would have recorded the host as a
+  connection failure. A single v4-only advisory could have made a healthy
+  machine look unreachable.
+
+- **An `INVENTORY_UNAVAILABLE` scan can be recorded on PostgreSQL.** The 0.8.4
+  migration added that ScanStatus value to the enum type in lower case, but
+  SQLAlchemy persists a member's *name*, so the value actually written was never
+  in the type and every insert failed. SQLite was unaffected, which is why it
+  went unnoticed. Found while adding the Unscored label, which is the same
+  change and would have repeated the mistake.
+
+### Changed
+
+- **Unscored findings rank below Critical and above High**, in the fleet list,
+  the drill-down, the KPI cards, the filters and the CSV export. An unmeasured
+  finding could be either, so ranking it with the least severe would be the same
+  silent all-clear that the substituted 5.0 was. Within a band, a finding whose
+  feed published the band but no number sorts ahead of the measured ones: a
+  qualitative "High" could be an 8.9.
+
+- **Unscored is painted a neutral slate**, off the severity ramp entirely. The
+  ramp is one warm hue by design and red is reserved for exploitation; a fifth
+  depth of amber would have stated a severity nobody published.
+
+- **`cvss_score` is nullable in the API and the database.** Clients receive an
+  explicit `null` rather than an absent key, so a score can never be read as a
+  zero. The CSV export writes "not assessed" rather than an empty cell, which a
+  spreadsheet shows as blank and a reader takes for nothing found.
+
+- **The severity counts have a fifth member.** `SeverityCounts` now carries
+  `unscored`, and the five still sum to the finding total.
+
+- **The demo fleet carries both scoreless shapes** -- a band with no number, and
+  no severity at all -- for the same reason it already carries all three
+  `kev_listed` states.
+
+### Upgrading
+
+The migration makes `cvss_score` nullable on `cve_findings` and
+`scan_finding_changes`, and adds the `UNSCORED` label to the Severity type on
+PostgreSQL. It runs automatically on container start.
+
+**Findings already stored with the substituted 5.0 are deliberately not
+rewritten.** They are indistinguishable from findings OSV genuinely scored 5.0
+-- that is the defect -- so there is nothing to select on, and rewriting every
+5.0 would corrupt the measured ones to correct the invented ones. They correct
+themselves the next time their host is scanned.
+
+Findings of equal severity may appear in a different order than before on
+SQLite; this is the ordering fix above, not data loss.
+
+---
+
 ## [0.8.5] - 2026-09-18
 
 The sweep that produced 0.8.4 had a tail. This release finishes it, and the

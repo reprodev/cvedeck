@@ -36,8 +36,8 @@ from typing import Any
 import httpx
 
 from app.models import OsInfo
+from app.scanner.cvss import cvss_v3_base_score, cvss_v4_base_score
 from app.scanner.matcher import RawCve
-from app.scanner.osv_client import _parse_cvss_v3_vector
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -144,13 +144,22 @@ def _cpe_name(os_info: OsInfo) -> str | None:
 def _parse_cvss_from_metrics(metrics: dict[str, Any]) -> float | None:
     """Extract a CVSS base score from an NVD ``metrics`` block.
 
-    Prefers v3.1, then v3.0, then v2. The vector is recomputed through the
-    shared parser rather than trusting the published ``baseScore`` only when
-    the score is missing -- NVD supplies both, and reusing
-    :func:`app.scanner.osv_client._parse_cvss_v3_vector` keeps one CVSS
-    implementation in the codebase rather than two that can disagree.
+    Prefers v4.0, then v3.1, then v3.0, then v2, taking the published
+    ``baseScore`` when there is one and recomputing the vector otherwise
+    through :mod:`app.scanner.cvss`, so NVD and OSV cannot disagree about what
+    a vector is worth.
+
+    Every branch *falls through* rather than returning when it cannot produce a
+    score. An unparseable v3.1 vector used to return its parser's result
+    directly, which was fine only while that parser always returned a number;
+    now that it reports ``None`` for a vector it cannot read, returning here
+    would skip the v2 score sitting in the same block (Req 2.7).
     """
-    for key in ("cvssMetricV31", "cvssMetricV30"):
+    for key, parser in (
+        ("cvssMetricV40", cvss_v4_base_score),
+        ("cvssMetricV31", cvss_v3_base_score),
+        ("cvssMetricV30", cvss_v3_base_score),
+    ):
         for metric in metrics.get(key) or []:
             if not isinstance(metric, dict):
                 continue
@@ -159,8 +168,10 @@ def _parse_cvss_from_metrics(metrics: dict[str, Any]) -> float | None:
             if isinstance(score, (int, float)) and 0.0 <= float(score) <= 10.0:
                 return float(score)
             vector = data.get("vectorString")
-            if isinstance(vector, str) and vector.startswith("CVSS:3."):
-                return _parse_cvss_v3_vector(vector)
+            if isinstance(vector, str):
+                parsed = parser(vector)
+                if parsed is not None:
+                    return parsed
 
     for metric in metrics.get("cvssMetricV2") or []:
         if not isinstance(metric, dict):
@@ -296,7 +307,19 @@ class NvdHttpClient:
         # Highest-scoring first, then truncated: if the cap has to drop
         # something, it should drop the least severe rather than whatever
         # happened to sort last.
-        findings.sort(key=lambda f: (-f.cvss_score, f.cve_id))
+        #
+        # A scoreless CVE sorts *first*, not last (Req 10.11, 10.12). The
+        # truncation below is the reason: dropping the one finding nobody
+        # measured, because it had no number to sort by, is the silent
+        # all-clear this release exists to remove. `False < True`, so the
+        # first key puts the unscored ahead of the scored.
+        findings.sort(
+            key=lambda f: (
+                f.cvss_score is not None,
+                -(f.cvss_score or 0.0),
+                f.cve_id,
+            )
+        )
         findings = findings[: self._max_findings]
 
         self._cache[cpe_name] = findings

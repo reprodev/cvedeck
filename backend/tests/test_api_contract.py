@@ -174,7 +174,7 @@ _MACHINE_SUMMARY_KEYS = {
     "last_scan_resolved": (int, type(None)),
     "last_scan_baseline": bool,
 }
-_SEVERITY_COUNT_KEYS = {"critical", "high", "medium", "low"}
+_SEVERITY_COUNT_KEYS = {"critical", "unscored", "high", "medium", "low"}
 _FINDING_KEYS = {
     "cve_id": str,
     "severity": str,
@@ -270,6 +270,7 @@ def test_machine_list_read_returns_all_scanned_machines(session, client):
     by_id = {m["machine_id"]: m for m in body}
     assert by_id["m1"]["cve_counts"] == {
         "critical": 1,
+        "unscored": 0,
         "high": 1,
         "medium": 1,
         "low": 1,
@@ -302,7 +303,13 @@ def test_machine_list_read_counts_sum_to_findings(session, client):
     resp = client.get("/api/machines")
     counts = resp.json()[0]["cve_counts"]
     assert sum(counts.values()) == 3
-    assert counts == {"critical": 2, "high": 1, "medium": 0, "low": 0}
+    assert counts == {
+        "critical": 2,
+        "unscored": 0,
+        "high": 1,
+        "medium": 0,
+        "low": 0,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -384,7 +391,7 @@ def test_valid_severity_query_is_accepted(session, client):
     )
     session.commit()
 
-    for value in ("critical", "high", "medium", "low"):
+    for value in ("critical", "unscored", "high", "medium", "low"):
         resp = client.get("/api/cves", params={"severity": value})
         assert resp.status_code == 200
         findings = _assert_json_response(resp)

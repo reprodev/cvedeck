@@ -131,6 +131,7 @@ export function exportFleetCsv(
     "Last Scanned",
     "Counts Complete",
     "Critical CVEs",
+    "Unscored CVEs",
     "High CVEs",
     "Medium CVEs",
     "Low CVEs",
@@ -143,6 +144,7 @@ export function exportFleetCsv(
   const rows = machines.map((m) => {
     const total =
       m.cveCounts.critical +
+      m.cveCounts.unscored +
       m.cveCounts.high +
       m.cveCounts.medium +
       m.cveCounts.low;
@@ -163,12 +165,20 @@ export function exportFleetCsv(
         : m.lastScanSourcesOk
           ? "yes"
           : "no",
-      // A host nobody has scanned has no counts, and four zeros beside
+      // A host nobody has scanned has no counts, and a row of zeros beside
       // "never" read as a clean host rather than an unmeasured one (Req 8.10).
       ...(m.lastScannedAt === null
-        ? [NOT_ASSESSED, NOT_ASSESSED, NOT_ASSESSED, NOT_ASSESSED, NOT_ASSESSED]
+        ? [
+            NOT_ASSESSED,
+            NOT_ASSESSED,
+            NOT_ASSESSED,
+            NOT_ASSESSED,
+            NOT_ASSESSED,
+            NOT_ASSESSED,
+          ]
         : [
             m.cveCounts.critical,
+            m.cveCounts.unscored,
             m.cveCounts.high,
             m.cveCounts.medium,
             m.cveCounts.low,
@@ -228,7 +238,9 @@ export function exportFindingsCsv(
   const rows = findings.map((f) => [
     f.cveId,
     f.severity,
-    f.cvssScore,
+    // An empty cell reads as zero in a spreadsheet; "not assessed" does not
+    // (Req 8.10, 10.11).
+    f.cvssScore ?? NOT_ASSESSED,
     f.packageIdentifier ?? "",
     exploitCell(f),
     f.kevDueDate ?? "",

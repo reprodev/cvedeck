@@ -30,10 +30,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
 
-from sqlalchemy import func, select
+from sqlalchemy import String, case, cast, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..enums import (
+    SEVERITY_RANK,
     FeedStatus,
     FindingChange,
     Platform,
@@ -122,7 +123,8 @@ class FindingInput:
     """
 
     cve_id: str
-    cvss_score: float
+    #: ``None`` when the advisory publishes no score (Req 2.7).
+    cvss_score: float | None
     severity: Severity
     source: str
     package_identifier: str | None = None
@@ -156,7 +158,7 @@ class FindingSnapshot:
     cve_id: str
     package_identifier: str | None
     severity: Severity
-    cvss_score: float
+    cvss_score: float | None
     kev_listed: bool | None
 
 
@@ -187,9 +189,15 @@ class RemediationInput:
 
 @dataclass(frozen=True)
 class SeverityCounts:
-    """CVE counts for a machine grouped by ``Severity`` (Req 3.2)."""
+    """CVE counts for a machine grouped by ``Severity`` (Req 3.2).
+
+    Five counts, in ranking order. ``unscored`` is not a sub-total of the
+    others: a finding is counted in exactly one of the five, so the sum is
+    still the finding total (Req 10.11).
+    """
 
     critical: int = 0
+    unscored: int = 0
     high: int = 0
     medium: int = 0
     low: int = 0
@@ -197,7 +205,45 @@ class SeverityCounts:
     @property
     def total(self) -> int:
         """Total number of findings across all severity levels."""
-        return self.critical + self.high + self.medium + self.low
+        return (
+            self.critical + self.unscored + self.high + self.medium + self.low
+        )
+
+
+#: The rank keyed by the string actually stored in the severity column.
+#:
+#: SQLAlchemy's Enum persists a member's *name*, so the column holds
+#: "CRITICAL", not "critical". Passing ``SEVERITY_RANK`` itself to ``case()``
+#: binds the members, which render as their *values* -- so no WHEN ever matched,
+#: every row took the ELSE, and the ordering silently did nothing while still
+#: producing a plausible-looking order from the tiebreakers underneath it.
+_SEVERITY_RANK_BY_STORED_NAME: dict[str, int] = {
+    member.name: rank for member, rank in SEVERITY_RANK.items()
+}
+
+
+def severity_order(column):
+    """Rank a Severity column for ORDER BY: Critical, Unscored, High, Med, Low.
+
+    Ranking by ``cvss_score DESC`` alone stopped being possible once a finding
+    may have no score, and falling back to the store's default null ordering
+    would not be the same answer twice: SQLite sorts NULL lowest, so DESC
+    trails it, while PostgreSQL puts NULLS FIRST by default on DESC. Two
+    supported deployments would rank the same fleet differently (Req 10.12).
+
+    Ordering by this rank first also puts an unscored finding where it belongs
+    -- below Critical, above High -- rather than wherever its absent number
+    happened to land (Req 10.11).
+
+    The column is cast to text so the comparison is against the stored label on
+    both dialects -- a plain string on SQLite, the enum label on PostgreSQL --
+    rather than against a value SQLAlchemy would render from the enum member.
+    """
+    return case(
+        _SEVERITY_RANK_BY_STORED_NAME,
+        value=cast(column, String),
+        else_=len(SEVERITY_RANK),
+    )
 
 
 @dataclass(frozen=True)
@@ -552,7 +598,8 @@ class Repository:
             .where(ScanFindingChange.scan_run_id == run_id)
             .order_by(
                 ScanFindingChange.change,
-                ScanFindingChange.cvss_score.desc(),
+                severity_order(ScanFindingChange.severity),
+                ScanFindingChange.cvss_score.desc().nullsfirst(),
                 ScanFindingChange.cve_id,
             )
         )
@@ -632,13 +679,23 @@ class Repository:
         """Read the CVE findings for a machine (Req 3.4, 6.2).
 
         When ``severity`` is provided, only findings of that severity are
-        returned (Req 3.3, 6.3). Ordered by descending CVSS score so the most
-        severe findings surface first.
+        returned (Req 3.3, 6.3). Ordered by severity rank and then descending
+        CVSS score, so the most severe findings surface first and an unscored
+        one is not buried by having no number to sort on (Req 10.11, 10.12).
         """
         stmt = select(CveFinding).where(CveFinding.machine_id == machine_id)
         if severity is not None:
             stmt = stmt.where(CveFinding.severity == severity)
-        stmt = stmt.order_by(CveFinding.cvss_score.desc(), CveFinding.cve_id)
+        stmt = stmt.order_by(
+            severity_order(CveFinding.severity),
+            # nullsfirst, explicitly: within a band a null score means the band
+            # is known and the magnitude is not, and a qualitative "High" could
+            # be an 8.9. Sorting it below every measured High -- which is what
+            # SQLite's default would do -- is the silent demotion this release
+            # removes (Req 10.12).
+            CveFinding.cvss_score.desc().nullsfirst(),
+            CveFinding.cve_id,
+        )
         return list(self._session.execute(stmt).scalars().all())
 
     def count_findings_for_machine(
@@ -861,6 +918,7 @@ class Repository:
         }
         return SeverityCounts(
             critical=tally.get(Severity.CRITICAL, 0),
+            unscored=tally.get(Severity.UNSCORED, 0),
             high=tally.get(Severity.HIGH, 0),
             medium=tally.get(Severity.MEDIUM, 0),
             low=tally.get(Severity.LOW, 0),
@@ -920,6 +978,7 @@ class Repository:
                     machine=machine,
                     cve_counts=SeverityCounts(
                         critical=tally.get(Severity.CRITICAL, 0),
+                        unscored=tally.get(Severity.UNSCORED, 0),
                         high=tally.get(Severity.HIGH, 0),
                         medium=tally.get(Severity.MEDIUM, 0),
                         low=tally.get(Severity.LOW, 0),

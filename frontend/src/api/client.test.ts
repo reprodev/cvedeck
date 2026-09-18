@@ -19,7 +19,7 @@ describe("CveScannerApiClient", () => {
         hostname: "host-1",
         platform: "linux",
         last_scan_status: "success",
-        cve_counts: { critical: 1, high: 2, medium: 0, low: 3 },
+        cve_counts: { critical: 1, unscored: 0, high: 2, medium: 0, low: 3 },
       },
     ];
     const expected: MachineSummary[] = [
@@ -31,7 +31,7 @@ describe("CveScannerApiClient", () => {
         // Absent from the wire payload above, so the client defaults them.
         lastScannedAt: null,
         lastScanSourcesOk: false,
-        cveCounts: { critical: 1, high: 2, medium: 0, low: 3 },
+        cveCounts: { critical: 1, unscored: 0, high: 2, medium: 0, low: 3 },
       }),
     ];
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(wire));
@@ -54,7 +54,7 @@ describe("CveScannerApiClient", () => {
       hostname: "host-1",
       platform: "linux",
       last_scan_status: "success",
-      cve_counts: { critical: 0, high: 0, medium: 0, low: 0 },
+      cve_counts: { critical: 0, unscored: 0, high: 0, medium: 0, low: 0 },
     };
     const fetchImpl = vi
       .fn()

@@ -61,6 +61,7 @@ describe("groupCountsBySeverity", () => {
   it("counts findings per severity level", () => {
     expect(groupCountsBySeverity(sample)).toEqual({
       critical: 2,
+      unscored: 0,
       high: 2,
       medium: 1,
       low: 1,
@@ -70,6 +71,7 @@ describe("groupCountsBySeverity", () => {
   it("returns all-zero counts for empty input", () => {
     expect(groupCountsBySeverity([])).toEqual({
       critical: 0,
+      unscored: 0,
       high: 0,
       medium: 0,
       low: 0,

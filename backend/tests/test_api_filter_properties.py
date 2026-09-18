@@ -41,11 +41,15 @@ from app.enums import Platform, ScanStatus, Severity, SyncStatus
 # column, not the score.
 _severities = st.sampled_from(list(Severity))
 
-_SEVERITY_SCORE_BAND = {
+_SEVERITY_SCORE_BAND: dict[Severity, tuple[float, float] | None] = {
     Severity.CRITICAL: (9.0, 10.0),
     Severity.HIGH: (7.0, 8.9),
     Severity.MEDIUM: (4.0, 6.9),
     Severity.LOW: (0.0, 3.9),
+    # UNSCORED has no band, by construction: it is the absence of a score
+    # rather than a region of the range (Req 2.7). Drawing it here keeps
+    # Property 7 covering every member of the enum.
+    Severity.UNSCORED: None,
 }
 
 
@@ -63,9 +67,14 @@ def _finding_sets(draw):
 
 
 def _to_finding_input(cve_id: str, severity: Severity) -> FindingInput:
-    low, high = _SEVERITY_SCORE_BAND[severity]
-    # Midpoint of the band keeps the stored score consistent with the severity.
-    score = round((low + high) / 2, 1)
+    band = _SEVERITY_SCORE_BAND[severity]
+    if band is None:
+        score = None
+    else:
+        low, high = band
+        # Midpoint of the band keeps the stored score consistent with the
+        # severity.
+        score = round((low + high) / 2, 1)
     return FindingInput(
         cve_id=cve_id,
         cvss_score=score,

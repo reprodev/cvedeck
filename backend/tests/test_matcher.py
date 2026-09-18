@@ -7,7 +7,7 @@ property test lives separately (task 2.2, Property 4).
 import pytest
 
 from app.enums import Severity
-from app.scanner.matcher import derive_severity
+from app.scanner.matcher import derive_severity, resolve_severity
 
 
 @pytest.mark.parametrize(
@@ -54,6 +54,43 @@ def test_fractional_gap_between_band_edges_is_total():
 def test_out_of_range_raises(score):
     with pytest.raises(ValueError):
         derive_severity(score)
+
+
+# --------------------------------------------------------------------------- #
+# resolve_severity: score and band are independent (Req 2.6, 2.7)
+# --------------------------------------------------------------------------- #
+
+
+def test_resolve_severity_derives_the_band_from_a_score():
+    assert resolve_severity(9.1) == Severity.CRITICAL
+    assert resolve_severity(5.0) == Severity.MEDIUM
+    assert resolve_severity(0.0) == Severity.LOW
+
+
+def test_resolve_severity_keeps_a_published_band_without_a_score():
+    """A feed's own word is the band; no number is reconstructed (Req 2.6)."""
+    assert resolve_severity(None, Severity.HIGH) == Severity.HIGH
+    assert resolve_severity(None, Severity.CRITICAL) == Severity.CRITICAL
+
+
+def test_resolve_severity_prefers_a_published_band_over_a_derived_one():
+    """The advisory author's judgement outranks our arithmetic (Req 2.6)."""
+    assert resolve_severity(2.0, Severity.CRITICAL) == Severity.CRITICAL
+
+
+def test_resolve_severity_reports_unscored_when_nothing_was_published():
+    """Neither a score nor a word means unscored -- not Medium (Req 2.7).
+
+    This is the case that used to arrive as a substituted 5.0.
+    """
+    assert resolve_severity(None) == Severity.UNSCORED
+    assert resolve_severity(None, None) == Severity.UNSCORED
+
+
+def test_resolve_severity_never_reports_unscored_for_a_scored_finding():
+    """Unscored means exactly "no score", so it cannot arise from one."""
+    for score in (0.0, 3.9, 4.0, 6.9, 7.0, 8.9, 9.0, 10.0):
+        assert resolve_severity(score) is not Severity.UNSCORED
 
 
 # ---------------------------------------------------------------------------

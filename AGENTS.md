@@ -118,6 +118,19 @@ environment the app reads, so no alembic.ini edit is needed.
 - CVSS -> severity bands (derive_severity in app/scanner/matcher.py): 0.0-3.9 Low,
   4.0-6.9 Medium, 7.0-8.9 High, 9.0-10.0 Critical. Total over 0.0-10.0; raises
   outside that range. Property 4 depends on this.
+- A severity and a score are INDEPENDENT facts, and neither may be invented from
+  the other (resolve_severity in app/scanner/matcher.py; Req 2.6, 2.7, Property
+  15). An advisory publishing a qualitative word and no vector keeps that band
+  and records NO score -- do not reconstruct a number inside the band. One
+  publishing neither is Severity.UNSCORED with a null score -- do not substitute
+  a default. `cvss_score` is nullable everywhere, and null means "nobody
+  published one", never 0.0.
+  UNSCORED ranks below CRITICAL and above HIGH (SEVERITY_RANK in app/enums.py,
+  mirrored in frontend/src/lib/severity.ts): an unmeasured finding could be
+  either, so ranking it last is the same silent all-clear that the old
+  substituted 5.0 was. Anything that orders findings ranks by severity first and
+  states its null ordering explicitly -- SQLite and PostgreSQL disagree about
+  where NULLs land in a DESC sort (Req 10.12).
 - Per-target fault isolation & timeout architecture (ScannerEngine): a ConnectionError /
   socket timeout / unhandled runtime exception -> CONNECTION_FAILURE, an AuthError ->
   AUTH_FAILURE, and a refused SSH host key -> HOST_KEY_MISMATCH / HOST_KEY_UNKNOWN for

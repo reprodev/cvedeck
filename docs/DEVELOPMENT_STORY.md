@@ -1470,3 +1470,126 @@ count that travels with the result, a test that states the rule.
 
 A scanner that cannot ping is not looking at a network of filtered hosts. It is
 not looking.
+
+---
+
+## Chapter 16 — The number nobody published (v0.8.6)
+
+Four releases had been spent on one question: where does this system state
+something it does not know? Chapter 15 ended by saying the boundary between
+what was measured and what was defaulted is the most valuable line in the code.
+
+The line had been crossed, for the entire life of the project, on the single
+field the whole product ranks by.
+
+`_parse_cvss_score` in the OSV client ended like this:
+
+```python
+    # 3. Fallback default
+    return 5.0
+```
+
+An advisory that published no severity information became a CVSS score of 5.0.
+`derive_severity(5.0)` is Medium. From that point on, nothing in the system
+could tell it apart from an advisory OSV had genuinely scored 5.0 — not the
+API, not the dashboard, not the CSV export a user hands to their manager. The
+comment called it a fallback default. It was a fabricated measurement, sitting
+in the column every sort, filter, count and triage card reads.
+
+There were three other ways to reach it. A vector that failed to parse returned
+5.0. A vector whose prefix was not `CVSS:3.` returned 5.0 — which meant every
+advisory published with a CVSS v4.0 vector and no v3 fallback, a share that
+grows every month. And any arithmetic that raised returned 5.0.
+
+A quieter one sat just above it. For feeds that publish a severity *word*
+instead of a vector, the parser mapped `HIGH` to 8.0, `CRITICAL` to 9.5,
+`MODERATE` to 5.5, `LOW` to 2.5. That looks more defensible, and it is worse in
+an interesting way: the band was real — a human at a distribution security team
+had decided it — and the number was pure invention. The fabrication was
+*attached to a true fact*, which is the best possible camouflage.
+
+### The fix was a modelling change, not a null check
+
+The instinct is to make the score nullable and move on. That gets the
+representation right and the meaning wrong, because it treats the score as the
+primary fact and the band as derived from it. The data says otherwise. A feed
+can publish a vector with no word, a word with no vector, or neither. Those are
+three real shapes, and only the first fits "severity is a function of score".
+
+So severity and score became independent. A band is recorded whenever a feed
+published one, a score whenever a feed published one, and a finding with
+neither is `Unscored` — a new Severity_Level that is explicitly *not* a fifth
+band of the CVSS range, but the absence of one.
+
+Then the question that decides whether any of this was worth doing: where does
+an unscored finding rank? Last is the tempting answer, and it is the same
+mistake in a new costume. An advisory nobody has rated could be a 10.0. Ranking
+it below every Low tells the reader it is the least of their problems, which is
+a claim about a measurement that does not exist. It ranks below Critical and
+above High, in a neutral slate that is off the amber severity ramp entirely,
+because the ramp is a statement of severity and this is the absence of one.
+
+### The v4.0 detour
+
+Leaving v4-only advisories as unscored would have been honest and useless, so
+the release also grew a CVSS v4.0 engine. v4 base scoring is not a formula: the
+vector is reduced to a six-digit MacroVector, the MacroVector's score is read
+from a 270-entry table, and the result is interpolated down by how far the
+vector sits from the most severe one its MacroVector can contain.
+
+The whole point of this release is not substituting plausible numbers for real
+ones, so transcribing that table from memory was not an option. The FIRST
+reference calculator was ported directly, and then — rather than checking a
+handful of hand-picked vectors — 5,455 generated vectors were scored by both
+the JavaScript original and the Python port and diffed.
+
+179 disagreed. Every one was exactly 0.1 low.
+
+JavaScript's `Math.round` rounds halves up. Python's `round` rounds halves to
+even: `round(42.5)` is 42, not 43. A tie-break, in the last step, on one value
+in thirty. A dozen spot-checks would have passed; the release would have
+shipped CveDeck quietly disagreeing with every other CVSS implementation on
+earth about a published number — while fixing a bug about fabricated numbers.
+
+### Two the compiler found, and one it could not
+
+Making `cvss_score` nullable and `unscored` a *required* field turned the type
+checkers into a search. `tsc` named every one of seventeen frontend sites,
+including `row.cvssScore.toFixed(1)`, which would have thrown and blanked the
+scan-history panel. Pydantic named a third `SeverityCounts` construction site
+that a survey of the codebase had missed.
+
+The one nothing found was the ordering. Findings were ordered by
+`cvss_score DESC`, and SQLite and PostgreSQL disagree about where a null goes
+in a descending sort — SQLite sorts NULL lowest so DESC trails it, PostgreSQL
+defaults to NULLS FIRST. Both are supported. The same fleet would have been
+triaged in two different orders depending on which database it was in, and no
+test run against one of them could ever show it.
+
+The replacement ranked by severity with a SQL `CASE`, and the first version of
+it did nothing at all. SQLAlchemy's `Enum` persists a member's *name*, so the
+column holds `CRITICAL`; passing the enum members to `case()` binds their
+*values*, `critical`. No `WHEN` matched, every row took the `ELSE`, and the
+query returned a perfectly plausible order — produced entirely by the
+tiebreakers underneath a clause that had silently become a no-op. It was caught
+only because the new ordering test asserted the *specific* expected sequence
+rather than "is sorted". There is now a test asserting the ranks actually
+discriminate.
+
+The same shape of bug turned out to be sitting in the 0.8.4 migration, which
+had added a ScanStatus value to the PostgreSQL enum type in lower case. Every
+attempt to record a host whose inventory could not be read had been failing on
+PostgreSQL ever since. SQLite stores those columns as plain text, which is why
+nobody saw it.
+
+### Closing thought
+
+The previous four chapters were about absent answers being presented as good
+ones. This one is about an absent answer being given a *number* — and a number
+is the most credible lie a system can tell, because everything downstream is
+built to trust it. Nulls get checked. Statuses get rendered. A float in a
+column called `cvss_score` gets sorted, filtered, counted, exported, and
+believed.
+
+The comment above it said "safe default". Nothing that a person will act on
+without being able to tell it from a measurement is a safe default.

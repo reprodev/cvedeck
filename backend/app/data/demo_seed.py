@@ -19,6 +19,8 @@ healthy hosts:
     * a host scanned a month ago                  (stale)
     * hosts with findings CISA lists as exploited (kev_listed=True)
     * hosts whose findings were never enriched    (kev_listed=None)
+    * a finding with a band but no CVSS score     (Req 2.6)
+    * a finding with no severity published at all (unscored, Req 2.7)
     * a scan history: a baseline, a scan with new and resolved findings, a
       partial scan that resolves nothing, and failed attempts (Req 18)
 
@@ -28,6 +30,11 @@ False means "checked, and genuinely absent from CISA's KEV". A demo that showed
 a confident "0 actively exploited" everywhere would be advertising exactly the
 false negative this project exists to avoid, so the seed deliberately contains
 all three states and the UI is expected to render them differently.
+
+The same argument covers the CVSS score, which is why the seed carries a
+scoreless finding: a score and a severity are independent facts, and a demo
+in which every advisory has a number would hide the case the 0.8.6 release
+exists to make visible.
 
 Nothing here is called during a normal scan. Seeding happens only when
 ``CVEDECK_DEMO_MODE`` is set, and only into a database with no machines in it.
@@ -119,7 +126,18 @@ _HOST_KEYS: list[tuple[str, int, str, str, float]] = [
 # "<ecosystem>:<name>@<version> (fixed in <fixed>)". The seed therefore has to
 # build that same string rather than set a field, so that demo data travels the
 # identical code path real scan results do -- see _identifier() below.
-_FINDINGS_LINUX: list[tuple[str, float, Severity, str, str | None, bool | None, float | None, float | None]] = [
+_FINDINGS_LINUX: list[
+    tuple[
+        str,
+        float | None,
+        Severity,
+        str,
+        str | None,
+        bool | None,
+        float | None,
+        float | None,
+    ]
+] = [
     # Actively exploited. The whole argument for this tool is that these
     # outrank the 9.8 below them that nobody has ever touched.
     ("CVE-2024-3094",  10.0, Severity.CRITICAL, "xz-utils",     "5.6.1+really5.4.5-1", True,  0.9421, 0.9998),
@@ -140,6 +158,18 @@ _FINDINGS_LINUX: list[tuple[str, float, Severity, str, str | None, bool | None, 
     ("CVE-2023-52425",  7.5, Severity.HIGH,     "expat",        None,                  False, 0.0032, 0.6688),
     ("CVE-2024-28085",  6.7, Severity.MEDIUM,   "util-linux",   None,                  False, 0.0005, 0.2210),
     ("CVE-2023-45853",  9.8, Severity.CRITICAL, "zlib",         None,                  False, 0.0064, 0.7743),
+    # No published score. These are the two shapes a scoreless advisory takes,
+    # and the fleet carries both for the same reason it carries all three
+    # kev_listed states: a demo in which every finding has a tidy number would
+    # advertise a confidence the data does not have.
+    #
+    #   - a band and no number: the feed published the word "High" and no
+    #     vector, which is what an Alpine or SUSE record often looks like. The
+    #     band is real; the number was never published (Req 2.6).
+    #   - neither: nobody has said how bad this is at all (Req 2.7). It ranks
+    #     below Critical and above High, because it could be either.
+    ("CVE-2024-45490", None, Severity.HIGH,     "libexpat",     "2.5.0-1+deb12u1",     False, 0.0019, 0.5402),
+    ("CVE-2024-45491", None, Severity.UNSCORED, "libxslt",      "1.1.35-1+deb12u1",    None,  None,   None),
     # Low-severity noise, so the ramp has something at the bottom.
     ("CVE-2023-4039",   4.8, Severity.LOW,      "gcc-12",       "12.2.0-14",           False, 0.0003, 0.0912),
     ("CVE-2024-2236",   5.3, Severity.LOW,      "libgcrypt20",  "1.10.1-3",            False, 0.0002, 0.0655),
@@ -203,12 +233,19 @@ _EXTRA_PACKAGES: dict[str, list[str]] = {
 _WEB01_NEW_LATEST = {"CVE-2024-3094", "CVE-2023-44487"}
 _WEB01_NEW_EARLIER = {"CVE-2023-6246", "CVE-2024-25062"}
 # (cve_id, cvss, severity, package, kev)
-_WEB01_RESOLVED_LATEST: list[tuple[str, float, Severity, str, bool | None]] = [
+_WEB01_RESOLVED_LATEST: list[
+    tuple[str, float | None, Severity, str, bool | None]
+] = [
     ("CVE-2024-6387",  8.1, Severity.HIGH,   "openssh-server", False),
     ("CVE-2023-48795", 5.9, Severity.MEDIUM, "openssh-client", False),
     ("CVE-2024-2961",  7.3, Severity.HIGH,   "glibc",          False),
+    # A resolved finding that never had a score, so the history panel renders
+    # the null case too.
+    ("CVE-2024-45492", None, Severity.UNSCORED, "libtasn1-6",   None),
 ]
-_WEB01_RESOLVED_EARLIER: list[tuple[str, float, Severity, str, bool | None]] = [
+_WEB01_RESOLVED_EARLIER: list[
+    tuple[str, float | None, Severity, str, bool | None]
+] = [
     ("CVE-2023-4911",  7.8, Severity.HIGH,   "glibc",          True),
 ]
 _ALMA_NEW_LATEST = {"CVE-2023-50387"}

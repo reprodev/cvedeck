@@ -496,6 +496,7 @@ def enroll_discovered_hosts(
                 last_scan_sources_ok=machine.last_scan_sources_ok,
                 cve_counts=SeverityCounts(
                     critical=counts.critical,
+                    unscored=counts.unscored,
                     high=counts.high,
                     medium=counts.medium,
                     low=counts.low,

@@ -104,6 +104,16 @@
   --low-bg: light-dark(#E8E4DA, rgba(148, 131, 106, 0.12));
   --low-border: light-dark(#CBC5B6, rgba(148, 131, 106, 0.30));
 
+  /* Unscored is off the ramp on purpose. It is not a fifth depth of amber --
+     it is the absence of a measurement, and painting it anywhere on the
+     severity ramp would state a severity nobody published. A cool slate reads
+     as "no reading" against a ramp that is entirely warm, and it is clear of
+     --exploit's red and the verdigris accent, so the three-tier rule still
+     holds: red is exploitation, amber is severity, verdigris is interface. */
+  --unscored: light-dark(#4A5A66, #8FA4B3);
+  --unscored-bg: light-dark(#E2E8EC, rgba(143, 164, 179, 0.14));
+  --unscored-border: light-dark(#BCC8D0, rgba(143, 164, 179, 0.36));
+
   --error-bg: light-dark(#FBE3DC, #2E1712);
   --error-border: light-dark(#B93B1E, #E2543A);
   --error-text: light-dark(#8A2B14, #F0A491);
@@ -756,6 +766,9 @@ section {
 .sev-chip.active[data-severity="critical"] {
   background: var(--critical-bg); color: var(--critical); border-color: var(--critical-border);
 }
+.sev-chip.active[data-severity="unscored"] {
+  background: var(--unscored-bg); color: var(--unscored); border-color: var(--unscored-border);
+}
 .sev-chip.active[data-severity="high"] {
   background: var(--high-bg); color: var(--high); border-color: var(--high-border);
 }
@@ -922,6 +935,7 @@ section {
 }
 
 .metric-card[data-severity="critical"] .metric-card-value { color: var(--critical); }
+.metric-card[data-severity="unscored"] .metric-card-value { color: var(--unscored); }
 .metric-card[data-severity="high"] .metric-card-value { color: var(--high); }
 .metric-card[data-severity="medium"] .metric-card-value { color: var(--medium); }
 .metric-card[data-severity="low"] .metric-card-value { color: var(--low); }
@@ -944,6 +958,12 @@ section {
   color: var(--critical);
   background: var(--critical-bg);
   border-color: var(--critical-border);
+}
+
+.badge-unscored {
+  color: var(--unscored);
+  background: var(--unscored-bg);
+  border-color: var(--unscored-border);
 }
 
 .badge-high {
@@ -2066,6 +2086,12 @@ tbody tr:last-child td {
   border-color: var(--critical);
   background: var(--critical-bg);
   box-shadow: 0 0 0 2px var(--critical);
+}
+
+.severity-kpi-card.kpi-unscored.active {
+  border-color: var(--unscored);
+  background: var(--unscored-bg);
+  box-shadow: 0 0 0 2px var(--unscored);
 }
 
 .severity-kpi-card.kpi-high.active {

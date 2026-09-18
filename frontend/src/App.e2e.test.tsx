@@ -31,7 +31,7 @@ const machinesWire = [
     platform: "linux",
     last_scan_status: "success",
     last_scanned_at: "2026-09-16T09:00:00Z",
-    cve_counts: { critical: 2, high: 3, medium: 1, low: 4 },
+    cve_counts: { critical: 2, unscored: 0, high: 3, medium: 1, low: 4 },
   },
   {
     machine_id: "m2",
@@ -39,7 +39,7 @@ const machinesWire = [
     platform: "windows",
     last_scan_status: "connection_failure",
     last_scanned_at: "2026-09-16T09:00:00Z",
-    cve_counts: { critical: 0, high: 1, medium: 5, low: 0 },
+    cve_counts: { critical: 0, unscored: 0, high: 1, medium: 5, low: 0 },
   },
 ];
 
@@ -209,14 +209,16 @@ describe("App end-to-end data flow", () => {
     expect(webRow).not.toBeNull();
     const cells = within(webRow as HTMLElement).getAllByRole("cell");
     // Cells: hostname, platform, status, last scanned, exploited, critical,
-    // high, medium, low.
+    // unscored, high, medium, low — unscored sits between critical and high,
+    // which is the triage rank (Req 10.11).
     expect(cells[1]).toHaveTextContent("linux");
     // The status column renders a human label, not the raw enum value.
     expect(cells[2]).toHaveTextContent("Success");
     expect(cells[5]).toHaveTextContent("2"); // critical
-    expect(cells[6]).toHaveTextContent("3"); // high
-    expect(cells[7]).toHaveTextContent("1"); // medium
-    expect(cells[8]).toHaveTextContent("4"); // low
+    expect(cells[6]).toHaveTextContent("0"); // unscored
+    expect(cells[7]).toHaveTextContent("3"); // high
+    expect(cells[8]).toHaveTextContent("1"); // medium
+    expect(cells[9]).toHaveTextContent("4"); // low
   });
 
   it("filters the displayed severity counts by the selected level (Req 3.3)", async () => {

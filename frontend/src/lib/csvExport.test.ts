@@ -198,7 +198,7 @@ describe("csvExport utility", () => {
           makeMachine({
             lastScannedAt: "2026-09-01T12:00:00Z",
             lastScanSourcesOk: false,
-            cveCounts: { critical: 2, high: 1, medium: 0, low: 0 },
+            cveCounts: { critical: 2, unscored: 0, high: 1, medium: 0, low: 0 },
           }),
         ]),
       );
@@ -272,7 +272,7 @@ describe("csvExport utility", () => {
           makeMachine({
             lastScannedAt: null,
             lastScanStatus: "never_scanned",
-            cveCounts: { critical: 0, high: 0, medium: 0, low: 0 },
+            cveCounts: { critical: 0, unscored: 0, high: 0, medium: 0, low: 0 },
           }),
         ]),
       );

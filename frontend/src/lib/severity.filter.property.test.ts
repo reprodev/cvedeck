@@ -20,7 +20,11 @@ const severityArb: fc.Arbitrary<Severity> = fc.constantFrom(...SEVERITIES);
 const findingArb: fc.Arbitrary<CveFinding> = fc.record({
   cveId: fc.string(),
   severity: severityArb,
-  cvssScore: fc.double({ min: 0, max: 10, noNaN: true }),
+  // Null as well as a number: an unscored finding is one with no score, and
+  // an arbitrary that never produces null would leave that path untested.
+  cvssScore: fc.option(fc.double({ min: 0, max: 10, noNaN: true }), {
+    nil: null,
+  }),
   packageIdentifier: fc.option(fc.string(), { nil: null }),
   remediationStatus: fc.option(fc.string(), { nil: null }),
   remediationRecordId: fc.option(fc.string(), { nil: null }),

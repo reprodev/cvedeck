@@ -121,10 +121,22 @@ def test_list_machines_returns_severity_grouped_counts(session, client):
     assert m1["hostname"] == "alpha.example.com"
     assert m1["platform"] == "linux"
     assert m1["last_scan_status"] == "success"
-    assert m1["cve_counts"] == {"critical": 1, "high": 2, "medium": 0, "low": 0}
+    assert m1["cve_counts"] == {
+        "critical": 1,
+        "unscored": 0,
+        "high": 2,
+        "medium": 0,
+        "low": 0,
+    }
 
     m2 = by_id["m2"]
-    assert m2["cve_counts"] == {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    assert m2["cve_counts"] == {
+        "critical": 0,
+        "unscored": 0,
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+    }
 
 
 def test_list_machines_empty(client):
@@ -146,7 +158,13 @@ def test_get_machine_returns_summary(session, client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["machine_id"] == "m1"
-    assert body["cve_counts"] == {"critical": 0, "high": 0, "medium": 1, "low": 0}
+    assert body["cve_counts"] == {
+        "critical": 0,
+        "unscored": 0,
+        "high": 0,
+        "medium": 1,
+        "low": 0,
+    }
 
 
 def test_get_unknown_machine_returns_404(client):

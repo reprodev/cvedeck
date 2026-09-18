@@ -11,6 +11,7 @@
 // two apart, and `isKnownExploited` is deliberately strict (`=== true`) so a
 // null can never sneak through a truthiness check.
 
+import { compareBySeverity } from "./severity";
 import type { CveFinding, FeedHealth } from "../types";
 
 /** How a CVE's exploitation status should be presented. */
@@ -74,6 +75,10 @@ export function formatEpssPercentile(
  *   3. CVSS score  -- would be bad if it were
  *   4. CVE id      -- a stable tiebreak so the order never flickers
  *
+ * The CVSS tier ranks by severity band first and then by score, so a finding
+ * whose advisory published a band but no number keeps its place instead of
+ * falling to the bottom of the list (Req 10.11).
+ *
  * A CVSS 6.5 on the KEV list outranks a CVSS 9.8 that nobody is exploiting,
  * which is the whole point of collecting these signals. Findings with no EPSS
  * score sort below any that have one rather than being treated as zero: an
@@ -92,7 +97,13 @@ export function sortByRisk(findings: CveFinding[]): CveFinding[] {
     const bEpss = b.epssScore ?? -1;
     if (aEpss !== bEpss) return bEpss - aEpss;
 
-    if (a.cvssScore !== b.cvssScore) return b.cvssScore - a.cvssScore;
+    // Severity band, then magnitude within it. Subtracting the scores
+    // directly yields NaN against a null, which leaves the comparator
+    // inconsistent and the sort order unspecified. The band is the
+    // authoritative signal now in any case: a finding can carry a published
+    // band with no score at all (Req 2.6, 10.11).
+    const bySeverity = compareBySeverity(a, b);
+    if (bySeverity !== 0) return bySeverity;
     return a.cveId.localeCompare(b.cveId);
   });
 }

@@ -5,6 +5,7 @@ exactly, since these values are persisted and serialized to JSON.
 """
 
 from app.enums import (
+    SEVERITY_RANK,
     Platform,
     RemediationStatus,
     ScanStatus,
@@ -21,11 +22,32 @@ def test_platform_values():
 
 
 def test_severity_values():
-    assert {m.value for m in Severity} == {"critical", "high", "medium", "low"}
+    assert {m.value for m in Severity} == {
+        "critical",
+        "unscored",
+        "high",
+        "medium",
+        "low",
+    }
     assert Severity.CRITICAL == "critical"
+    assert Severity.UNSCORED == "unscored"
     assert Severity.HIGH == "high"
     assert Severity.MEDIUM == "medium"
     assert Severity.LOW == "low"
+
+
+def test_severity_rank_orders_unscored_between_critical_and_high():
+    """An unmeasured finding could be either, so it ranks high (Req 10.11)."""
+    assert [s for s, _ in sorted(SEVERITY_RANK.items(), key=lambda kv: kv[1])] == [
+        Severity.CRITICAL,
+        Severity.UNSCORED,
+        Severity.HIGH,
+        Severity.MEDIUM,
+        Severity.LOW,
+    ]
+    # Total over the enum: anything that ranks a severity can index this
+    # without a fallback that would quietly park a new member at one end.
+    assert set(SEVERITY_RANK) == set(Severity)
 
 
 def test_scan_status_values():

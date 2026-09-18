@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.routes import _parse_fixed_version
 from app.data.demo_seed import fleet_is_empty, seed_demo_fleet
 from app.data.schema import Base, CveFinding, Inventory, Package, SshHostKey, TargetMachine
-from app.enums import ScanStatus
+from app.enums import ScanStatus, Severity
 
 
 @pytest.fixture()
@@ -54,6 +54,41 @@ def test_kev_listed_keeps_all_three_states(session):
     assert None in states, "no unenriched findings: 'unknown' would never render"
     assert False in states, "no checked-and-absent findings"
     assert True in states, "no actively-exploited findings"
+
+
+def test_the_seed_carries_both_scoreless_shapes(session):
+    """A score and a severity are independent facts (Req 2.6, 2.7).
+
+    The same argument as ``kev_listed`` above, applied to the CVSS score. A
+    demo in which every advisory carries a tidy number would hide the two
+    shapes that actually occur -- a band published without a vector, and an
+    advisory nobody has rated at all -- and those are precisely the cases that
+    used to be given a substituted 5.0 and reported as Medium.
+    """
+    seed_demo_fleet(session)
+
+    findings = session.query(CveFinding).all()
+
+    banded_without_a_score = [
+        f
+        for f in findings
+        if f.cvss_score is None and f.severity is not Severity.UNSCORED
+    ]
+    assert banded_without_a_score, (
+        "no finding with a published band and no score: the case a "
+        "qualitative-only feed produces would never render"
+    )
+
+    unscored = [f for f in findings if f.severity is Severity.UNSCORED]
+    assert unscored, "no unscored findings: the unscored band would never render"
+    assert all(f.cvss_score is None for f in unscored), (
+        "an unscored finding must not carry a score -- that is what the band "
+        "means"
+    )
+
+    assert any(f.cvss_score is not None for f in findings), (
+        "no scored findings: the ordinary case would never render"
+    )
 
 
 def test_unenriched_findings_are_null_across_all_enrichment_columns(session):

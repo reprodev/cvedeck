@@ -11,7 +11,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { exportFindingsCsv } from "../lib/csvExport";
-import { filterBySeverity } from "../lib/severity";
+import { compareBySeverity, filterBySeverity } from "../lib/severity";
 import {
   type CveFinding,
   type FindingChangeRow,
@@ -244,7 +244,14 @@ export function MachineDrillDownView({
 
   // Summary counts for this machine
   const counts = useMemo(() => {
-    const tally = { critical: 0, high: 0, medium: 0, low: 0, total: findings.length };
+    const tally = {
+      critical: 0,
+      unscored: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+      total: findings.length,
+    };
     for (const f of findings) {
       if (f.severity in tally) {
         tally[f.severity]++;
@@ -366,7 +373,8 @@ export function MachineDrillDownView({
         packageName: string;
         packageIdentifier: string;
         findings: CveFinding[];
-        maxScore: number;
+        /** Worst score in the group, or null if none of its findings has one. */
+        maxScore: number | null;
         highestSeverity: Severity;
         dependencies: string[];
         dependedOnBy: string[];
@@ -390,7 +398,15 @@ export function MachineDrillDownView({
         });
       } else {
         existing.findings.push(f);
-        if (f.cvssScore > existing.maxScore) {
+        // Rank by severity band first: a finding with a published band and no
+        // score must be able to win, and comparing the scores directly would
+        // make every comparison against a null false (Req 10.11).
+        if (
+          compareBySeverity(f, {
+            severity: existing.highestSeverity,
+            cvssScore: existing.maxScore,
+          }) < 0
+        ) {
           existing.maxScore = f.cvssScore;
           existing.highestSeverity = f.severity;
         }
@@ -406,7 +422,12 @@ export function MachineDrillDownView({
       }
     }
 
-    return Array.from(groups.values()).sort((a, b) => b.maxScore - a.maxScore);
+    return Array.from(groups.values()).sort((a, b) =>
+      compareBySeverity(
+        { severity: a.highestSeverity, cvssScore: a.maxScore },
+        { severity: b.highestSeverity, cvssScore: b.maxScore },
+      ),
+    );
   }, [findings]);
 
   // Filter package groups by patch readiness and severity
@@ -1291,7 +1312,9 @@ export function MachineDrillDownView({
                               </span>
                             </td>
                             <td data-label="Top score">
-                              <span className="cvss-score-pill">{group.maxScore}</span>
+                              <span className="cvss-score-pill">
+                                {group.maxScore ?? "—"}
+                              </span>
                             </td>
                             <td data-label="Blast radius">
                               <span
@@ -1623,7 +1646,16 @@ export function MachineDrillDownView({
                             </span>
                           </td>
                           <td data-label="CVSS">
-                            <span className="cvss-score-pill">{finding.cvssScore}</span>
+                            <span
+                              className="cvss-score-pill"
+                              title={
+                                finding.cvssScore === null
+                                  ? "No CVSS score published for this advisory"
+                                  : undefined
+                              }
+                            >
+                              {finding.cvssScore ?? "—"}
+                            </span>
                           </td>
                           <td data-label="Remediation">
                             <span

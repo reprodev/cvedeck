@@ -20,7 +20,11 @@ const severityArb: fc.Arbitrary<Severity> = fc.constantFrom(...SEVERITIES);
 const findingArb: fc.Arbitrary<CveFinding> = fc.record({
   cveId: fc.string(),
   severity: severityArb,
-  cvssScore: fc.double({ min: 0, max: 10, noNaN: true }),
+  // Null as well as a number: an unscored finding is one with no score, and
+  // an arbitrary that never produces null would leave that path untested.
+  cvssScore: fc.option(fc.double({ min: 0, max: 10, noNaN: true }), {
+    nil: null,
+  }),
   packageIdentifier: fc.option(fc.string(), { nil: null }),
   remediationStatus: fc.option(fc.string(), { nil: null }),
   remediationRecordId: fc.option(fc.string(), { nil: null }),
@@ -31,7 +35,7 @@ const findingArb: fc.Arbitrary<CveFinding> = fc.record({
 const findingsArb: fc.Arbitrary<CveFinding[]> = fc.array(findingArb);
 
 describe("groupCountsBySeverity (Property 6: Severity-grouped counts are accurate)", () => {
-  it("each severity count equals the actual tally and the four counts sum to the total", () => {
+  it("each severity count equals the actual tally and the five counts sum to the total", () => {
     fc.assert(
       fc.property(findingsArb, (findings) => {
         const counts = groupCountsBySeverity(findings);
@@ -44,9 +48,15 @@ describe("groupCountsBySeverity (Property 6: Severity-grouped counts are accurat
           expect(counts[severity]).toBe(actual);
         }
 
-        // The sum of the four counts equals the total number of findings.
+        // The sum of the five counts equals the total number of findings: an
+        // unscored finding is counted in its own band, not left out of the
+        // tally or double-counted in another (Req 10.11).
         const sum =
-          counts.critical + counts.high + counts.medium + counts.low;
+          counts.critical +
+          counts.unscored +
+          counts.high +
+          counts.medium +
+          counts.low;
         expect(sum).toBe(findings.length);
       }),
       { numRuns: 100 },

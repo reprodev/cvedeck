@@ -198,7 +198,11 @@ export function ScanHistoryPanel({ onLoadRuns, onLoadChanges }: ScanHistoryPanel
                                   <span className={`badge badge-${row.severity}`}>
                                     {severityLabel(row.severity)}
                                   </span>
-                                  <span>CVSS {row.cvssScore.toFixed(1)}</span>
+                                  <span>
+                                    {row.cvssScore === null
+                                      ? "No published CVSS"
+                                      : `CVSS ${row.cvssScore.toFixed(1)}`}
+                                  </span>
                                   {row.change === "resolved" &&
                                     row.remediationStatus &&
                                     row.remediationStatus !== "remediated" && (

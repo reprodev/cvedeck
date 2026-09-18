@@ -213,13 +213,20 @@ Note also that `Red Hat` is queried **unversioned**. OSV *accepts* `Red Hat:9` a
 ### F. CVSS Base Score Calculation
 
 To guarantee score integrity even when third-party feeds supply only raw vector strings:
-1. **CVSS v3.1 Formula Engine:** Evaluates the standard vector `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` using official FIRST CVSS v3.1 specification math (Impact Sub-Score $ISS$, Exploitability, Scope multipliers).
-2. **Qualitative Severity Mapping:** For feeds providing qualitative strings:
-   - `CRITICAL` $\rightarrow 9.5$
-   - `HIGH` $\rightarrow 8.0$
-   - `MEDIUM` / `MODERATE` $\rightarrow 5.5$
-   - `LOW` $\rightarrow 2.5$
-3. **Safe Default:** Defaults to $5.0$ if no vector or score is supplied.
+1. **CVSS v3.1 Formula Engine:** Evaluates the standard vector `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` using official FIRST CVSS v3.1 specification math (Impact Sub-Score $ISS$, Exploitability, Scope multipliers), including the specification's `Roundup` function rather than a plain ceiling.
+2. **CVSS v4.0 MacroVector Engine:** Reduces a `CVSS:4.0/...` vector to its six-digit MacroVector, reads that MacroVector's score from the 270-entry table published in specification section 8.2, and interpolates downwards by the mean proportional severity distance to the vector being scored. Ported from the FIRST reference calculator and verified against it across the base-metric space; without it, every v4-only advisory was unreadable.
+3. **Qualitative Severity Mapping:** For feeds that publish a severity *word* and no vector, the word is recorded as the Severity_Level and **no CVSS score is recorded**. The band is a statement by the advisory's author; the number is not.
+4. **No default score.** An advisory publishing neither a parseable vector nor a qualitative word is recorded as `unscored`, with an absent CVSS score.
+
+> **This section used to read "Safe Default: defaults to $5.0$ if no vector or
+> score is supplied", and the qualitative mapping used to invent $9.5 / 8.0 /
+> 5.5 / 2.5$.** Neither was safe. A substituted $5.0$ was reported as *Medium*,
+> indistinguishable in the API, the dashboard and the CSV export from an
+> advisory OSV genuinely scored 5.0 -- on the one field the entire triage
+> ranking is built on. A score and a severity are independent facts: either can
+> be published without the other, and CveDeck now records exactly what the feed
+> said. An unmeasured finding ranks below Critical and above High, because it
+> could be either. See Requirements 2.6, 2.7 and 10.11.
 
 ---
 

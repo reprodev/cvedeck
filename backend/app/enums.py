@@ -19,12 +19,49 @@ class Platform(str, Enum):
 
 
 class Severity(str, Enum):
-    """Severity_Level derived from a CVSS_Score."""
+    """Severity_Level of a CVE_Finding.
+
+    ``UNSCORED`` is not a fifth band of the CVSS range: it is the absence of
+    one (Req 2.7). A Severity_Level and a CVSS_Score are independent facts, and
+    an advisory can carry either without the other:
+
+    - both -- the ordinary case: the band is derived from the score.
+    - a band but no score -- a feed that publishes a qualitative severity and
+      no vector. The band is real and is recorded as-is; the number is not
+      invented to fit it (Req 2.6).
+    - neither -- ``UNSCORED``. The advisory exists and applies, and nobody has
+      said how bad it is.
+
+    The scoreless cases used to be given a CVSS_Score of 5.0, which
+    ``derive_severity`` reported as ``MEDIUM`` -- indistinguishable from an
+    advisory genuinely scored 5.0, on the field the entire triage ranking is
+    built on.
+
+    Declaration order is ranking order; see :data:`SEVERITY_RANK`.
+    """
 
     CRITICAL = "critical"
+    UNSCORED = "unscored"
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+
+
+#: Triage ranking, lowest number first. ``UNSCORED`` sits below ``CRITICAL``
+#: and above ``HIGH`` because an unmeasured finding could be either: ranking it
+#: with the least severe would be the same silent all-clear that giving it a
+#: score of 5.0 was (Req 10.11).
+#:
+#: This is the single definition of the order. Anything that sorts findings --
+#: SQL, the API, the dashboard -- ranks by this rather than by a CVSS_Score
+#: that may not exist. ``frontend/src/lib/severity.ts`` mirrors it.
+SEVERITY_RANK: dict["Severity", int] = {
+    Severity.CRITICAL: 0,
+    Severity.UNSCORED: 1,
+    Severity.HIGH: 2,
+    Severity.MEDIUM: 3,
+    Severity.LOW: 4,
+}
 
 
 class ScanStatus(str, Enum):

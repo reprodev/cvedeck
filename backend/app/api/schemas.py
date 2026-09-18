@@ -33,9 +33,14 @@ from ..enums import (
 
 
 class SeverityCounts(BaseModel):
-    """CVE counts for a machine grouped by Severity_Level (Req 3.2)."""
+    """CVE counts for a machine grouped by Severity_Level (Req 3.2).
+
+    Five counts, in triage-ranking order. A finding falls in exactly one, so
+    the sum is the finding total (Req 10.11).
+    """
 
     critical: int
+    unscored: int
     high: int
     medium: int
     low: int
@@ -101,7 +106,11 @@ class CveFindingOut(BaseModel):
 
     cve_id: str
     severity: Severity
-    cvss_score: float
+    #: ``None`` when the advisory publishes no score. Required-but-nullable
+    #: rather than defaulted: a client must be handed an explicit ``null`` to
+    #: render as "unscored", not an absent key it could read as zero
+    #: (Req 2.7, 10.11).
+    cvss_score: float | None
     package_identifier: str | None = None
     #: The affected package name, parsed out of ``package_identifier``. Parsed
     #: here rather than in each client: the identifier is a display string
@@ -218,7 +227,9 @@ class FindingChangeOut(BaseModel):
     package_identifier: str | None = None
     package_name: str | None = None
     severity: Severity
-    cvss_score: float
+    #: ``None`` when the finding had no published score; see
+    #: :attr:`CveFindingOut.cvss_score`.
+    cvss_score: float | None
     kev_listed: bool | None = None
     remediation_status: RemediationStatus | None = None
 

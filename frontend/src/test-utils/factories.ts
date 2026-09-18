@@ -12,7 +12,13 @@ import type {
   SeverityCounts,
 } from "../types";
 
-const NO_CVES: SeverityCounts = { critical: 0, high: 0, medium: 0, low: 0 };
+const NO_CVES: SeverityCounts = {
+  critical: 0,
+  unscored: 0,
+  high: 0,
+  medium: 0,
+  low: 0,
+};
 
 export function makeMachine(
   overrides: Partial<MachineSummary> = {},

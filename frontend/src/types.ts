@@ -5,8 +5,16 @@
 /** Platform of a scanned target machine. */
 export type Platform = "linux" | "windows";
 
-/** Severity band derived from a CVE's CVSS score. */
-export type Severity = "critical" | "high" | "medium" | "low";
+/**
+ * Severity band of a CVE finding.
+ *
+ * "unscored" is not a band of the CVSS range but the absence of one: the
+ * advisory published neither a score nor a qualitative severity, so nobody has
+ * said how bad it is (Req 2.7). Severity and score are independent — a finding
+ * can carry a band with a null cvssScore, when the feed published a word and
+ * no vector (Req 2.6).
+ */
+export type Severity = "critical" | "unscored" | "high" | "medium" | "low";
 
 /**
  * How much of the host breaks if a package goes: 10 or more dependents is
@@ -15,9 +23,17 @@ export type Severity = "critical" | "high" | "medium" | "low";
  */
 export type BlastRadius = "low" | "medium" | "high";
 
-/** Ordered list of all severity levels (highest to lowest). */
+/**
+ * All severity levels in triage-ranking order.
+ *
+ * "unscored" sits below critical and above high because an unmeasured finding
+ * could be either; ranking it last would be the same silent all-clear that
+ * giving it a default score of 5.0 was (Req 10.11). Mirrors SEVERITY_RANK in
+ * the backend's app/enums.py.
+ */
 export const SEVERITIES: readonly Severity[] = [
   "critical",
+  "unscored",
   "high",
   "medium",
   "low",
@@ -26,6 +42,7 @@ export const SEVERITIES: readonly Severity[] = [
 /** Count of CVE findings grouped by severity level. */
 export interface SeverityCounts {
   critical: number;
+  unscored: number;
   high: number;
   medium: number;
   low: number;
@@ -85,7 +102,8 @@ export type FixStatus = "available" | "newer_release" | "upstream" | "none";
 export interface CveFinding {
   cveId: string;
   severity: Severity;
-  cvssScore: number;
+  /** Null when the advisory publishes no score. Never treat null as 0. */
+  cvssScore: number | null;
   /** Affected package name, parsed server-side out of packageIdentifier. */
   packageName?: string | null;
   /** Version that fixes this CVE, or null when no fix is published. */
@@ -195,7 +213,8 @@ export interface FindingChangeRow {
   packageIdentifier: string | null;
   packageName: string | null;
   severity: Severity;
-  cvssScore: number;
+  /** Null when the finding had no published score. */
+  cvssScore: number | null;
   kevListed: boolean | null;
   /** The CVE's current remediation record status on the host, if any. */
   remediationStatus: string | null;
