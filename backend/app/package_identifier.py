@@ -46,7 +46,9 @@ _UPSTREAM = re.compile(r"\(not confirmed for this release; upstream fix in (?P<l
 _AVAILABLE = re.compile(r"\(fixed in (?P<version>[^)\s]+)\)\s*$")
 
 
-def parse_fix(package_identifier: str | None) -> tuple[str, str | None, str | None]:
+def parse_fix(
+    package_identifier: str | None,
+) -> tuple[str | None, str | None, str | None]:
     """How a finding can be fixed, from the note the matcher wrote (Req 14.7, 14.8).
 
     Returns ``(status, release, version)``:
@@ -58,8 +60,13 @@ def parse_fix(package_identifier: str | None) -> tuple[str, str | None, str | No
     - ``("upstream", "RHEL 9", V)`` -- a fix exists, but the host's release could
       not be matched to the advisory, so whether it is available is unconfirmed.
     - ``("none", None, None)`` -- no fix is published.
+    - ``(None, None, None)`` -- there is no package identifier to read, which
+      is every kernel and OS-level advisory. "No fix is published" would be a
+      claim about a vendor nobody asked (Req 14.9).
     """
     text = (package_identifier or "").strip()
+    if not text:
+        return None, None, None
     if m := _AVAILABLE.search(text):
         return "available", None, m.group("version")
     if m := _ELSEWHERE.search(text):

@@ -84,6 +84,11 @@ export interface MachineDrillDownViewProps {
    * allowed, such as demo mode, which hides the action.
    */
   onForgetHostKey?: () => Promise<void>;
+  /**
+   * False while this machine's findings are still being loaded. An empty list
+   * then says nothing about the host, so the page must not call it clean.
+   */
+  findingsLoaded?: boolean;
   /** False when the last scan ran against an unreachable advisory source. */
   lastScanSourcesOk?: boolean;
   /** Port of the pin above; null when there is none (Req 17.11). */
@@ -162,6 +167,7 @@ export function MachineDrillDownView({
   hostKeyType = null,
   onForgetHostKey,
   lastScanSourcesOk,
+  findingsLoaded = true,
   hostKeyPort = null,
   onListHostKeys,
   onForgetHostKeyAt,
@@ -176,14 +182,16 @@ export function MachineDrillDownView({
   // claim about the host, and it was made for a host nobody had scanned, and
   // for one whose every scan had failed (Req 10.10, 1.4, 1.5, 1.7).
   const scanned = lastScanStatus === "success";
-  const emptyTitle =
-    lastScanStatus === undefined || lastScanStatus === "never_scanned"
+  const emptyTitle = !findingsLoaded
+    ? "Loading this host's findings…"
+    : lastScanStatus === undefined || lastScanStatus === "never_scanned"
       ? "This host has not been scanned yet."
       : scanned
         ? "No CVE findings recorded for this machine."
         : `The last scan did not complete: ${statusLabel(lastScanStatus).toLowerCase()}.`;
-  const emptyDetail =
-    lastScanStatus === undefined || lastScanStatus === "never_scanned"
+  const emptyDetail = !findingsLoaded
+    ? "Nothing here is an answer about this host yet."
+    : lastScanStatus === undefined || lastScanStatus === "never_scanned"
       ? "Nothing has been assessed on it, which is not the same as finding nothing. Run a scan to see where it stands."
       : scanned
         ? lastScanSourcesOk === false

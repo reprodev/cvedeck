@@ -8,6 +8,47 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.5] - 2026-09-18
+
+The sweep that produced 0.8.4 had a tail. This release finishes it, and the
+first item is the same shape as that one: a fact about the scanner reported as
+a fact about the network. No schema change and nothing to do on upgrade.
+
+### Fixed
+
+- **Network discovery no longer reports every host as filtered.** The image
+  never contained a `ping` binary -- it installs `gosu` and `curl` -- so every
+  ICMP probe failed with "no such file", which the prober turned into "no
+  response". Sweeping `127.0.0.1` with the 0.8.4 image reports it as not
+  responding to a ping. Worse, a host that answers ICMP but has none of the
+  probed ports open is dropped from the results entirely, so a subnet of them
+  reported "No active hosts discovered". The image now installs
+  `iputils-ping`, the probe is three-valued (answered, did not answer, never
+  asked), and a sweep that could not send ICMP says so rather than reporting
+  hosts as filtered.
+- **A sweep says how many addresses it could not probe.** Failures were
+  swallowed by a bare `except`, so a sweep that failed on half its range looked
+  exactly like one that covered everything and found nothing.
+- **A finding that names no package no longer claims "no fix is published".**
+  The fix status was read out of the package identifier and defaulted to
+  "none" when there was no identifier to read, so every kernel and
+  operating-system advisory carried a statement about a vendor nobody asked.
+  It is unknown there now.
+- **The host page can no longer show another host's findings.** Selecting a
+  machine started a request without clearing the previous machine's findings,
+  so until the new ones arrived -- or if the request failed -- the old list sat
+  under the new hostname, host-key panel and scan history.
+
+### Changed
+
+- **`GET /api/cves` is paged**: `limit` (default 500, max 5000) and `offset`,
+  with `X-Total-Count` carrying the number of matches. It previously returned
+  every finding in the database in one response. The dashboard does not use
+  this route; the routes it does use stay unpaged deliberately, since capping
+  one of those would silently truncate a view.
+- The design document's route table gained the eleven live routes it was
+  missing -- feeds, sync and the whole auth surface.
+
 ## [0.8.4] - 2026-09-17
 
 A release about saying only what was measured. 0.8.2 and 0.8.3 each fixed one

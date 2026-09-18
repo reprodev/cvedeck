@@ -262,6 +262,18 @@ export function DiscoveryView({
                 </span>
               </div>
               <div className="severity-kpi-value">{result.totalHostsDiscovered}</div>
+              {/* A count presented as complete, where some addresses were never
+                  successfully probed, is a floor rather than a total
+                  (Req 8.12). */}
+              {result.probeErrors > 0 && (
+                <span
+                  className="badge badge-partial"
+                  title="These addresses could not be probed, so the number beside this is a floor rather than a total. Sweep again, or narrow the range."
+                >
+                  <Icon name="alert" /> {result.probeErrors} address
+                  {result.probeErrors === 1 ? "" : "es"} not probed
+                </span>
+              )}
             </div>
             <div className="severity-kpi-card">
               <div className="severity-kpi-header">
@@ -324,7 +336,19 @@ export function DiscoveryView({
           {/* Host Table + Detail */}
           {result.hosts.length === 0 ? (
             <div className="card" style={{ padding: "2rem", textAlign: "center" }}>
-              <p style={{ color: "var(--text-muted)" }}>No active hosts discovered on {result.cidr}</p>
+              <p style={{ color: "var(--text-muted)" }}>
+                No host on {result.cidr} answered on the scanned ports
+                {result.icmpChecked ? " or to a ping" : ""}.
+              </p>
+              {/* Without ICMP a host that answers only a ping cannot be seen at
+                  all, so "nothing here" would be a claim this sweep cannot
+                  make (Req 8.11). */}
+              {!result.icmpChecked && (
+                <p className="hint">
+                  This server could not send an ICMP echo request, so hosts that answer
+                  only a ping were not visible to this sweep.
+                </p>
+              )}
             </div>
           ) : (
             <div className="split-pane-container">
@@ -478,7 +502,21 @@ export function DiscoveryView({
                           Ping
                         </div>
                         <div style={{ fontWeight: 600 }}>
-                          {selectedHost.respondsToPing ? <><Icon name="check-circle" /> Responds</> : <><Icon name="x-circle" /> Filtered</>}
+                          {/* "Filtered" was printed for every host on a
+                              deployment that cannot send ICMP at all
+                              (Req 8.11). */}
+                          {selectedHost.respondsToPing === true ? (
+                            <><Icon name="check-circle" /> Responds</>
+                          ) : selectedHost.respondsToPing === false ? (
+                            <><Icon name="x-circle" /> Filtered</>
+                          ) : (
+                            <span
+                              className="kev-unknown"
+                              title="This server could not send an ICMP echo request, so whether the host answers one is unknown."
+                            >
+                              Not checked
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

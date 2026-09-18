@@ -34,9 +34,11 @@ RUN npm run build
 FROM python:3.12-slim AS runtime
 
 # gosu drops privileges in the entrypoint after fixing up /data ownership;
-# curl backs the HEALTHCHECK below.
+# curl backs the HEALTHCHECK below; iputils-ping backs network discovery's ICMP
+# probe. Without that last one every swept host reported "no response", which is
+# a fact about this image rather than about the host (Req 8.11).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gosu curl \
+    && apt-get install -y --no-install-recommends gosu curl iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

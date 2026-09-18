@@ -267,7 +267,7 @@ class TestNetworkDiscoveryEngine:
 
         with patch("app.scanner.discovery._scan_host", side_effect=fake_scan_host):
             engine = NetworkDiscoveryEngine()
-            results = engine.sweep("10.0.0.0/30")
+            results = engine.sweep("10.0.0.0/30").hosts
 
         assert len(results) == 2
         assert results[0].ip == "10.0.0.1"
@@ -291,7 +291,7 @@ class TestNetworkDiscoveryEngine:
 
         with patch("app.scanner.discovery._scan_host", side_effect=fake_scan_host):
             engine = NetworkDiscoveryEngine()
-            results = engine.sweep("192.168.1.1/32")
+            results = engine.sweep("192.168.1.1/32").hosts
 
         assert len(results) == 1
         assert results[0].ip == "192.168.1.1"
@@ -300,7 +300,7 @@ class TestNetworkDiscoveryEngine:
         """All hosts unreachable returns empty list."""
         with patch("app.scanner.discovery._scan_host", return_value=None):
             engine = NetworkDiscoveryEngine()
-            results = engine.sweep("10.0.0.0/28")
+            results = engine.sweep("10.0.0.0/28").hosts
 
         assert results == []
 
@@ -434,4 +434,107 @@ class TestDiscoveryAPI:
         hostnames = [m["hostname"] for m in machines]
         assert "192.168.1.35" in hostnames
         assert "192.168.1.50" in hostnames
+
+
+# ---------------------------------------------------------------------------
+# Req 8.11: a scanner that cannot ping does not report hosts as filtered
+# ---------------------------------------------------------------------------
+
+
+class TestIcmpAvailability:
+    def test_a_missing_ping_binary_is_not_an_answer_about_the_host(self):
+        """Validates Req 8.11.
+
+        The shipped image had no ping binary for several releases, so every
+        probe raised FileNotFoundError, was caught, and returned False -- and
+        the dashboard printed "Filtered" for every host on the network.
+        """
+        from app.scanner.discovery import _ping
+
+        with patch(
+            "app.scanner.discovery.subprocess.run", side_effect=FileNotFoundError
+        ):
+            assert _ping("192.0.2.10") is None
+
+    def test_no_permission_to_ping_is_not_an_answer_either(self):
+        """Validates Req 8.11: an unprivileged container is not a filtered host."""
+        from app.scanner.discovery import _ping
+
+        with patch("app.scanner.discovery.subprocess.run", side_effect=PermissionError):
+            assert _ping("192.0.2.10") is None
+
+    def test_a_host_that_does_not_answer_in_time_still_answers_no(self):
+        """Validates Req 8.11: a timeout is a real answer and stays one."""
+        import subprocess
+
+        from app.scanner.discovery import _ping
+
+        with patch(
+            "app.scanner.discovery.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="ping", timeout=1),
+        ):
+            assert _ping("192.0.2.10") is False
+
+    def test_a_host_scanned_without_icmp_reports_unchecked_not_false(self):
+        """Validates Req 8.11."""
+        with patch("app.scanner.discovery._ping", return_value=None),              patch("app.scanner.discovery._tcp_connect", side_effect=lambda ip, port: port == 22),              patch("app.scanner.discovery._grab_banner", return_value=""),              patch("app.scanner.discovery.socket.gethostbyaddr", side_effect=OSError):
+            result = _scan_host("192.0.2.10", [22, 80])
+
+        assert result is not None
+        assert result.responds_to_ping is None
+
+    def test_a_sweep_says_whether_it_could_ping_at_all(self):
+        """Validates Req 8.11: an empty result means less without ICMP."""
+        with patch("app.scanner.discovery._scan_host", return_value=None),              patch("app.scanner.discovery.shutil.which", return_value=None):
+            result = NetworkDiscoveryEngine().sweep("10.0.0.0/30")
+
+        assert result.hosts == []
+        # The caller can tell "nothing is there" from "I could not look".
+        assert result.icmp_checked is False
+
+    def test_a_sweep_with_icmp_says_so(self):
+        with patch("app.scanner.discovery._scan_host", return_value=None),              patch("app.scanner.discovery.shutil.which", return_value="/bin/ping"):
+            result = NetworkDiscoveryEngine().sweep("10.0.0.0/30")
+
+        assert result.icmp_checked is True
+
+
+class TestProbeErrors:
+    def test_an_address_that_could_not_be_probed_is_counted_not_dropped(self):
+        """Validates Req 8.12.
+
+        A probe that raises was swallowed by a bare except, so a sweep that
+        could not look at half its range reported the same shape as one that
+        looked everywhere and found nothing.
+        """
+        def flaky(ip, ports, *, do_ping=True, grab_banners=True):
+            if ip.endswith((".1", ".2")):
+                raise OSError("too many open files")
+            return None
+
+        with patch("app.scanner.discovery._scan_host", side_effect=flaky):
+            result = NetworkDiscoveryEngine().sweep("10.0.0.0/29")
+
+        assert result.hosts == []
+        assert result.probe_errors == 2
+
+    def test_a_clean_sweep_reports_no_probe_errors(self):
+        """Validates Req 8.12: the count stays zero when nothing failed."""
+        with patch("app.scanner.discovery._scan_host", return_value=None):
+            result = NetworkDiscoveryEngine().sweep("10.0.0.0/30")
+
+        assert result.probe_errors == 0
+
+    def test_one_failure_does_not_abort_the_sweep(self):
+        """Validates Req 8.2, 8.12: the rest of the range is still swept."""
+        def flaky(ip, ports, *, do_ping=True, grab_banners=True):
+            if ip == "10.0.0.1":
+                raise RuntimeError("boom")
+            return DiscoveredHost(ip=ip, responds_to_ping=True)
+
+        with patch("app.scanner.discovery._scan_host", side_effect=flaky):
+            result = NetworkDiscoveryEngine().sweep("10.0.0.0/29")
+
+        assert [h.ip for h in result.hosts] == ["10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.6"]
+        assert result.probe_errors == 1
 

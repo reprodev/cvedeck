@@ -130,6 +130,8 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 8. WHEN an administrator requests a data export from the Fleet Overview, Machine CVE Drill-Down, or Network Discovery view, THE Web_Dashboard SHALL generate and download an RFC 4180 compliant CSV file.
 9. WHEN an exported cell would be evaluated as a formula by a spreadsheet application, THE Web_Dashboard SHALL neutralise it so that it opens as text, while preserving the value it carries, so that a remediation note, a package identifier or a discovered hostname cannot execute in the recipient's spreadsheet.
 10. WHERE an export carries findings or fleet counts, THE Web_Dashboard SHALL include the exploitation signals and the completeness signals shown in the view it came from — whether a CVE is known to be exploited, when each host was scanned, and whether its counts are complete — and SHALL write a value the system did not assess as unassessed rather than as a number or a negative, since an exported file carries none of the dashboard's own treatment of an unknown.
+11. WHERE this deployment cannot send an ICMP echo request — no ping binary, or no permission to use one — THE CVE_Scanner_System SHALL report each swept host's ping reachability as unchecked rather than as no response, and SHALL say that hosts answering only ICMP were not visible to the sweep, since neither is a fact about the hosts.
+12. IF probing an address during a discovery sweep fails outright, THEN THE CVE_Scanner_System SHALL continue the sweep, SHALL count that address as unprobed, and SHALL report the count with the results, so that a sweep which could not cover part of its range is not presented as a complete answer.
 
 ### Requirement 9: SSH Key-Based and Secretless Remote Authentication
 
@@ -291,6 +293,9 @@ host it is for, so that copying it produces a command that works.
    that release and state that upgrading packages cannot clear the finding; WHERE
    the host's release cannot be matched to the advisory, the system SHALL report
    the fix as upstream and unconfirmed for the host.
+9. WHERE a finding names no package — a kernel or operating-system advisory —
+   THE system SHALL report its fix status as unknown rather than as no fix
+   published, since no vendor was asked about a package that was never named.
 
 ### Requirement 15: Public demonstration mode
 

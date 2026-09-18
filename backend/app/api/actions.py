@@ -427,7 +427,8 @@ def discovery_sweep(
         ports=body.ports,
         grab_banners=body.grab_banners,
     )
-    discovered = engine.sweep(body.cidr)
+    sweep = engine.sweep(body.cidr)
+    discovered = sweep.hosts
 
     hosts_out = [
         DiscoveredHostOut(
@@ -456,6 +457,8 @@ def discovery_sweep(
         cidr=body.cidr,
         total_hosts_scanned=total_scanned,
         total_hosts_discovered=len(hosts_out),
+        icmp_checked=sweep.icmp_checked,
+        probe_errors=sweep.probe_errors,
         hosts=hosts_out,
     )
 

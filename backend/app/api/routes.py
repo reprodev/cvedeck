@@ -18,13 +18,14 @@ router reads through the :class:`~app.data.repository.Repository` over a
 request-scoped session provided by :func:`app.api.dependencies.get_session`.
 
 Action endpoints (POST scans/remediation/sync, PUT remediation) are intentionally
-not defined here; task 8.2 will add an action router to the same app factory.
+not defined here; they live in :mod:`app.api.actions`, mounted on the same app
+factory.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import config
@@ -96,6 +97,12 @@ def _to_machine_summary(
         ),
         last_scan_baseline=latest_run.baseline if latest_run is not None else False,
     )
+
+
+#: Page size for GET /api/cves. Generous enough that a homelab fleet fits in one
+#: response, capped so one request cannot serialize an entire database.
+_CVE_PAGE_DEFAULT = 500
+_CVE_PAGE_MAX = 5000
 
 
 # One parser for the whole backend; see app/package_identifier.py for why the
@@ -399,11 +406,20 @@ def get_machine_cves(
 
 @router.get("/cves", response_model=list[CveFindingOut])
 def list_cves(
+    response: Response,
     severity: Severity | None = Query(default=None),
+    limit: int = Query(default=_CVE_PAGE_DEFAULT, ge=1, le=_CVE_PAGE_MAX),
+    offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
     repo: Repository = Depends(_get_repository),
 ) -> list[CveFindingOut]:
-    """Return all CVE findings, optionally severity-filtered (Req 3.3, 6.3).
+    """Return CVE findings, newest-risk first, a page at a time (Req 3.3, 6.3).
+
+    Unbounded before: every finding in the database went into one response, so
+    a fleet of a few hundred hosts answered this route with tens of thousands
+    of objects. ``X-Total-Count`` carries how many match the filter, so a caller
+    that receives a page can tell it received a page -- a truncated list with no
+    total is the same shape as a complete one.
 
     Four queries whatever the fleet size: the findings, then remediation
     records, latest runs and their new findings, each batched. Asking per
@@ -418,8 +434,12 @@ def list_cves(
     stmt = select(CveFinding)
     if severity is not None:
         stmt = stmt.where(CveFinding.severity == severity)
-    stmt = stmt.order_by(CveFinding.cvss_score.desc(), CveFinding.cve_id)
-    findings = list(session.execute(stmt).scalars().all())
+    stmt = stmt.order_by(CveFinding.cvss_score.desc(), CveFinding.cve_id, CveFinding.id)
+    total = session.execute(
+        select(func.count()).select_from(stmt.order_by(None).subquery())
+    ).scalar_one()
+    findings = list(session.execute(stmt.limit(limit).offset(offset)).scalars().all())
+    response.headers["X-Total-Count"] = str(total)
 
     remediation_maps = repo.latest_remediation_records()
     new_keys_by_machine = repo.new_finding_keys_for_runs(

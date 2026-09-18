@@ -65,7 +65,10 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
   const { route, navigate } = useUrlState();
   const selectedMachineId = route.machineId;
   const activeNav = route.workspace;
-  const [findings, setFindings] = useState<CveFinding[]>([]);
+  // `null` is "not loaded for the machine now selected", which is not the same
+  // as "this machine has none". Without the distinction, a slow or failed load
+  // left the previous machine's findings rendered under the new machine's name.
+  const [findings, setFindings] = useState<CveFinding[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<ServerCapabilities | null>(null);
   const { theme, cycleTheme } = useTheme();
@@ -188,10 +191,13 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
   // Load the selected machine's CVEs for the drill-down (Requirement 3.4).
   useEffect(() => {
     if (!selectedMachineId) {
-      setFindings([]);
+      setFindings(null);
       return;
     }
     let cancelled = false;
+    // Cleared before the request, not after it: until this machine's findings
+    // arrive, the previous machine's are not an answer about this one.
+    setFindings(null);
     api
       .getMachineCves(selectedMachineId)
       .then((result) => {
@@ -201,6 +207,8 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
+          // Still null: a failed request leaves the page with no findings to
+          // show, and the error banner says why.
           setError(errorMessage(err));
         }
       });
@@ -599,7 +607,8 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           machineId={selectedMachineId}
           hostname={selectedMachine?.hostname}
           platform={selectedMachine?.platform}
-          findings={findings}
+          findings={findings ?? []}
+          findingsLoaded={findings !== null}
           onBack={handleBack}
           onSaveRemediation={handleSaveRemediation}
           lastScanStatus={selectedMachine?.lastScanStatus}

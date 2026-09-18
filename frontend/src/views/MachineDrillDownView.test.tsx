@@ -125,6 +125,25 @@ describe("MachineDrillDownView", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
+  it("does not describe a host whose findings have not loaded", () => {
+    // A slow or failed request used to leave the previous host's findings
+    // rendered under this host's name; an empty list here is not an answer
+    // about the host yet.
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={[]}
+        findingsLoaded={false}
+        lastScanStatus="success"
+      />,
+    );
+
+    expect(screen.getByText(/Loading this host's findings/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText("No CVE findings recorded for this machine."),
+    ).not.toBeInTheDocument();
+  });
+
   it("does not call an unscanned host clean", () => {
     // "No CVEs identified for this machine." was shown for a host enrolled
     // from discovery and never scanned, which is a claim about the host made

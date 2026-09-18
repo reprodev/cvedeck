@@ -27,6 +27,7 @@ from __future__ import annotations
 import ipaddress
 import platform
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -73,10 +74,31 @@ class DiscoveredHost:
 
     ip: str
     hostname: str = ""           # reverse-DNS hostname, empty if unresolved
-    responds_to_ping: bool = False
+    #: True answered, False did not, None never asked -- no ping binary or no
+    #: permission to use it (Req 8.11).
+    responds_to_ping: bool | None = None
     open_ports: list[int] = field(default_factory=list)
     services: list[ServiceInfo] = field(default_factory=list)
     os_guess: str = ""           # best-effort OS guess from banners
+
+
+@dataclass
+class SweepResult:
+    """What one sweep found, and what it was able to ask.
+
+    ``icmp_checked`` is False when this deployment has no usable ``ping``: every
+    host's ``responds_to_ping`` is then ``None``, and a host that answers only
+    ICMP cannot be discovered at all -- so "no active hosts" is a statement
+    about the sweep, not about the subnet (Req 8.11).
+    """
+
+    hosts: list[DiscoveredHost] = field(default_factory=list)
+    icmp_checked: bool = True
+    #: Addresses whose probe raised instead of answering -- a socket the host
+    #: ran out of, a DNS resolver that hung, a defect here. They were dropped
+    #: silently before, so a sweep that could not look at half the subnet
+    #: reported the same shape as one that found nothing there (Req 8.12).
+    probe_errors: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -97,10 +119,25 @@ _PORT_PROTOCOL: dict[int, str] = {
 # Low-level probes (each is a pure function, safe for threading)
 # ---------------------------------------------------------------------------
 
-def _ping(ip: str, timeout: int = _PING_TIMEOUT_S) -> bool:
+def icmp_available() -> bool:
+    """Whether this deployment can send an ICMP echo request at all.
+
+    The container shipped without a ``ping`` binary for several releases, so
+    every probe failed with ``FileNotFoundError`` and every host was reported
+    as not responding -- a statement about the scanner presented as a fact
+    about the host (Req 8.11).
+    """
+    return shutil.which("ping") is not None
+
+
+def _ping(ip: str, timeout: int = _PING_TIMEOUT_S) -> bool | None:
     """Send a single ICMP echo request via the OS ``ping`` command.
 
-    Returns ``True`` if the host responds within *timeout* seconds.
+    Returns ``True`` if the host responds within *timeout* seconds, ``False``
+    if it does not, and ``None`` if the question could not be asked: no
+    ``ping`` binary, or no permission to open the socket. ``False`` there would
+    claim the host is filtered on the strength of a missing program.
+
     Uses ``-n 1`` on Windows and ``-c 1`` on POSIX.
     """
     count_flag = "-n" if platform.system().lower() == "windows" else "-c"
@@ -116,8 +153,15 @@ def _ping(ip: str, timeout: int = _PING_TIMEOUT_S) -> bool:
             timeout=timeout + 2,
         )
         return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except subprocess.TimeoutExpired:
+        # The host did not answer in time, which is an answer.
         return False
+    except (FileNotFoundError, PermissionError):
+        return None
+    except OSError:
+        # Anything else that stopped the probe from running -- still not
+        # evidence about the host.
+        return None
 
 
 def _tcp_connect(ip: str, port: int, timeout: float = _TCP_CONNECT_TIMEOUT) -> bool:
@@ -292,7 +336,7 @@ def _classify_banner(port: int, banner: str) -> ServiceInfo:
 # OS guessing heuristic
 # ---------------------------------------------------------------------------
 
-def _guess_os(services: list[ServiceInfo], responds_to_ping: bool) -> str:
+def _guess_os(services: list[ServiceInfo], responds_to_ping: bool | None) -> str:
     """Best-effort OS guess from service banners and open ports."""
     if not services:
         return "Unknown"
@@ -346,15 +390,16 @@ def _scan_host(
     grab_banners: bool = True,
 ) -> DiscoveredHost | None:
     """Probe a single IP address. Returns ``None`` if completely unreachable."""
-    responds = _ping(ip) if do_ping else False
+    # Three states: answered, did not answer, and never asked (Req 8.11).
+    responds = _ping(ip) if do_ping else None
     open_ports: list[int] = []
 
     for port in ports:
         if _tcp_connect(ip, port):
             open_ports.append(port)
 
-    if not responds and not open_ports:
-        return None  # Host is down or completely filtered.
+    if responds is not True and not open_ports:
+        return None  # Nothing answered; whether it is down is not known here.
 
     # Reverse-DNS lookup (best effort).
     hostname = ""
@@ -419,7 +464,7 @@ class NetworkDiscoveryEngine:
         self._do_ping = do_ping
         self._grab_banners = grab_banners
 
-    def sweep(self, cidr: str) -> list[DiscoveredHost]:
+    def sweep(self, cidr: str) -> SweepResult:
         """Scan every host address in *cidr* and return discovered hosts.
 
         Args:
@@ -427,10 +472,12 @@ class NetworkDiscoveryEngine:
                 A bare IP address (``"192.168.0.1"``) is treated as ``/32``.
 
         Returns:
-            A list of :class:`DiscoveredHost` objects for each host that
-            responded to ping or had at least one open port, carrying the
+            A :class:`SweepResult`: the hosts that answered, each carrying the
             address, reverse-DNS name, reachability, open ports, banners and
-            inferred platform required by Req 8.3.
+            inferred platform required by Req 8.3, plus whether ICMP was asked
+            at all. An empty host list means something different where ICMP
+            could not be sent, and only the result object can say so
+            (Req 8.11).
 
         Raises:
             ValueError: If *cidr* is not a valid IPv4 network.
@@ -454,15 +501,25 @@ class NetworkDiscoveryEngine:
                 ): ip
                 for ip in addresses
             }
+            probe_errors = 0
             for future in as_completed(futures):
                 try:
                     result = future.result()
                     if result is not None:
                         discovered.append(result)
                 except Exception:
-                    # Individual host probe failures are silently skipped.
-                    pass
+                    # One address failing must not abort the sweep, but it is
+                    # not a host that answered nothing either: it is counted
+                    # and reported (Req 8.12).
+                    probe_errors += 1
 
         # Sort by IP for deterministic output.
         discovered.sort(key=lambda h: ipaddress.IPv4Address(h.ip))
-        return discovered
+        return SweepResult(
+            hosts=discovered,
+            # Asked once for the sweep rather than inferred from the hosts: with
+            # no host discovered there is nothing to infer it from, and that is
+            # exactly the case where it matters.
+            icmp_checked=self._do_ping and icmp_available(),
+            probe_errors=probe_errors,
+        )

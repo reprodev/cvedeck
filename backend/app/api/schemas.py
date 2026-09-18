@@ -121,7 +121,9 @@ class CveFindingOut(BaseModel):
     #: ``upstream`` -- ``fix_release`` has a fix, but the host's release could not
     #: be matched, so availability is unconfirmed;
     #: ``none`` -- no fix is published.
-    fix_status: str = "none"
+    #: ``None`` where there is no package identifier to read it from, which is
+    #: not the same claim as "no fix is published" (Req 14.9).
+    fix_status: str | None = None
     #: The release that has the fix, for ``newer_release`` and ``upstream``.
     fix_release: str | None = None
     #: The fixed version in that release.
@@ -418,7 +420,8 @@ class DiscoveredHostOut(BaseModel):
 
     ip: str
     hostname: str = ""
-    responds_to_ping: bool = False
+    #: True answered, False did not, None never asked (Req 8.11).
+    responds_to_ping: bool | None = None
     open_ports: list[int] = Field(default_factory=list)
     services: list[DiscoveredServiceOut] = Field(default_factory=list)
     os_guess: str = ""
@@ -430,6 +433,12 @@ class DiscoverySweepResponse(BaseModel):
     cidr: str
     total_hosts_scanned: int
     total_hosts_discovered: int
+    #: False when this deployment cannot send ICMP at all, which makes an empty
+    #: host list a statement about the sweep rather than the subnet (Req 8.11).
+    icmp_checked: bool = True
+    #: Addresses whose probe failed outright, so the sweep did not cover them
+    #: (Req 8.12). Zero is the normal case.
+    probe_errors: int = 0
     hosts: list[DiscoveredHostOut]
 
 

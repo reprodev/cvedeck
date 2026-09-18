@@ -187,7 +187,9 @@ _FINDING_KEYS = {
     "has_fix": bool,
     # Where the fix is (Req 14.7, 14.8): "available" on the host's own release,
     # "newer_release" or "upstream" naming the release that has it, or "none".
-    "fix_status": str,
+    # None where the finding names no package: "no fix published" would be a
+    # claim about a vendor nobody asked (Req 14.9).
+    "fix_status": (str, type(None)),
     "fix_release": (str, type(None)),
     "fix_release_version": (str, type(None)),
     "remediation_status": (str, type(None)),
@@ -559,6 +561,67 @@ def test_a_collected_inventory_yields_a_measured_blast_radius(session, client):
 
     assert findings[0]["blast_radius"] == "high"
     assert len(findings[0]["depended_on_by"]) == 10
+
+
+def test_the_fleet_cve_list_is_paged_and_says_how_many_there_are(session, client):
+    """Validates Req 3.3, 6.3: a page must be tellable from a whole list."""
+    _make_machine(session, "m1", "alpha.example.com")
+    repo = Repository(session)
+    repo.save_findings(
+        "m1",
+        [
+            _finding(f"CVE-2026-{n:04d}", 9.0, Severity.CRITICAL, package_identifier=f"deb:p{n}@1")
+            for n in range(1, 8)
+        ],
+    )
+    session.commit()
+
+    first = client.get("/api/cves?limit=3")
+    assert first.status_code == 200
+    page = _assert_json_response(first)
+    assert len(page) == 3
+    # Without the total, a truncated list is the same shape as a complete one.
+    assert first.headers["X-Total-Count"] == "7"
+
+    rest = _assert_json_response(client.get("/api/cves?limit=3&offset=3"))
+    assert len(rest) == 3
+    tail = _assert_json_response(client.get("/api/cves?limit=3&offset=6"))
+    assert len(tail) == 1
+    # Every finding appears exactly once across the pages.
+    seen = {f["cve_id"] for f in page + rest + tail}
+    assert len(seen) == 7
+
+
+def test_a_finding_with_no_package_has_no_fix_status(session, client):
+    """Validates Req 14.9.
+
+    An OS-level advisory names no package, so nothing was asked of any vendor.
+    Reporting "none" put "no fix is published" against every kernel finding.
+    """
+    _make_machine(session, "m1", "alpha.example.com")
+    repo = Repository(session)
+    repo.save_findings(
+        "m1",
+        [
+            _finding("CVE-kernel", 7.8, Severity.HIGH),
+            _finding(
+                "CVE-pkg",
+                9.8,
+                Severity.CRITICAL,
+                package_identifier="Debian:13:curl@8.14.1 (fixed in 8.14.2)",
+            ),
+        ],
+    )
+    session.commit()
+
+    by_id = {
+        f["cve_id"]: f
+        for f in _assert_json_response(client.get("/api/machines/m1/cves"))
+    }
+
+    assert by_id["CVE-kernel"]["fix_status"] is None
+    # A package finding still answers, or the fix has only moved the lie.
+    assert by_id["CVE-pkg"]["fix_status"] == "available"
 
 
 def test_a_finding_with_no_package_has_no_blast_radius(session, client):

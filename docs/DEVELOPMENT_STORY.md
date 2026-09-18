@@ -1418,3 +1418,55 @@ added the second half in earnest. There is now a test that says red is only for
 exploitation, a test that says a reflowing table labels its cells, and a test
 that says a host which cannot be read is not a host with nothing on it. Each
 one replaces a fix to a screen with a rule about the product.
+
+## Chapter 15 — A fact about the scanner (v0.8.5)
+
+0.8.4 ended with a sweep for places where a missing answer was presentable as a
+good one, and the sweep had a tail. The largest item in it was not in the
+dashboard or the database. It was in the Dockerfile.
+
+Network discovery sends an ICMP echo request before it probes ports. The
+container installs `gosu` and `curl`. It has never installed `ping`. So every
+probe raised `FileNotFoundError`, and the prober — reasonably, in isolation —
+caught it and returned `False`.
+
+Every host on every swept subnet therefore reported "✗ Filtered". Pointing the
+released 0.8.4 image at `127.0.0.1`, which answers a ping as reliably as
+anything in computing, returns `responds_to_ping: false`.
+
+The second-order effect is worse than the label. A host is kept in the results
+if it answered ICMP *or* had an open port among the ones probed. With ICMP
+permanently unavailable, a host that answers only a ping is dropped entirely,
+and the view then says "No active hosts discovered on 10.0.0.0/24" — a
+confident statement about a subnet the scanner could not properly look at.
+
+The fix has two halves, and only having both makes it honest. The image gains
+`iputils-ping`, so the question is actually asked. And the probe becomes
+three-valued, so that where the question *cannot* be asked — no binary, no
+permission to open the socket — the answer is "not checked" rather than a
+verdict about the host. A timeout stays a real "no", because that is the host
+declining to answer.
+
+### The same bug, told by its shape
+
+Once stated that way, the rest of the release was easy to find, because it is
+all the same sentence:
+
+- A sweep that could not probe an address counted it as nothing there.
+- A finding with no package name reported "no fix is published", which is a
+  statement about a vendor nobody asked.
+- Selecting a host showed the previous host's findings under the new host's
+  name until the request came back, and indefinitely if it failed.
+
+None of these crash. Every one of them answers a question that was never put.
+
+### Closing thought
+
+The recurring lesson of the last four releases is not "check for nulls". It is
+that the boundary between what the system measured and what it merely defaulted
+to is the most valuable line in the code, and it is invisible unless something
+in the design keeps drawing it: a three-valued field, a status of its own, a
+count that travels with the result, a test that states the rule.
+
+A scanner that cannot ping is not looking at a network of filtered hosts. It is
+not looking.

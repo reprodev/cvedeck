@@ -192,7 +192,7 @@ class SyncService:
 | GET | `/api/machines` | List scanned machines with severity-grouped CVE counts | 6.1, 3.2 |
 | GET | `/api/machines/{machine_id}` | Machine detail; 404 if unknown | 6.4 |
 | GET | `/api/machines/{machine_id}/cves?severity=` | CVEs for a machine, optional severity filter | 6.2, 6.3 |
-| GET | `/api/cves?severity=` | All CVEs, optional severity filter | 3.3, 6.3 |
+| GET | `/api/cves?severity=&limit=&offset=` | CVEs across the fleet, one page at a time; `X-Total-Count` carries the match count | 3.3, 6.3 |
 | POST | `/api/machines/{machine_id}/cves/{cve_id}/remediation` | Add remediation record | 4.1 |
 | PUT | `/api/remediation/{record_id}` | Update remediation record | 4.3 |
 | POST | `/api/scans` | Manually initiate a scan | 1.1, 1.2 |
@@ -203,6 +203,23 @@ class SyncService:
 | GET | `/api/machines/{machine_id}/scans/{run_id}/changes` | A run's new and resolved findings | 18.2, 18.6 |
 | POST | `/api/discovery/sweep` | Zero-touch ICMP/TCP/banner network asset sweep | 8.1, 8.2 |
 | POST | `/api/discovery/enroll` | Enroll discovered network hosts into fleet roster | 8.4 |
+| GET | `/api/feeds` | Threat-intel feed health: age, record count, last error | 10.1, 13.4 |
+| POST | `/api/feeds/refresh` | Refresh the intel feeds now | 13.4 |
+| POST | `/api/sync` | Push pending local rows to the Online_Database | 5.2, 5.3 |
+| GET | `/api/auth/state` | Whether setup is needed, login required, or a session is live | 16.1 |
+| POST | `/api/auth/setup` | Create the single account from the setup code | 16.1, 16.2 |
+| POST | `/api/auth/login` | Sign in and set the session cookie | 16.3 |
+| POST | `/api/auth/logout` | End the session | 16.3 |
+| PUT | `/api/auth/password` | Change the account password | 16.6 |
+| GET | `/api/auth/tokens` | List API tokens (never their secrets) | 16.7 |
+| POST | `/api/auth/tokens` | Create an API token; the secret is shown once | 16.7 |
+| DELETE | `/api/auth/tokens/{token_id}` | Revoke an API token | 16.7 |
+
+Only `/api/cves` is paged. The others answer for one machine, one fleet roster
+or one account, which are bounded by how many hosts a person enrolled; the
+fleet-wide finding list is the one whose size is a multiple of both. Adding a
+cap to a route the dashboard reads would silently truncate a view, which is the
+failure this project spends most of its effort avoiding.
 | POST | `/api/sync` | Manually trigger synchronization | 5.2 |
 | GET | `/api/health` | Liveness probe for container orchestrators and reverse proxies | operational |
 

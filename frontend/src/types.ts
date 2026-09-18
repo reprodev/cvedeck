@@ -389,7 +389,8 @@ export interface DiscoveredService {
 export interface DiscoveredHost {
   ip: string;
   hostname: string;
-  respondsToPing: boolean;
+  /** True answered, false did not, null never asked (Req 8.11). */
+  respondsToPing: boolean | null;
   openPorts: number[];
   services: DiscoveredService[];
   osGuess: string;
@@ -400,6 +401,10 @@ export interface DiscoverySweepResult {
   cidr: string;
   totalHostsScanned: number;
   totalHostsDiscovered: number;
+  /** False when this deployment cannot send ICMP at all (Req 8.11). */
+  icmpChecked: boolean;
+  /** Addresses whose probe failed, so the sweep did not cover them (Req 8.12). */
+  probeErrors: number;
   hosts: DiscoveredHost[];
 }
 

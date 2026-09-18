@@ -282,7 +282,8 @@ export function exportDiscoveryCsv(
       h.ip,
       h.hostname,
       h.osGuess,
-      h.respondsToPing ? "Yes" : "No",
+      // Three states: a host nobody could ping is not a host that ignored one.
+      h.respondsToPing === null ? NOT_CHECKED : h.respondsToPing ? "Yes" : "No",
       portsStr,
       servicesStr,
       bannersStr,

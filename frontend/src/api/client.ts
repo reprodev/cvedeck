@@ -307,7 +307,7 @@ interface DiscoveredServiceWire {
 interface DiscoveredHostWire {
   ip: string;
   hostname: string;
-  responds_to_ping: boolean;
+  responds_to_ping?: boolean | null;
   open_ports: number[];
   services: DiscoveredServiceWire[];
   os_guess: string;
@@ -318,6 +318,8 @@ interface DiscoverySweepResponseWire {
   cidr: string;
   total_hosts_scanned: number;
   total_hosts_discovered: number;
+  icmp_checked?: boolean;
+  probe_errors?: number;
   hosts: DiscoveredHostWire[];
 }
 
@@ -466,7 +468,9 @@ function toDiscoveredHost(wire: DiscoveredHostWire): DiscoveredHost {
   return {
     ip: wire.ip,
     hostname: wire.hostname,
-    respondsToPing: wire.responds_to_ping,
+    // `?? null`, never `?? false`: an absent answer is not evidence that the
+    // host is filtered (Req 8.11).
+    respondsToPing: wire.responds_to_ping ?? null,
     openPorts: wire.open_ports,
     services: wire.services.map(toDiscoveredService),
     osGuess: wire.os_guess,
@@ -498,6 +502,10 @@ function toDiscoverySweepResult(wire: DiscoverySweepResponseWire): DiscoverySwee
     cidr: wire.cidr,
     totalHostsScanned: wire.total_hosts_scanned,
     totalHostsDiscovered: wire.total_hosts_discovered,
+    // Absent means an older backend that always sent ICMP; false is the state
+    // worth knowing, so it is never assumed.
+    icmpChecked: wire.icmp_checked ?? true,
+    probeErrors: wire.probe_errors ?? 0,
     hosts: wire.hosts.map(toDiscoveredHost),
   };
 }
