@@ -1722,3 +1722,118 @@ A careful presentation layer over data nobody verified produces something worse
 than an obvious bug: a confident, well-designed, internally consistent report of
 a graph that was 87% missing. The fix was not cleverness, it was running
 `docker run --rm rockylinux:9 rpm -qa --qf ...` and reading what came back.
+
+---
+
+## Chapter 18 — The refresh that changed nothing (v0.8.8)
+
+The previous chapter ended with the feeds learning to refresh themselves. A
+container that had been down a week now caught up within a minute of booting,
+and kept a current KEV catalogue without an operator's cron. The reasoning was
+sound: a missing cron was indistinguishable from good news, so the application
+took the job.
+
+Then it put the catalogue on a shelf.
+
+Enrichment ran in exactly one place — `FindingEnricher.enrich`, called on
+findings on their way into the database at the end of a scan. Nothing re-read
+the cache afterwards. So the 03:00 refresh downloaded CISA's catalogue, wrote it
+to the local tables, recorded a successful refresh, and changed nothing on any
+screen. A CVE added to KEV overnight sat in the cache, correctly downloaded,
+while the finding for it on host `web-01` went on reading *not exploited* until
+somebody re-scanned that host by hand.
+
+On a fleet that gets re-scanned daily this would be a one-day lag. There is no
+such fleet, because scheduled scanning does not exist: every scan is somebody
+clicking a button. The lag was therefore unbounded.
+
+### The shape of the mistake
+
+What makes this worth a chapter is not the bug. It is that the feature shipped,
+was tested, was documented, and was *correct* — and still did not do the thing
+it existed to do.
+
+`DEPLOYMENT.md` even said so, in the Known limitations list, in the release that
+added the refresh:
+
+> **Enrichment applies at scan time, not retroactively.** Refreshing the feeds
+> updates the cache; findings pick up the new signals on their next scan.
+
+That sentence had been true and unremarkable since enrichment was built. What
+changed in 0.8.7 was the sentence two bullets above it, which now promised
+automatic freshness. Nobody read the two together. A limitation that is accurate
+in isolation can become the hole in the feature shipped next to it, and nothing
+in the process catches that, because every individual statement passes review.
+
+### Getting the write path right
+
+The fix is small — re-read the cache onto stored rows — and the only interesting
+part is how much it is allowed to write.
+
+`enrich` runs over one scan's findings. `reapply_to_stored` runs over **every
+finding in the deployment, after every refresh.** That is a different risk. The
+invariant the whole project rests on says an absent answer must never be
+presentable as a good one; here, a feed that failed to download could have
+rewritten the entire fleet's exploitation flags from `true` to `false` in a
+single pass. The blast radius of a mistake in this function is the database.
+
+So it reuses the same guard, deliberately, rather than growing its own: only a
+*usable* feed is applied, where usable means it refreshed successfully and
+returned a non-empty catalogue. An unusable one is not applied at all, and its
+stored fields are left exactly as they are.
+
+Writing the test for that produced the chapter's real lesson. The obvious test
+was "the KEV download fails, assert nothing is cleared". It passed immediately —
+and it passed for the wrong reason. `record_feed_refresh` advances
+`last_refreshed_at` and `record_count` only on success, precisely so that a
+transient outage keeps serving yesterday's answer. A failed refresh therefore
+leaves the feed *usable*, by design. The test asserted a guard it never reached.
+
+Trying to force the issue by emptying the cache while leaving the health record
+claiming 1,687 entries made it worse: that state cannot occur, and the test then
+failed against correct code. The honest version models a database carried onto
+an instance whose feeds have never been fetched — a restored backup, a first
+boot against existing data — where the catalogue genuinely is absent and the
+findings still carry what the last good scan learned.
+
+Both versions of the test were then run against a deliberately broken copy of
+the function, with the health check removed, to confirm they actually fail when
+the guard is gone. The first one did not, before the rewrite. A test that cannot
+fail is not evidence.
+
+### The safeguard that would have eaten its own demonstration
+
+The last piece was found by asking where a fleet-wide write would land that
+nobody would think to look.
+
+Demo mode seeds a fictional twelve-host fleet, and among the hosts it seeds are
+findings whose exploitation status was **never checked** — `kev_listed` left
+`NULL`, rendered as a muted *unknown*. They are there on purpose. They are how a
+visitor sees, in thirty seconds, the distinction the entire tool is built on:
+*we don't know* is not *you're fine*.
+
+The periodic refresher did not check `CVEDECK_DEMO_MODE`. Scanning, discovery
+and connection tests all refuse in demo mode; the refresher had simply never
+needed to care, because until now a refresh touched nothing but the cache. With
+the reapply in place, the first boot of any demo container would have downloaded
+the real KEV catalogue and enriched those findings into honest `true`/`false`
+answers — quietly deleting the illustration of the invariant, in the one place
+the project shows it to strangers.
+
+It would not have looked like a bug. The demo would have kept working. The
+screenshots would have kept matching. There would just no longer have been an
+unknown finding anywhere in it.
+
+The refresher is now off in demo mode, which also made the README true again —
+it had been telling readers the feeds start empty for two releases after they
+stopped doing so.
+
+### Closing thought
+
+Chapter 17 ended on the difference between a careful presentation layer and
+verified input. This one is about a third thing: a feature that is individually
+correct at every point and still inert, because the step that would have made it
+matter was documented as a limitation somewhere else and never reconciled.
+
+The automation was real. The download happened. The cache was fresh. And for
+one release, the only thing that ever read it was a scan that nobody had run.

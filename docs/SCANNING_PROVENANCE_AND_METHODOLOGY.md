@@ -659,7 +659,9 @@ The distinction is preserved at every layer, and each one is separately tested:
   written before enrichment existed; nothing checked them.
 - **Enrichment** — `FindingEnricher` writes a `False` only when a feed is
   *usable*, meaning it refreshed successfully **and** returned a non-empty
-  catalogue. An unusable feed leaves every field `NULL`.
+  catalogue. An unusable feed leaves every field `NULL`. This holds on both
+  paths: `enrich`, at the scan that produces a finding, and `reapply_to_stored`,
+  which re-reads the cache onto findings already stored after every refresh.
 - **API** — `CveFindingOut` types these as `bool | None` / `float | None`, and the
   contract test asserts the nullability rather than merely the presence of the keys.
 - **Client** — `client.ts` maps with `?? null`, never `?? false`.

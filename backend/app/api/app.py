@@ -34,7 +34,7 @@ from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.8.7"
+_VERSION = "0.8.8"
 
 
 def create_app(*, wire_production: bool = False) -> FastAPI:
@@ -104,7 +104,7 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
             # drives it externally. Reported so an operator can tell "the feeds
             # are kept fresh for me" from "I still need a cron" without reading
             # the container's environment (Req 10.14).
-            "feed_refresh_hours": config.feed_refresh_hours(),
+            "feed_refresh_hours": config.feed_refresh_hours_in_effect(),
         }
         if not login_required() or resolve_principal(request) is not None:
             capabilities["server_ssh_key"] = config.default_ssh_key_path() is not None
@@ -152,6 +152,15 @@ async def _open_database_at_startup(_: FastAPI):
     (Req 10.14). It lives on this hook rather than its own because this hook is
     already the one that only runs for a wired production app -- a test app has
     no lifespan, so no test grows a background task it did not ask for.
+
+    Demo mode switches the refresher off, alongside scanning, discovery and
+    connection tests. Since 0.8.8 a refresh reapplies the feeds to stored
+    findings (Req 10.15), and the demo fleet is seeded with findings whose
+    exploitation status was deliberately never checked -- the unknown state the
+    demo exists to show. An automatic refresh would enrich them on the first
+    boot and quietly delete the illustration of the project's central
+    invariant. Pressing "Refresh intel" still works, which is the demo's own
+    intended sequence.
     """
     from ..services.feed_scheduler import (
         start_periodic_refresh,
@@ -159,7 +168,7 @@ async def _open_database_at_startup(_: FastAPI):
     )
 
     engine = get_engine()
-    refresher = start_periodic_refresh(engine, config.feed_refresh_hours())
+    refresher = start_periodic_refresh(engine, config.feed_refresh_hours_in_effect())
     try:
         yield
     finally:

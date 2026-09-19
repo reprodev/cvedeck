@@ -8,6 +8,83 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.8] - 2026-09-19
+
+0.8.7 taught the intel feeds to refresh themselves and stopped one step short of
+the thing the refresh was for. Enrichment ran only at the scan that produced a
+finding, so a catalogue downloaded at 03:00 changed nothing anyone could see
+until somebody re-scanned each host by hand. No schema change, and nothing to do
+on upgrade.
+
+### Added
+
+- **A feed refresh now reapplies to the findings you already have.** A CVE added
+  to CISA's KEV catalogue overnight is marked on the fleet in the morning,
+  without re-scanning the hosts that carry it. Before this, the automatic
+  refresh added in 0.8.7 updated the cache and nothing else: the dashboard went
+  on stating the exploitation status of a catalogue the system no longer held,
+  and on a fleet nobody re-scans daily -- which is every fleet, since scheduled
+  scanning does not exist -- that gap never closed on its own.
+
+  The rules are the ones enrichment has always followed, because they are the
+  same code path's rules and a finding's signals must not depend on which path
+  last touched it:
+
+  - A feed that is not *usable* is not applied at all, and its stored fields are
+    left as they are. **An outage never clears a signal.** This matters more here
+    than at scan time: the reapply runs after every refresh, across the whole
+    fleet at once, so getting it wrong would rewrite every finding rather than
+    one scan's worth.
+  - A usable KEV catalogue is authoritative in both directions. A CVE that has
+    left the catalogue goes back to `false`, because a catalogue the system
+    actually holds and which omits it is a real answer.
+  - A usable EPSS set only writes scores it has. A CVE it does not rank keeps
+    the score it was given, rather than losing a real measurement.
+
+  Findings that change are marked `PENDING_SYNC` again, so a deployment with
+  `CVEDECK_ONLINE_DB_URL` propagates the new signals rather than leaving the
+  remote copy asserting the old ones for ever.
+
+  All three ways of triggering a refresh -- `POST /api/feeds/refresh`,
+  `cvedeck-admin refresh-feeds`, and the periodic task -- go through one
+  function, so a fourth cannot refresh the cache and forget the findings.
+
+### Fixed
+
+- **Demo mode no longer downloads the feeds it is documented not to have.** The
+  periodic refresher started regardless of `CVEDECK_DEMO_MODE`, unlike scanning,
+  discovery and connection tests. Two things were wrong with that. The README
+  said the feeds start empty and invited you to press **Refresh intel**, which
+  had quietly stopped being true; and with the reapply above, the startup
+  refresh would have enriched the demo fleet's deliberately unchecked
+  findings -- the *unknown* state the demo exists to illustrate. The safeguard
+  would have eaten the fixture that demonstrates the safeguard. `GET /api/health`
+  now reports `feed_refresh_hours: 0` there, because that is what is running.
+
+- **A systemd install no longer schedules the refresh twice.** `deploy/install.sh`
+  enables `cvedeck-feeds.timer` at 03:00 *and* left the in-process refresher on
+  its 24-hour interval, and its comment still read "there is no scheduler in the
+  application yet". The installer now writes `CVEDECK_FEED_REFRESH_HOURS=0` into
+  the env file it generates, leaving the timer as the single owner -- it carries
+  `Persistent=true`, so a machine asleep at 03:00 catches up on wake, which an
+  in-process interval cannot do.
+
+- **`CVEDECK_FEED_REFRESH_HOURS` is in `.env.example`.** Every neighbouring feed
+  setting was already there and `DEPLOYMENT.md` documented this one, but the file
+  an operator actually copies never mentioned it. The section header above it
+  also still told you to set up a daily cron.
+
+### Changed
+
+- **`POST /api/feeds/refresh` reports `findings_updated`**, the number of stored
+  findings the refreshed feeds changed. Zero means the refresh brought no news,
+  which is most days -- not that the reapply was skipped.
+  `cvedeck-admin refresh-feeds` prints the same count. The dashboard re-reads the
+  fleet when it is non-zero, so pressing **Refresh intel** no longer leaves you
+  looking at the answer the previous catalogue gave.
+
+---
+
 ## [0.8.7] - 2026-09-19
 
 The dependency graph was correct on Debian and wrong everywhere else. No schema

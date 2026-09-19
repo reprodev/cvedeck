@@ -42,6 +42,32 @@ def test_health_does_not_advertise_demo_mode_by_default(normal):
     assert body["capabilities"]["demo_mode"] is False
 
 
+def test_demo_mode_reports_no_automatic_feed_refresh(demo):
+    """And reports it honestly, rather than the configured interval.
+
+    Demo mode switches the periodic refresh off, because since 0.8.8 a refresh
+    reapplies the feeds to stored findings and the demo fleet is seeded with
+    findings whose exploitation status was deliberately never checked. Health
+    must report the interval that is running, not the one in the environment --
+    claiming a 24-hour refresh that never happens is the same shape of lie the
+    periodic refresh was added to remove (Req 10.14, 10.15).
+
+    Takes only the ``demo`` fixture: ``normal`` unsets CVEDECK_DEMO_MODE, so a
+    test that asked for both would run with demo mode off and pass vacuously.
+    """
+    body = demo.get("/api/health").json()
+
+    assert body["capabilities"]["demo_mode"] is True
+    assert body["capabilities"]["feed_refresh_hours"] == 0
+
+
+def test_a_normal_instance_reports_its_refresh_interval(normal):
+    """The other half of the pair, in its own test for the reason above."""
+    body = normal.get("/api/health").json()
+
+    assert body["capabilities"]["feed_refresh_hours"] == 24
+
+
 def test_scanning_is_refused(demo):
     response = demo.post(
         "/api/scans",

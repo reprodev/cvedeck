@@ -274,6 +274,10 @@ class FeedRefreshResponse(BaseModel):
 
     ok: bool
     results: list[FeedRefreshResultOut]
+    #: How many stored findings the refreshed feeds changed (Req 10.15). Zero
+    #: means the refresh brought no news, which is most days -- not that the
+    #: reapply was skipped.
+    findings_updated: int = 0
 
 
 # --------------------------------------------------------------------------- #

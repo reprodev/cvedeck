@@ -28,7 +28,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from ..data.repository import Repository
-from .enrichment import build_feed_refresh_service
+from .enrichment import refresh_feeds_and_reapply
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,15 +47,19 @@ def refresh_feeds_once(engine: Engine) -> list[str]:
 
     Opens its own session rather than taking one, because there is no request to
     borrow a session from -- ``Depends(get_session)`` has no meaning here.
+
+    The refreshed feeds are reapplied to the stored findings in the same
+    transaction (Req 10.15), so an unattended deployment picks up a newly
+    catalogued exploitation without anyone re-scanning for it.
     """
     with Session(engine) as session:
-        outcomes = build_feed_refresh_service(Repository(session)).refresh_all()
+        outcomes, updated = refresh_feeds_and_reapply(Repository(session))
         session.commit()
     return [
         f"{o.feed_name}: {o.status}, {o.record_count} records"
         + (f" ({o.error_detail})" if o.error_detail else "")
         for o in outcomes
-    ]
+    ] + [f"findings updated: {updated}"]
 
 
 async def run_periodic_refresh(

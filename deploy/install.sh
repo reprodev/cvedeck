@@ -71,8 +71,11 @@ CVEDECK_STATIC_DIR=${APP_DIR}/static
 # Uncomment to enable POST /api/sync.
 # CVEDECK_ONLINE_DB_URL=postgresql+psycopg://user:password@host/cvedeck
 
-# Threat-intel feeds (CISA KEV, FIRST EPSS) work with no configuration, but are
-# refreshed manually -- see the cron this installer sets up below.
+# Threat-intel feeds (CISA KEV, FIRST EPSS) work with no configuration. The
+# application can refresh them itself, but on this host the systemd timer below
+# owns that job, so the built-in refresh is switched off -- two schedulers for
+# one job is one too many. Set this back to 24 if you disable the timer.
+CVEDECK_FEED_REFRESH_HOURS=0
 
 # Uncomment to enable OS-level CVE matching against NVD. Unkeyed, NVD allows
 # only 5 requests per rolling 30 seconds; a free key raises that to 50:
@@ -102,9 +105,12 @@ echo "==> Installing systemd units"
 install -m 0644 "${REPO_DIR}/deploy/systemd/cvedeck.service" \
     /etc/systemd/system/cvedeck.service
 
-# Threat-intel feeds are refreshed by a timer rather than in-process: there is
-# no scheduler in the application yet, and a stale KEV catalogue silently stops
-# flagging newly exploited vulnerabilities.
+# Threat-intel feeds are refreshed by a timer rather than in-process. The
+# application has refreshed them itself since 0.8.7, so this is now a choice
+# rather than a necessity: the timer carries Persistent=true, so a machine that
+# was asleep at 03:00 catches up on wake, which an in-process interval cannot
+# do. The env file above sets CVEDECK_FEED_REFRESH_HOURS=0 to match, leaving
+# one owner for the job.
 install -m 0644 "${REPO_DIR}/deploy/systemd/cvedeck-feeds.service" \
     /etc/systemd/system/cvedeck-feeds.service
 install -m 0644 "${REPO_DIR}/deploy/systemd/cvedeck-feeds.timer" \

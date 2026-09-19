@@ -155,4 +155,44 @@ describe("CveScannerApiClient", () => {
       ApiError,
     );
   });
+
+  it("reports how many stored findings a feed refresh changed", async () => {
+    // Since 0.8.8 the server reapplies refreshed feeds to findings already
+    // stored. The count is what tells the dashboard the fleet on screen has
+    // just gone stale and needs re-reading.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        findings_updated: 14,
+        results: [
+          { feed_name: "kev", status: "ok", record_count: 1687 },
+        ],
+      }),
+    );
+    const client = new CveScannerApiClient({ fetchImpl });
+
+    const outcome = await client.refreshFeeds();
+
+    expect(outcome.findingsUpdated).toBe(14);
+    expect(outcome.results[0]).toEqual({
+      feedName: "kev",
+      status: "ok",
+      recordCount: 1687,
+      errorDetail: null,
+    });
+  });
+
+  it("reads a pre-0.8.8 refresh response as having changed nothing", async () => {
+    // An older server did not reapply anything, so the absent field means
+    // zero. Reading it as undefined would put NaN through the comparison that
+    // decides whether to reload the fleet.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, results: [] }));
+    const client = new CveScannerApiClient({ fetchImpl });
+
+    const outcome = await client.refreshFeeds();
+
+    expect(outcome.findingsUpdated).toBe(0);
+  });
 });

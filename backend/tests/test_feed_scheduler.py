@@ -6,8 +6,8 @@ suite can assert the schedule without waiting for it -- a test that really slept
 test that proves less.
 
 Each test drives its own event loop with ``asyncio.run`` rather than depending
-on pytest-asyncio: six tests are not worth a new test dependency in a project
-that pins and audits everything it installs.
+on pytest-asyncio: a handful of tests is not worth a new test dependency in a
+project that pins and audits everything it installs.
 """
 
 from __future__ import annotations
@@ -164,14 +164,19 @@ def test_refresh_feeds_once_uses_its_own_session(monkeypatch):
             return [FeedRefreshOutcome("kev", FeedStatus.OK, record_count=7)]
 
     monkeypatch.setattr(
-        feed_scheduler, "build_feed_refresh_service", lambda repo: _Service()
+        feed_scheduler,
+        "refresh_feeds_and_reapply",
+        lambda repo: (_Service().refresh_all(), 0),
     )
 
     lines = refresh_feeds_once(engine)
 
-    assert len(lines) == 1
+    assert len(lines) == 2
     assert lines[0].startswith("kev: ")
     assert "7 records" in lines[0]
+    # The reapply's count is reported on its own line, so an operator reading
+    # the log can tell a refresh that changed findings from one that did not.
+    assert lines[1] == "findings updated: 0"
 
 
 def test_the_default_interval_is_on_and_daily(monkeypatch):
@@ -189,3 +194,21 @@ def test_the_default_interval_is_on_and_daily(monkeypatch):
     monkeypatch.setenv("CVEDECK_FEED_REFRESH_HOURS", "nonsense")
     with pytest.raises(ValueError, match="must be a float"):
         config.feed_refresh_hours()
+
+
+def test_demo_mode_switches_the_refresher_off(monkeypatch):
+    """A demo instance must not refresh, and must not claim it does.
+
+    Since 0.8.8 a refresh reapplies the feeds to stored findings (Req 10.15),
+    and the demo fleet is seeded with findings whose exploitation status was
+    deliberately never checked -- the unknown state the demo exists to show.
+    An automatic refresh would enrich them on the first boot and delete the
+    illustration of the invariant the project is built on.
+    """
+    monkeypatch.delenv("CVEDECK_FEED_REFRESH_HOURS", raising=False)
+    monkeypatch.setenv("CVEDECK_DEMO_MODE", "true")
+    assert config.feed_refresh_hours() == 24.0  # still what is configured
+    assert config.feed_refresh_hours_in_effect() == 0.0  # but nothing runs
+
+    monkeypatch.setenv("CVEDECK_DEMO_MODE", "false")
+    assert config.feed_refresh_hours_in_effect() == 24.0

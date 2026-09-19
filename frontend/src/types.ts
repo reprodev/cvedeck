@@ -258,6 +258,13 @@ export interface FeedRefreshOutcome {
   /** False when any feed failed, so a partial refresh is visible at a glance. */
   ok: boolean;
   results: FeedRefreshResult[];
+  /**
+   * How many stored findings the refreshed feeds changed (Req 10.15).
+   *
+   * Zero means the refresh brought no news, which is most days -- not that
+   * the reapply was skipped.
+   */
+  findingsUpdated: number;
 }
 
 /** Manually maintained remediation state for a CVE on a machine. */

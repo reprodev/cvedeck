@@ -225,6 +225,13 @@ incomplete, so that I do not mistake a partial scan for a clean host.
    confident "none actively exploited" from a catalogue that was never fetched,
    leaving the freshness of the exploitation signal to an operator's own cron
    makes the absence of that cron indistinguishable from good news.
+15. WHEN THE CVE_Scanner_System refreshes its cached threat-intel feeds THEN it
+   SHALL reapply those feeds to the CVE_Findings it has already stored, and
+   WHERE a feed is unusable it SHALL leave that feed's fields as they stand
+   rather than clearing them; since a finding is enriched once, at the scan that
+   produced it, and that scan may be weeks old, a refresh that updates only the
+   cache leaves the dashboard stating an exploitation status from a catalogue
+   the system no longer holds (extends the enrichment invariant).
 
 ### Requirement 11: SSH key-based authentication
 

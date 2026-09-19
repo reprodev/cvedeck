@@ -270,18 +270,31 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
   }, [loadFeeds]);
 
   /**
-   * Pull the KEV and EPSS feeds, then re-read their health.
+   * Pull the KEV and EPSS feeds, re-read their health, and re-read whatever
+   * the server's reapply changed.
    *
-   * Deliberately does not re-scan afterwards. Enrichment is applied at scan
-   * time, so fresh intel reaches findings on the next scan; silently kicking
-   * off a fleet-wide SSH sweep because someone clicked "refresh intel" would
-   * be a much larger action than the button advertises.
+   * Deliberately does not re-scan afterwards. The server now reapplies the
+   * refreshed feeds to stored findings (Req 10.15), so the exploitation
+   * signals are current without one; finding *new* findings still needs a
+   * scan, and silently kicking off a fleet-wide SSH sweep because someone
+   * clicked "refresh intel" would be a much larger action than the button
+   * advertises.
    */
   const handleRefreshFeeds = useCallback(async () => {
     setRefreshingFeeds(true);
     try {
       const outcome = await api.refreshFeeds();
       await loadFeeds();
+      // Since 0.8.8 the server reapplies the refreshed feeds to findings
+      // already stored, so the exploitation flags and KEV counts on screen are
+      // stale the moment the request returns. Reload them rather than leaving
+      // the user looking at the answer the previous catalogue gave.
+      if (outcome.findingsUpdated > 0) {
+        await loadMachines();
+        if (selectedMachineId) {
+          await loadFindings(selectedMachineId);
+        }
+      }
       if (!outcome.ok) {
         const failed = outcome.results
           .filter((result) => result.status !== "ok")
@@ -300,7 +313,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
     } finally {
       setRefreshingFeeds(false);
     }
-  }, [api, loadFeeds]);
+  }, [api, loadFeeds, loadMachines, loadFindings, selectedMachineId]);
 
   /**
    * Re-scan a batch of machines with the server-managed key.

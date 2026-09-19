@@ -352,16 +352,19 @@ def refresh_feeds(
     it: an empty KEV cache would silently reclassify every known-exploited
     finding as unremarkable, which is worse than serving yesterday's answer.
 
-    Findings are enriched at scan time from whatever the cache holds, so a
-    refresh takes effect on the next scan rather than retroactively.
+    The refreshed feeds are then reapplied to the findings already stored, so a
+    CVE newly added to the KEV catalogue becomes visible without re-scanning
+    every host that carries it (Req 10.15). ``findings_updated`` reports how
+    many changed.
     """
-    from ..services.enrichment import build_feed_refresh_service
+    from ..services.enrichment import refresh_feeds_and_reapply
 
-    outcomes = build_feed_refresh_service(Repository(session)).refresh_all()
+    outcomes, findings_updated = refresh_feeds_and_reapply(Repository(session))
     session.commit()
 
     return FeedRefreshResponse(
         ok=all(outcome.ok for outcome in outcomes),
+        findings_updated=findings_updated,
         results=[
             FeedRefreshResultOut(
                 feed_name=outcome.feed_name,

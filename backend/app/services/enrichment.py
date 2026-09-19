@@ -42,7 +42,7 @@ from typing import Protocol, Sequence
 
 from ..data.repository import FindingInput, Repository
 from ..data.schema import EpssScore, KevEntry
-from ..enums import FeedStatus
+from ..enums import FeedStatus, SyncStatus
 from ..scanner.epss_client import EpssRecord
 from ..scanner.kev_client import KevRecord
 
@@ -304,6 +304,88 @@ class FindingEnricher:
 
         return enriched
 
+    def reapply_to_stored(self) -> int:
+        """Reapply the feed caches to findings already in the database.
+
+        The counterpart of :meth:`enrich`, which runs once per finding, at the
+        scan that produced it. That scan may be weeks old, and until 0.8.8
+        nothing re-read the cache afterwards: a refresh updated the catalogue
+        and left every stored finding stating the exploitation status of a
+        catalogue the system no longer held (Req 10.15). A CVE added to KEV
+        overnight was downloaded correctly and changed nothing anyone could see
+        until somebody re-scanned that host by hand.
+
+        The same rules as :meth:`enrich`, deliberately, so a finding's signals
+        do not depend on which path last touched it:
+
+        - a feed that is not usable is not applied at all, and its stored fields
+          are left exactly as they are. **A feed being down must never clear a
+          signal**: turning a known ``kev_listed=True`` into ``False`` or
+          ``None`` because a download failed would convert an outage into
+          reassurance, which is the one thing this module exists to prevent.
+        - a usable KEV catalogue is authoritative in both directions. A CVE that
+          has left the catalogue goes back to ``False``, because the catalogue
+          that omits it is one the system actually holds.
+        - a usable EPSS set only ever writes scores it has. A CVE absent from it
+          keeps the score it was given, rather than losing a real measurement to
+          a feed that simply does not rank it.
+
+        Purely local: two indexed lookups against the cache, no network. Writes
+        through the unit of work and does not commit -- the caller owns the
+        transaction, as everywhere else.
+
+        Returns:
+            How many stored findings actually changed. Zero is a normal answer:
+            it means the refresh brought no news, which is most days.
+        """
+        kev_health = self.feed_health(KEV_FEED)
+        epss_health = self.feed_health(EPSS_FEED)
+        if not kev_health.usable and not epss_health.usable:
+            return 0
+
+        cve_ids = self._repository.all_finding_cve_ids()
+        if not cve_ids:
+            return 0
+
+        kev_map = self._repository.get_kev_map(cve_ids) if kev_health.usable else {}
+        epss_map = self._repository.get_epss_map(cve_ids) if epss_health.usable else {}
+
+        changed = 0
+        for finding in self._repository.iter_findings_for_enrichment():
+            key = finding.cve_id.upper() if finding.cve_id else ""
+            updates: dict[str, object] = {}
+
+            if kev_health.usable:
+                kev = kev_map.get(key)
+                updates["kev_listed"] = kev is not None
+                updates["kev_due_date"] = kev.due_date if kev is not None else None
+
+            if epss_health.usable:
+                epss = epss_map.get(key)
+                if epss is not None:
+                    updates["epss_score"] = epss.score
+                    updates["epss_percentile"] = epss.percentile
+
+            # Assign only what differs, so the count reports findings that
+            # genuinely moved and the session does not mark the whole fleet
+            # dirty on a refresh that brought nothing new.
+            touched = False
+            for field, value in updates.items():
+                if getattr(finding, field) != value:
+                    setattr(finding, field, value)
+                    touched = True
+            if touched:
+                # Back to pending, or a finding already synced would keep the
+                # old exploitation status in the Online_Database for ever: the
+                # sync propagates what is pending, and nothing else would ever
+                # mark this row again (Req 5.2, 5.3).
+                finding.sync_status = SyncStatus.PENDING_SYNC
+                changed += 1
+
+        if changed:
+            _LOGGER.info("Reapplied intel to %d stored finding(s)", changed)
+        return changed
+
     def feed_health(self, feed_name: str) -> FeedHealth:
         """Report one feed's cache state, including whether it is stale."""
         row = self._repository.get_feed_refresh(feed_name)
@@ -368,3 +450,29 @@ def build_feed_refresh_service(repository: Repository) -> FeedRefreshService:
         kev_source=KevHttpClient(kev_feed_url(), timeout=timeout),
         epss_source=EpssHttpClient(epss_feed_url(), timeout=timeout),
     )
+
+
+def refresh_feeds_and_reapply(
+    repository: Repository,
+) -> tuple[list[FeedRefreshOutcome], int]:
+    """Refresh both feeds, then reapply them to the stored findings.
+
+    The one place the two halves are joined, for the same reason
+    :func:`build_feed_refresh_service` exists: there are three ways to trigger a
+    refresh -- the HTTP route, the CLI, and the periodic refresher -- and if
+    each wrote out the sequence itself, a fourth would eventually refresh the
+    cache and not the findings, which is precisely the gap 0.8.8 closes
+    (Req 10.14, 10.15).
+
+    The reapply runs even when a feed failed. The other feed may have
+    succeeded, and :meth:`FindingEnricher.reapply_to_stored` already declines to
+    apply a feed it cannot trust, so there is nothing here to decide.
+
+    Does not commit; the caller owns the transaction.
+
+    Returns:
+        The per-feed outcomes, and how many stored findings changed.
+    """
+    outcomes = build_feed_refresh_service(repository).refresh_all()
+    updated = FindingEnricher(repository).reapply_to_stored()
+    return outcomes, updated

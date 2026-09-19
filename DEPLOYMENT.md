@@ -67,7 +67,7 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_KEV_FEED_URL` | CISA KEV catalogue JSON | Source for the Known Exploited Vulnerabilities catalogue. |
 | `CVEDECK_EPSS_FEED_URL` | FIRST EPSS current scores (`.csv.gz`) | Source for the EPSS exploitation-probability score set. |
 | `CVEDECK_FEED_TIMEOUT` | `120.0` | Timeout in seconds for a whole-feed download. Separate from `CVEDECK_HTTP_TIMEOUT` because the EPSS set is a multi-megabyte file, not a per-package query. |
-| `CVEDECK_FEED_REFRESH_HOURS` | `24.0` | How often the application refreshes the intel feeds itself, starting at startup. `0` switches the built-in refresh off, for a deployment that drives it from its own scheduler. Reported at `GET /api/health`. |
+| `CVEDECK_FEED_REFRESH_HOURS` | `24.0` | How often the application refreshes the intel feeds itself, starting at startup. `0` switches the built-in refresh off, for a deployment that drives it from its own scheduler. Each refresh also reapplies the feeds to findings already stored. Demo mode forces this to `0`. Reported at `GET /api/health`, which reports the interval actually running. |
 | `CVEDECK_FEED_MAX_AGE_HOURS` | `48.0` | How old a cached feed may be before the dashboard reports it stale. Both feeds publish daily, so the default tolerates one missed publication. |
 | `CVEDECK_NVD_ENABLED` | `false` | Enable OS-level CVE matching against NVD. Off by default: NVD's rate limits make an unkeyed fleet scan slow, and the package-level OSV path already covers most Linux exposure. |
 | `CVEDECK_NVD_API_KEY` | _(unset)_ | NVD API key. Raises the request limit from 5 to 50 per 30 seconds. Free from `nvd.nist.gov/developers/request-an-api-key`. Strongly recommended if `CVEDECK_NVD_ENABLED` is on. |
@@ -75,7 +75,7 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_DEFAULT_SSH_KEY_PATH` | _(unset)_ | Path to a server-managed SSH private key. When set, a Linux scan target may omit credentials entirely and authenticate with this key -- this is what enables a fleet re-scan without retyping credentials per host. Re-read on every scan, so rotating the file takes effect without a restart. |
 | `CVEDECK_DEFAULT_SSH_KEY_PASSPHRASE` | _(unset)_ | Passphrase for the above key, if it is encrypted. |
 | `CVEDECK_DEFAULT_SSH_USER` | _(unset)_ | Username paired with the server-managed key when a target supplies none. |
-| `CVEDECK_DEMO_MODE` | `false` | Run as a public demo: seed a fictional fleet into an empty database and **refuse** scans, discovery sweeps, and connection tests. See "Demo mode" below. Leave off on any instance you actually scan with. |
+| `CVEDECK_DEMO_MODE` | `false` | Run as a public demo: seed a fictional fleet into an empty database, **refuse** scans, discovery sweeps and connection tests, and switch the built-in feed refresh off so the seeded unchecked findings stay unchecked. See "Demo mode" below. Leave off on any instance you actually scan with. |
 | `CVEDECK_CORS_ORIGINS` | unset | Comma-separated origins. Only needed if the dashboard is served from a different host than the API. |
 | `CVEDECK_AUTH` | `enabled` | Set to `disabled` to serve the dashboard and API without login, for an instance already behind an authenticating proxy. Any other value, including a typo, leaves login on. A warning is logged on every start while it is off. |
 | `CVEDECK_ADMIN_USERNAME` | unset | With a password, creates this account on start-up if none exists. Never changes an existing account. |
@@ -181,6 +181,17 @@ then joined offline. Enrichment therefore adds no network dependency to a scan.
 Nothing needs setting up: a fresh container has current intel within a minute of
 booting, and keeps it current.
 
+Each refresh also **reapplies the feeds to the findings already stored**, so a
+newly catalogued exploitation appears on your existing findings rather than
+waiting for the next scan of each host (Req 10.15). Findings that change are
+marked for synchronization again, so a deployment with `CVEDECK_ONLINE_DB_URL`
+propagates the new signals too.
+
+Demo mode switches the built-in refresh off, so a demo instance keeps the
+seeded findings whose exploitation status was never checked — press **Refresh
+intel** to fetch the feeds and watch the ranking appear. `GET /api/health`
+reports `feed_refresh_hours: 0` there, because that is what is actually running.
+
 `CVEDECK_FEED_REFRESH_HOURS` changes the interval; `0` switches the built-in
 refresh off, for a deployment that would rather drive it from a scheduler it
 already runs. `GET /api/health` reports the interval in effect, so you can tell
@@ -206,6 +217,7 @@ curl -fsS -X POST -H "Authorization: Bearer $CVEDECK_TOKEN" \
 
 ```json
 {"ok": true,
+ "findings_updated": 14,
  "results": [{"feed_name": "kev",  "status": "ok", "record_count": 1687},
              {"feed_name": "epss", "status": "ok", "record_count": 366848}]}
 ```
@@ -220,7 +232,9 @@ The systemd installer (`deploy/install.sh`) sets this up for you as
 `cvedeck-feeds.timer`, which runs at 03:00 with a 30-minute randomised
 delay and `Persistent=true` so a machine that was asleep still catches up. It
 runs `cvedeck-admin refresh-feeds` on the host, against the database directly,
-so it needs no token:
+so it needs no token. Because the timer owns the job there, the installer also
+writes `CVEDECK_FEED_REFRESH_HOURS=0` into `/etc/cvedeck/cvedeck.env`, leaving
+one scheduler rather than two; set it back to `24` if you disable the timer:
 
 ```bash
 systemctl list-timers cvedeck-feeds.timer     # when it next runs
@@ -514,8 +528,12 @@ very large one.
   `POST /api/feeds/refresh` or `cvedeck-admin refresh-feeds` yourself.
   `GET /api/feeds` reports each feed's age and whether it is stale, and the
   dashboard shows a banner when enrichment is degraded.
-- **Enrichment applies at scan time, not retroactively.** Refreshing the feeds
-  updates the cache; findings pick up the new signals on their next scan.
+- **A feed refresh reapplies to findings already stored** (since 0.8.8), so a
+  CVE added to the KEV catalogue overnight is marked on the findings you already
+  have, without re-scanning the hosts that carry it. The refresh response and
+  `cvedeck-admin refresh-feeds` both report how many findings changed. What a
+  refresh cannot do is find *new* findings: matching a host's packages against
+  advisories still happens only during a scan.
 - **An unenriched finding is reported as unknown, never as safe.** If the KEV
   feed has never loaded, findings carry `kev_listed: null` rather than `false`,
   and the UI renders that as "unknown". Do not read a blank exploitation column

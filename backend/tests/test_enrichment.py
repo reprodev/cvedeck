@@ -454,3 +454,157 @@ def test_enrichment_never_invents_an_epss_score(scores):
                 assert result.epss_score == pytest.approx(scores[index][0])
             else:
                 assert result.epss_score is None
+
+
+# --------------------------------------------------------------------------- #
+# Reapplying the feeds to findings already stored (Req 10.15)
+# --------------------------------------------------------------------------- #
+#
+# ``enrich`` runs once per finding, at the scan that produced it. Until 0.8.8
+# nothing re-read the cache afterwards, so a refresh updated the catalogue and
+# left every stored finding asserting the exploitation status of a catalogue the
+# system no longer held. These tests pin the reapply -- and, more importantly,
+# pin that it obeys the same unknown-vs-negative invariant as the rest of this
+# file, because a pass that writes to every finding in the fleet is exactly
+# where a feed outage could quietly become reassurance.
+
+
+def _store(session, repo, *cve_ids: str) -> None:
+    """Persist findings for one machine, the way a scan would."""
+    from app.data.schema import TargetMachine
+    from app.enums import Platform, ScanStatus, SyncStatus
+
+    session.add(
+        TargetMachine(
+            id="m1",
+            hostname="host.example.com",
+            platform=Platform.LINUX,
+            last_scan_status=ScanStatus.SUCCESS,
+            last_scanned_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            sync_status=SyncStatus.PENDING_SYNC,
+        )
+    )
+    session.flush()
+    repo.save_findings("m1", [_finding(c) for c in cve_ids])
+
+
+def _stored(repo):
+    """The stored findings, keyed by CVE id."""
+    return {f.cve_id: f for f in repo.get_findings_for_machine("m1")}
+
+
+def test_reapply_marks_a_newly_catalogued_cve_without_a_rescan(session, repo):
+    """The point of the feature: KEV moves, the stored finding follows."""
+    _store(session, repo, "CVE-2021-44228")
+    assert _stored(repo)["CVE-2021-44228"].kev_listed is None
+
+    _seed_kev(repo, "CVE-2021-44228")
+    assert FindingEnricher(repo).reapply_to_stored() == 1
+
+    finding = _stored(repo)["CVE-2021-44228"]
+    assert finding.kev_listed is True
+    assert finding.kev_due_date == "2026-01-01"
+
+
+def test_reapply_clears_a_cve_that_left_the_catalogue(session, repo):
+    """A usable catalogue is authoritative in both directions.
+
+    Unlike a missing catalogue, one that has been downloaded and does not list
+    the CVE is a real answer, so False is the honest value.
+    """
+    _store(session, repo, "CVE-2021-44228")
+    _seed_kev(repo, "CVE-2021-44228")
+    FindingEnricher(repo).reapply_to_stored()
+
+    _seed_kev(repo, "CVE-2099-0001")  # a later catalogue, without the old CVE
+    assert FindingEnricher(repo).reapply_to_stored() == 1
+    assert _stored(repo)["CVE-2021-44228"].kev_listed is False
+
+
+def test_a_kev_cache_this_instance_lacks_never_clears_a_stored_flag(
+    session, repo
+):
+    """The invariant, on the reapply path.
+
+    This is the test that matters in this section. A fleet-wide pass that runs
+    after every refresh is the one place an outage could rewrite every finding
+    at once -- turning "we know this is being exploited" into "we checked and
+    it is not" on the strength of a catalogue the instance does not hold.
+
+    The state modelled is a database carried onto an instance whose feeds have
+    never been fetched: a restored backup, or a first boot against existing
+    data. The findings still carry what the scan that produced them learned,
+    and an empty catalogue is not evidence against it.
+
+    Note this is *not* the same as a failed download. ``record_feed_refresh``
+    deliberately leaves the previous cache and its record in place on failure,
+    so a transient outage keeps serving yesterday's answer and the feed stays
+    usable. The dangerous state is having no catalogue at all.
+    """
+    _store(session, repo, "CVE-2021-44228")
+    _seed_kev(repo, "CVE-2021-44228")
+    FindingEnricher(repo).reapply_to_stored()
+    assert _stored(repo)["CVE-2021-44228"].kev_listed is True
+
+    repo.replace_kev_entries([])
+    repo.record_feed_refresh(KEV_FEED, status=FeedStatus.OK, record_count=0)
+    assert not FindingEnricher(repo).feed_health(KEV_FEED).usable
+
+    assert FindingEnricher(repo).reapply_to_stored() == 0
+    finding = _stored(repo)["CVE-2021-44228"]
+    assert finding.kev_listed is True
+    assert finding.kev_due_date == "2026-01-01"
+
+
+def test_reapply_does_not_drop_a_score_for_a_cve_epss_does_not_rank(
+    session, repo
+):
+    """A usable EPSS set only writes scores it has, as ``enrich`` does."""
+    _store(session, repo, "CVE-2021-44228")
+    _seed_epss(repo, {"CVE-2021-44228": (0.42, 0.97)})
+    FindingEnricher(repo).reapply_to_stored()
+    assert _stored(repo)["CVE-2021-44228"].epss_score == pytest.approx(0.42)
+
+    _seed_epss(repo, {"CVE-2099-0001": (0.1, 0.5)})  # no longer ranks ours
+    FindingEnricher(repo).reapply_to_stored()
+    assert _stored(repo)["CVE-2021-44228"].epss_score == pytest.approx(0.42)
+
+
+def test_reapply_touches_nothing_when_neither_feed_is_usable(session, repo):
+    """No cache, no writes, no count -- and no findings marked for sync."""
+    from app.enums import SyncStatus
+
+    _store(session, repo, "CVE-2021-44228")
+    stored = _stored(repo)["CVE-2021-44228"]
+    stored.sync_status = SyncStatus.SYNCED
+    session.flush()
+
+    assert FindingEnricher(repo).reapply_to_stored() == 0
+    assert _stored(repo)["CVE-2021-44228"].sync_status is SyncStatus.SYNCED
+
+
+def test_a_changed_finding_goes_back_to_pending_sync(session, repo):
+    """Otherwise the Online_Database keeps the old exploitation status.
+
+    The sync propagates what is pending. A finding already marked SYNCED whose
+    KEV flag has just flipped would never be picked up again by anything.
+    """
+    from app.enums import SyncStatus
+
+    _store(session, repo, "CVE-2021-44228")
+    stored = _stored(repo)["CVE-2021-44228"]
+    stored.sync_status = SyncStatus.SYNCED
+    session.flush()
+
+    _seed_kev(repo, "CVE-2021-44228")
+    assert FindingEnricher(repo).reapply_to_stored() == 1
+    assert _stored(repo)["CVE-2021-44228"].sync_status is SyncStatus.PENDING_SYNC
+
+
+def test_reapply_counts_only_findings_that_actually_changed(session, repo):
+    """A refresh that brings no news reports zero, not the fleet size."""
+    _store(session, repo, "CVE-2021-44228", "CVE-2099-0001")
+    _seed_kev(repo, "CVE-2021-44228")
+
+    assert FindingEnricher(repo).reapply_to_stored() == 2  # both learn an answer
+    assert FindingEnricher(repo).reapply_to_stored() == 0  # nothing moved

@@ -254,6 +254,22 @@ def feed_refresh_hours() -> float:
     return hours
 
 
+def feed_refresh_hours_in_effect() -> float:
+    """The refresh interval actually running, which demo mode forces to zero.
+
+    Separate from :func:`feed_refresh_hours`, which reports what was
+    *configured*. Demo mode switches the refresher off (Req 15.3): since 0.8.8 a
+    refresh reapplies the feeds to stored findings, and the demo fleet is seeded
+    with findings whose exploitation status was deliberately never checked.
+
+    Both the lifespan hook and ``GET /api/health`` read this one, so the
+    interval the dashboard reports is the interval that is running. Reporting
+    the configured 24 while nothing refreshes would be the same shape of lie
+    the periodic refresh was added to remove.
+    """
+    return 0.0 if demo_mode() else feed_refresh_hours()
+
+
 def feed_timeout() -> float:
     """HTTP timeout in seconds for a whole-feed download.
 

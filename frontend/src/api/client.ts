@@ -413,6 +413,8 @@ interface FeedRefreshResultWire {
 interface FeedRefreshResponseWire {
   ok: boolean;
   results: FeedRefreshResultWire[];
+  /** Absent from a pre-0.8.8 server, which did not reapply anything. */
+  findings_updated?: number;
 }
 
 function toFeedHealth(wire: FeedHealthWire): FeedHealth {
@@ -811,8 +813,9 @@ export class CveScannerApiClient {
    * POST /api/feeds/refresh -- pull the KEV and EPSS feeds.
    *
    * Downloads a few megabytes from two upstreams, so it is slower than a
-   * typical action. Enrichment is applied at scan time, so a refresh takes
-   * effect on the next scan rather than retroactively.
+   * typical action. The server then reapplies the refreshed feeds to findings
+   * already stored and reports how many changed, so the caller knows whether
+   * what is on screen has just gone stale (Req 10.15).
    */
   async refreshFeeds(): Promise<FeedRefreshOutcome> {
     const wire = await this.request<FeedRefreshResponseWire>(
@@ -827,6 +830,9 @@ export class CveScannerApiClient {
         recordCount: result.record_count ?? 0,
         errorDetail: result.error_detail ?? null,
       })),
+      // Defaulted, so a dashboard talking to a pre-0.8.8 server reads "nothing
+      // changed" rather than NaN.
+      findingsUpdated: wire.findings_updated ?? 0,
     };
   }
 

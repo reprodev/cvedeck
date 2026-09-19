@@ -201,6 +201,11 @@ environment the app reads, so no alembic.ini edit is needed.
   partial scan reported clean. `FindingEnricher.enrich` only writes a `False` when the
   feed is *usable* (successfully refreshed AND non-empty); an unusable feed leaves
   every enrichment field NULL. Same reasoning as `last_scan_sources_ok`.
+  `FindingEnricher.reapply_to_stored` applies the identical rule to findings already
+  in the database (Req 10.15). It is the riskier of the two: it runs after every
+  refresh, over the whole fleet at once, so an unusable feed there would rewrite
+  every finding rather than one scan's worth. It must never clear a signal -- only
+  a *usable* catalogue may set `False`, and EPSS only ever writes scores it has.
 - A failed feed refresh never overwrites a good cache. `FeedRefreshService` records the
   failure and leaves the previous catalogue in place, because yesterday's KEV answer
   beats no answer. An empty catalogue returned with HTTP 200 is treated as a *failure*
@@ -565,15 +570,26 @@ change; what has not is context.
   are follow-ups; the `users` table already allows more than one row.
 - POST /api/scans accepts target credentials in the request body, so an instance
   beyond a trusted network needs TLS in front of it, login or not.
+- A feed refresh reapplies the feeds to findings already stored (Req 10.15), on all
+  three trigger paths -- the route, the CLI and the periodic task -- because they
+  all go through `enrichment.refresh_feeds_and_reapply`. Add a fourth trigger by
+  calling that, not by writing the sequence out again. Findings it changes go back
+  to PENDING_SYNC, or an already-synced finding would keep the old exploitation
+  status in the Online_Database for ever. Demo mode switches the periodic refresh
+  off (`config.feed_refresh_hours_in_effect`), so the seeded never-checked findings
+  stay never-checked.
 
 ### 5.2 Not built yet
 
 - **Scheduled scanning.** Scans run **inline inside the HTTP request** (hence
   `proxy_read_timeout 900s` in DEPLOYMENT.md). Background execution
   (`scan_jobs` + a worker thread, no Celery/Redis -- one uvicorn worker, one SQLite
-  writer) is the prerequisite for cron scans and progress reporting. Nothing is
-  scheduled and no remediation is automatic; both are deliberate for v1, and the
-  manual feed refresh becomes the scheduler's first consumer when it lands.
+  writer) is the prerequisite for cron scans and progress reporting. No *scan* is
+  scheduled and no remediation is automatic; both are deliberate for v1. The feed
+  refresh got its own task in 0.8.7 (`services/feed_scheduler.py`) precisely
+  because it needs none of that machinery -- it is idempotent, owns no
+  transaction and keeps the previous cache on failure. Do not grow it into the
+  general scheduler; a scan needs a job model, a queue and progress reporting.
 - **Windows Research & Engineering Roadmap**:
   - *Track 1 (WinRM Inbound & Remote Auth)*: WinRM over HTTPS (port 5986), Kerberos SPN auth, and non-domain UAC token filter research (`LocalAccountTokenFilterPolicy`) without altering client host configurations.
   - *Track 2 (Push-Based Outbound Collector)*: Lightweight standalone PowerShell/Go collector running locally with zero inbound open ports required, pushing WMI/CIM/Registry inventory outbound to `POST /api/scans/ingest`.

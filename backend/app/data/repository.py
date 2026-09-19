@@ -28,7 +28,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from sqlalchemy import String, case, cast, func, select
 from sqlalchemy.orm import Session, selectinload
@@ -65,6 +65,11 @@ from .schema import (
 #: 999-parameter ceiling (its limit before 3.32) so enrichment lookups do not
 #: depend on the host's SQLite build.
 _IN_CLAUSE_CHUNK = 500
+
+#: How many findings a fleet-wide reapply keeps resident at once (Req 10.15).
+#: Larger than the ``IN``-clause chunk because nothing is bound as a parameter
+#: here -- it only bounds how much of the result set the session holds.
+_ENRICHMENT_CHUNK = 1000
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -713,6 +718,39 @@ class Repository:
         if severity is not None:
             stmt = stmt.where(CveFinding.severity == severity)
         return int(self._session.execute(stmt).scalar_one() or 0)
+
+    def all_finding_cve_ids(self) -> set[str]:
+        """Every distinct CVE id across the stored findings (Req 10.15).
+
+        Distinct in the query rather than in Python: a fleet's findings repeat
+        the same CVE across every host that carries the package, and the point
+        of this set is to ask the feed caches about each id once.
+        """
+        stmt = select(CveFinding.cve_id).distinct()
+        return {row.upper() for row in self._session.execute(stmt).scalars() if row}
+
+    def iter_findings_for_enrichment(
+        self, *, chunk_size: int = _ENRICHMENT_CHUNK
+    ) -> Iterator[CveFinding]:
+        """Stream the stored findings so their intel fields can be reapplied.
+
+        Streamed rather than returned as a list (Req 10.15): a fleet-wide
+        reapply touches every finding the deployment has ever recorded, and
+        loading a large fleet's worth into the session at once to update four
+        columns is a lot of memory for no benefit. ``yield_per`` keeps one chunk
+        resident at a time.
+
+        The rows are live ORM objects, so a caller that assigns to them is
+        writing through the unit of work; committing stays the caller's job, as
+        it is everywhere else in this class.
+        """
+        stmt = (
+            select(CveFinding)
+            .where(CveFinding.cve_id.is_not(None))
+            .order_by(CveFinding.id)
+            .execution_options(yield_per=chunk_size)
+        )
+        yield from self._session.execute(stmt).scalars()
 
     def latest_remediation_records(self) -> dict[str, dict[str, RemediationRecord]]:
         """Every machine's current remediation record per CVE, in one query.

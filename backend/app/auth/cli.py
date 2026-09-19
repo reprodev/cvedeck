@@ -105,14 +105,15 @@ def _refresh_feeds() -> int:
     Exits non-zero if either feed failed, so a scheduler reports it.
     """
     from ..data.repository import Repository
-    from ..services.enrichment import build_feed_refresh_service
+    from ..services.enrichment import refresh_feeds_and_reapply
 
     with _session() as session:
-        outcomes = build_feed_refresh_service(Repository(session)).refresh_all()
+        outcomes, updated = refresh_feeds_and_reapply(Repository(session))
         session.commit()
     for outcome in outcomes:
         detail = f" ({outcome.error_detail})" if outcome.error_detail else ""
         print(f"{outcome.feed_name}: {outcome.status}, {outcome.record_count} records{detail}")
+    print(f"findings updated: {updated}")
     return 0 if all(outcome.ok for outcome in outcomes) else 1
 
 

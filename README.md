@@ -89,6 +89,13 @@ Everything is manual for now: no scheduled scans, and no automated remediation.
   unreachable is marked partial rather than clean, and a host that was enrolled
   but never scanned says exactly that.
 
+- **Keeps the exploitation signal current on its own.** The feeds refresh every
+  24 hours without a cron, and each refresh is reapplied to the findings you
+  already have — so a CVE added to CISA's catalogue overnight is marked on your
+  fleet in the morning, rather than waiting for someone to re-scan each host. A
+  feed that fails to download changes nothing: a signal already known is never
+  cleared by an outage.
+
 - **Covers the distributions people actually run.** Debian, Ubuntu, Raspbian,
   RHEL, CentOS, AlmaLinux, Rocky, Oracle, Amazon Linux, Fedora, Alpine, Arch,
   openSUSE, SLES, Wolfi and Chainguard, through a five-tier resolution pipeline. A
@@ -190,9 +197,10 @@ docker run -d -p 3325:8000 -e CVEDECK_DEMO_MODE=true ghcr.io/reprodev/cvedeck:la
 This seeds a fictional twelve-host fleet, including a host that has never been
 scanned, one whose credentials failed, one scanned while an advisory source was
 down, and findings whose exploitation status was never checked. It also
-**disables scanning, discovery and connection tests**. The threat-intel feeds
-start empty, so press **Refresh intel** to download them and see the ranking in
-the screenshots above. Demo mode needs no login.
+**disables scanning, discovery and connection tests**, and leaves the
+threat-intel feeds alone so those unchecked findings stay unchecked — press
+**Refresh intel** to download the feeds and watch the ranking in the screenshots
+above appear. Demo mode needs no login.
 
 Leave demo mode off on any instance you actually scan with. A public instance
 with scanning enabled is an SSH/WinRM client and port scanner that any visitor
