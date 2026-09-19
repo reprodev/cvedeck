@@ -523,8 +523,10 @@ change; what has not is context.
 - **Threat-intel enrichment (KEV + EPSS)** (v0.5.0). Unlike OSV, these are
   small complete files published daily, so they are downloaded whole into
   `kev_entries` / `epss_scores` and joined locally rather than queried per finding.
-  Refresh is still manual (`POST /api/feeds/refresh`) -- it becomes the first consumer
-  of the scheduler when that lands.
+  The application refreshes them itself every 24 hours since 0.8.7
+  (`services/feed_scheduler.py`), reapplies them to stored findings since 0.8.8, and
+  since 0.8.9 skips both when the download carries a digest it already holds. Do not
+  grow the refresher into the general scheduler -- see §5.2.
 - **Scan history and finding diffs** (Req 18). `Repository.save_findings`
   returns a `FindingDiff` keyed on CVE + package name (never version), and
   `DeploymentScannerEngine._record_scan_status` writes a `scan_runs` row for every
@@ -575,9 +577,22 @@ change; what has not is context.
   all go through `enrichment.refresh_feeds_and_reapply`. Add a fourth trigger by
   calling that, not by writing the sequence out again. Findings it changes go back
   to PENDING_SYNC, or an already-synced finding would keep the old exploitation
-  status in the Online_Database for ever. Demo mode switches the periodic refresh
-  off (`config.feed_refresh_hours_in_effect`), so the seeded never-checked findings
-  stay never-checked.
+  status in the Online_Database for ever.
+- **A reapply must never touch the demo fleet** (Req 15.6). It is a fixture with
+  authored exploitation values, including findings deliberately left unchecked, and
+  nothing re-seeds a fleet that is no longer empty. Three things enforce it, because
+  0.8.8 did only the first and left two ways in: the periodic refresher is off
+  (`config.feed_refresh_hours_in_effect`), `POST /api/feeds/refresh` is refused by
+  `_demo_guard`, and `refresh_feeds_and_reapply` skips the reapply outright -- which
+  is the one that also covers `cvedeck-admin refresh-feeds`, since a route dependency
+  does nothing for a CLI run inside the container. The demo ships its own seeded
+  KEV/EPSS cache instead, so it needs no refresh at all.
+- **Scan-history rows are deliberately not reapplied.** `ScanFindingChange` carries
+  `kev_listed` and `cvss_score` and the reapply iterates only `CveFinding`. That is a
+  decision, not an oversight: a history row records what was true at that scan, and
+  rewriting it would destroy the record rather than correct it. The Req 10.15 argument
+  -- do not state the exploitation status of a catalogue you no longer hold -- applies
+  to what a finding claims *now*, not to what a scan found then.
 
 ### 5.2 Not built yet
 

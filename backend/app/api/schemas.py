@@ -263,6 +263,10 @@ class FeedRefreshResultOut(BaseModel):
     status: FeedStatus
     record_count: int = 0
     error_detail: str | None = None
+    #: The download succeeded and carried exactly what was already cached, so
+    #: nothing was rewritten (Req 10.14). Distinct from a refresh that replaced
+    #: the catalogue with identical-looking numbers.
+    unchanged: bool = False
 
 
 class FeedRefreshResponse(BaseModel):

@@ -8,6 +8,91 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.9] - 2026-09-20
+
+0.8.8 taught a feed refresh to reapply itself to stored findings, saw what that
+would do to the demo fleet, and closed one of the two ways in. This closes the
+other. It also stops a refresh that carries no news from rewriting the whole
+catalogue. **This release includes a database migration.**
+
+### Fixed
+
+- **A demo instance no longer overwrites its own fixture.** The demo fleet is
+  seeded with findings whose exploitation status was deliberately never checked
+  -- 46 of its 160, the *unknown* state the tool exists to distinguish from
+  *safe*. 0.8.8 switched the periodic refresh off in demo mode to protect them
+  and left `POST /api/feeds/refresh` open, which demo mode serves **without a
+  login**. So any visitor could press **Refresh intel** -- as the README told
+  them to -- and reapply the real catalogue over the fixture, turning all 46
+  into definite answers and overwriting the authored KEV and EPSS values behind
+  the ranking. Permanently: re-seeding is guarded on an empty fleet, so nothing
+  brings them back.
+
+  Three things now prevent it, because reasoning about one code path is what
+  left the gap: the route is refused, the service skips the reapply in demo mode
+  regardless of how it was triggered (which is what also covers
+  `cvedeck-admin refresh-feeds`, run inside the container where no HTTP guard
+  applies), and the dashboard offers no button rather than one that fails.
+
+- **The demo ships its own intel instead.** The dashboard gates the *display* of
+  exploitation on feed health, so a demo with no cache showed an em dash where
+  the "actively exploited" count belongs, and the refresh was the only way to
+  fill it in. It now seeds a fictional KEV catalogue and EPSS score set derived
+  from the findings it already authors, re-stamped as fresh on every start-up so
+  a long-running public demo does not drift into reporting itself stale. The
+  demo is correct on first paint and never touches the network.
+
+- **Closing the refresh route also closed an unauthenticated amplifier.** Each
+  press downloaded both feeds -- several megabytes -- and rewrote the entire
+  cache inline, with no rate limiting and no login required.
+
+### Changed
+
+- **A refresh that changes nothing now does nothing.** Both feeds are published
+  daily and downloaded whole, and every refresh deleted and re-inserted the
+  entire catalogue -- roughly 270,000 rows for EPSS -- then re-read it onto
+  every stored finding, whether or not a single record had moved. Each feed's
+  records are now digested and compared with the last successful refresh; when
+  they match, the rewrite and the reapply are both skipped.
+
+  The digest is taken over the **normalized records**, not the response body:
+  CISA's KEV JSON carries a catalogue version and release date that change every
+  time it is published, so a digest of the payload would almost never match and
+  the check would never fire. EPSS's `scored_at` is excluded for the same
+  reason -- it is stamped at write time, not carried by the feed.
+
+  A skipped refresh is still a success and still advances the feed's age: the
+  cache genuinely was checked against the upstream. `POST /api/feeds/refresh`
+  and `cvedeck-admin refresh-feeds` report such a feed as `unchanged`, which is
+  a different fact from having rewritten it with identical numbers. A failed
+  download never clears the stored digest, so an outage does not force a
+  pointless full rewrite afterwards.
+
+- **Scan-history rows are documented as deliberately not reapplied.**
+  `ScanFindingChange` carries its own `kev_listed`, and a reapply does not touch
+  it. That is a decision rather than an oversight -- a history row records what
+  was true at that scan, and rewriting it would destroy the record rather than
+  correct it -- and it is now written down in `AGENTS.md` beside the reapply
+  rules.
+
+### Upgrading
+
+The migration adds one nullable column, `feed_refreshes.payload_digest`, and
+runs automatically on container start, so a normal
+`docker compose pull && docker compose up -d` is all that is needed.
+
+Nothing has been digested yet, so **the first refresh after upgrading does a
+full rewrite** and records the digest; identical ones after that do nothing.
+Real deployments are otherwise unaffected: a refresh still reapplies to stored
+findings exactly as in 0.8.8.
+
+**A demo instance no longer offers Refresh intel**, and `POST /api/feeds/refresh`
+returns 403 there. A demo database seeded by an earlier release has no fictional
+cache of its own, so its exploitation card will keep showing an em dash; start
+it against an empty data directory to get the seeded intel.
+
+---
+
 ## [0.8.8] - 2026-09-19
 
 0.8.7 taught the intel feeds to refresh themselves and stopped one step short of

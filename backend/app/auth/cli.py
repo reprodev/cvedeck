@@ -112,6 +112,8 @@ def _refresh_feeds() -> int:
         session.commit()
     for outcome in outcomes:
         detail = f" ({outcome.error_detail})" if outcome.error_detail else ""
+        if outcome.unchanged:
+            detail = " (unchanged)" + detail
         print(f"{outcome.feed_name}: {outcome.status}, {outcome.record_count} records{detail}")
     print(f"findings updated: {updated}")
     return 0 if all(outcome.ok for outcome in outcomes) else 1

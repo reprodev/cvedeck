@@ -327,3 +327,79 @@ def test_the_demo_includes_a_refused_host_key(session):
         == 0
     )
 
+
+
+def test_the_demo_ships_a_usable_intel_cache_of_its_own(session):
+    """So the exploited card shows a count, without touching the network.
+
+    The dashboard gates the *display* of exploitation on feed health rather
+    than on the findings: with no usable feed the "actively exploited" triage
+    card renders an em dash. Up to 0.8.9 a demo visitor got that dash until
+    they pressed **Refresh intel**, which downloaded the real catalogue and
+    reapplied it over this fixture, permanently replacing the unchecked
+    findings above. Shipping a cache means the demo is right on first paint and
+    never needs the network (Req 15.6).
+    """
+    from app.data.repository import Repository
+    from app.services.enrichment import EPSS_FEED, KEV_FEED, FindingEnricher
+
+    seed_demo_fleet(session)
+    enricher = FindingEnricher(Repository(session))
+
+    for feed in (KEV_FEED, EPSS_FEED):
+        health = enricher.feed_health(feed)
+        assert health.usable, f"{feed} must back the demo's own findings"
+        assert not health.stale, f"{feed} must not open on a staleness warning"
+
+
+def test_the_demo_cache_agrees_with_the_findings_it_ships(session):
+    """Derived from one list, so the two cannot drift apart.
+
+    A demo whose catalogue disagreed with its own findings would be showing a
+    bug rather than the product.
+    """
+    from app.data.schema import KevEntry
+
+    seed_demo_fleet(session)
+
+    catalogued = {row.cve_id for row in session.query(KevEntry).all()}
+    exploited = {
+        row.cve_id
+        for row in session.query(CveFinding).filter(CveFinding.kev_listed.is_(True))
+    }
+
+    assert catalogued, "the demo must carry a catalogue of its own"
+    assert exploited == catalogued
+
+
+def test_restamping_leaves_the_fleet_alone(session):
+    """It runs on every demo start-up, so it must touch nothing but the feeds."""
+    from app.data.demo_seed import refresh_demo_feed_timestamps
+
+    seed_demo_fleet(session)
+    before = {
+        (f.cve_id, f.machine_id): (f.kev_listed, f.epss_score)
+        for f in session.query(CveFinding).all()
+    }
+
+    assert refresh_demo_feed_timestamps(session) is True
+
+    after = {
+        (f.cve_id, f.machine_id): (f.kev_listed, f.epss_score)
+        for f in session.query(CveFinding).all()
+    }
+    assert after == before
+
+
+def test_restamping_an_unseeded_database_does_nothing(session):
+    """A database from before the seeded cache must not gain empty feed rows.
+
+    Recording a usable feed with no catalogue behind it would report "checked,
+    and nothing is exploited" on the strength of an empty table.
+    """
+    from app.data.demo_seed import refresh_demo_feed_timestamps
+    from app.data.repository import Repository
+    from app.services.enrichment import KEV_FEED, FindingEnricher
+
+    assert refresh_demo_feed_timestamps(session) is False
+    assert not FindingEnricher(Repository(session)).feed_health(KEV_FEED).usable

@@ -86,6 +86,7 @@ def test_refresh_feeds_reports_each_feed_and_fails_when_one_does(data_dir, monke
             self.status = "ok" if ok else "failed"
             self.record_count = 10 if ok else 0
             self.error_detail = None if ok else "upstream down"
+            self.unchanged = False
 
     monkeypatch.setattr(
         enrichment.FeedRefreshService,

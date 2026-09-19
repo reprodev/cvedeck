@@ -411,6 +411,15 @@ class FeedRefresh(Base):
         Integer, nullable=False, default=0, server_default=sa_text("0")
     )
     error_detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: Digest of the records the last successful refresh stored, so a later
+    #: download that carries the same data can skip rewriting the catalogue and
+    #: reapplying it to every finding (Req 10.14). Taken over the normalized
+    #: records rather than the raw response body on purpose: CISA's KEV JSON
+    #: carries a catalogue version and release date that move daily even when
+    #: no entry changes, so a digest of the payload would almost never match.
+    #: NULL means this feed has never been digested -- one full refresh will
+    #: populate it.
+    payload_digest: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class SshHostKey(Base):

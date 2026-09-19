@@ -57,6 +57,7 @@ def refresh_feeds_once(engine: Engine) -> list[str]:
         session.commit()
     return [
         f"{o.feed_name}: {o.status}, {o.record_count} records"
+        + (" (unchanged)" if o.unchanged else "")
         + (f" ({o.error_detail})" if o.error_detail else "")
         for o in outcomes
     ] + [f"findings updated: {updated}"]

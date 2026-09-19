@@ -608,3 +608,117 @@ def test_reapply_counts_only_findings_that_actually_changed(session, repo):
 
     assert FindingEnricher(repo).reapply_to_stored() == 2  # both learn an answer
     assert FindingEnricher(repo).reapply_to_stored() == 0  # nothing moved
+
+
+# --------------------------------------------------------------------------- #
+# A refresh that carries no news (Req 10.14)
+# --------------------------------------------------------------------------- #
+#
+# Both feeds publish daily and are downloaded whole. Most days nothing a
+# deployment stores has actually moved, and until 0.8.9 every refresh still
+# deleted and re-inserted the entire catalogue -- roughly 270k rows for EPSS --
+# and then re-read it onto every stored finding.
+
+
+def test_an_unchanged_catalogue_is_not_rewritten(repo):
+    """The second refresh of identical records writes nothing."""
+    source = _StubSource([KevRecord(cve_id="CVE-2021-44228", due_date="2026-01-01")])
+    service = FeedRefreshService(repo, kev_source=source, epss_source=None)
+
+    first = service.refresh_kev()
+    assert first.ok and not first.unchanged
+
+    second = service.refresh_kev()
+
+    assert second.ok
+    assert second.unchanged
+    assert second.record_count == first.record_count
+    # Still a success, and still current: the cache genuinely was checked
+    # against the upstream just now. Reporting it as stale because nothing had
+    # changed would invert the meaning of the age the dashboard shows.
+    assert FindingEnricher(repo).feed_health(KEV_FEED).stale is False
+    assert source.calls == 2
+
+
+def test_a_changed_catalogue_is_rewritten(repo):
+    """One added entry is enough to make it a real refresh again."""
+    source = _StubSource([KevRecord(cve_id="CVE-2021-44228", due_date="2026-01-01")])
+    service = FeedRefreshService(repo, kev_source=source, epss_source=None)
+    service.refresh_kev()
+
+    source._records = [
+        KevRecord(cve_id="CVE-2021-44228", due_date="2026-01-01"),
+        KevRecord(cve_id="CVE-2024-3094", due_date="2026-04-01"),
+    ]
+    third = service.refresh_kev()
+
+    assert third.ok
+    assert not third.unchanged
+    assert third.record_count == 2
+    assert set(repo.get_kev_map({"CVE-2021-44228", "CVE-2024-3094"})) == {
+        "CVE-2021-44228",
+        "CVE-2024-3094",
+    }
+
+
+def test_reordered_but_identical_records_still_count_as_unchanged(repo):
+    """Neither upstream promises an order, so order must not force a rewrite."""
+    a = KevRecord(cve_id="CVE-2021-44228", due_date="2026-01-01")
+    b = KevRecord(cve_id="CVE-2024-3094", due_date="2026-04-01")
+    source = _StubSource([a, b])
+    service = FeedRefreshService(repo, kev_source=source, epss_source=None)
+    service.refresh_kev()
+
+    source._records = [b, a]
+
+    assert service.refresh_kev().unchanged
+
+
+def test_a_failed_refresh_does_not_clear_the_digest(repo):
+    """Or the next real download would be skipped against a stale cache.
+
+    The digest describes the catalogue actually held. An outage changes nothing
+    about that, so it must survive one -- and the refresh after it, carrying the
+    same records, is genuinely unchanged.
+    """
+    source = _StubSource([KevRecord(cve_id="CVE-2021-44228", due_date="2026-01-01")])
+    service = FeedRefreshService(repo, kev_source=source, epss_source=None)
+    service.refresh_kev()
+
+    failing = FeedRefreshService(
+        repo,
+        kev_source=_StubSource(error=RuntimeError("connection refused")),
+        epss_source=None,
+    )
+    assert not failing.refresh_kev().ok
+    assert repo.get_feed_refresh(KEV_FEED).payload_digest is not None
+
+    assert service.refresh_kev().unchanged
+
+
+def test_an_emptied_cache_is_rewritten_even_when_the_digest_matches(repo):
+    """A digest with nothing behind it must not be trusted."""
+    source = _StubSource([KevRecord(cve_id="CVE-2021-44228", due_date="2026-01-01")])
+    service = FeedRefreshService(repo, kev_source=source, epss_source=None)
+    service.refresh_kev()
+
+    repo.replace_kev_entries([])
+    repo.record_feed_refresh(KEV_FEED, status=FeedStatus.OK, record_count=0)
+
+    outcome = service.refresh_kev()
+
+    assert not outcome.unchanged
+    assert repo.get_kev_map({"CVE-2021-44228"})
+
+
+def test_epss_ignores_its_write_timestamp_when_deciding(repo):
+    """``scored_at`` is stamped at write time, not carried by the feed.
+
+    Including it in the digest would make every refresh differ from the last
+    and the short-circuit would never fire.
+    """
+    source = _StubSource([EpssRecord(cve_id="CVE-2021-44228", score=0.42, percentile=0.97)])
+    service = FeedRefreshService(repo, kev_source=None, epss_source=source)
+
+    assert not service.refresh_epss().unchanged
+    assert service.refresh_epss().unchanged

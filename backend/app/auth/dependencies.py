@@ -38,8 +38,15 @@ _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 def login_required() -> bool:
     """Whether this deployment asks for a login at all (Req 16.9, 16.11).
 
-    Demo mode is a public, read-mostly showcase with its dangerous routes
-    already refused, so it stays open.
+    Demo mode is a public, read-mostly showcase, so it stays open.
+
+    That rests entirely on every state-changing route being refused by
+    ``_demo_guard``. Check there before adding one, and do not reason about it
+    the other way round: through 0.8.8 this docstring asserted the dangerous
+    routes were "already refused" while ``POST /api/feeds/refresh`` was not one
+    of them, so an anonymous visitor could rewrite the seeded fleet and make the
+    instance re-download both feeds on every click. The sentence was the reason
+    nobody looked.
     """
     return config.auth_enabled() and not config.demo_mode()
 

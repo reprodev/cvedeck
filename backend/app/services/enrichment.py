@@ -35,6 +35,7 @@ for scan sources.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -72,6 +73,25 @@ class _EpssSource(Protocol):
         ...
 
 
+def _digest(rows: Sequence[tuple]) -> str:
+    """A stable digest of the records a refresh would store (Req 10.14).
+
+    Taken over the **normalized** records, not the raw response body. CISA's KEV
+    JSON carries a catalogue version and release date that change every day the
+    feed is published, whether or not a single entry moved, so a digest of the
+    payload would almost never match and the short-circuit would never fire.
+    What matters is whether anything the deployment stores has changed.
+
+    Sorted before hashing, because neither upstream promises an order and a
+    reordered but identical catalogue is still identical.
+    """
+    hasher = hashlib.sha256()
+    for row in sorted(rows):
+        hasher.update(repr(row).encode("utf-8"))
+        hasher.update(b"\n")
+    return hasher.hexdigest()
+
+
 @dataclass(frozen=True)
 class FeedRefreshOutcome:
     """The result of refreshing one feed."""
@@ -80,6 +100,11 @@ class FeedRefreshOutcome:
     status: FeedStatus
     record_count: int = 0
     error_detail: str | None = None
+    #: True when the download succeeded and carried exactly the records already
+    #: cached, so nothing was rewritten. Reported rather than hidden: "refreshed
+    #: 1,687 entries" and "checked, and nothing had changed" are different facts,
+    #: and only the second explains why a refresh took no time.
+    unchanged: bool = False
 
     @property
     def ok(self) -> bool:
@@ -167,6 +192,25 @@ class FeedRefreshService:
                 ValueError("KEV feed returned no entries; keeping previous cache"),
             )
 
+        digest = _digest(
+            [
+                (
+                    record.cve_id,
+                    record.vendor_project,
+                    record.product,
+                    record.vulnerability_name,
+                    record.date_added,
+                    record.due_date,
+                    record.known_ransomware_use,
+                    record.notes,
+                )
+                for record in records
+            ]
+        )
+        unchanged = self._matches_cached_digest(KEV_FEED, digest)
+        if unchanged is not None:
+            return unchanged
+
         count = self._repository.replace_kev_entries(
             [
                 KevEntry(
@@ -183,7 +227,7 @@ class FeedRefreshService:
             ]
         )
         self._repository.record_feed_refresh(
-            KEV_FEED, status=FeedStatus.OK, record_count=count
+            KEV_FEED, status=FeedStatus.OK, record_count=count, payload_digest=digest
         )
         return FeedRefreshOutcome(KEV_FEED, FeedStatus.OK, record_count=count)
 
@@ -205,6 +249,16 @@ class FeedRefreshService:
                 ValueError("EPSS feed returned no rows; keeping previous cache"),
             )
 
+        # ``scored_at`` is deliberately outside the digest: it is stamped at
+        # write time, so including it would make every refresh look different
+        # from the last and the short-circuit would never fire.
+        digest = _digest(
+            [(record.cve_id, record.score, record.percentile) for record in records]
+        )
+        unchanged = self._matches_cached_digest(EPSS_FEED, digest)
+        if unchanged is not None:
+            return unchanged
+
         scored_at = datetime.now(timezone.utc)
         count = self._repository.replace_epss_scores(
             [
@@ -218,9 +272,41 @@ class FeedRefreshService:
             ]
         )
         self._repository.record_feed_refresh(
-            EPSS_FEED, status=FeedStatus.OK, record_count=count
+            EPSS_FEED, status=FeedStatus.OK, record_count=count, payload_digest=digest
         )
         return FeedRefreshOutcome(EPSS_FEED, FeedStatus.OK, record_count=count)
+
+    def _matches_cached_digest(
+        self, feed: str, digest: str
+    ) -> FeedRefreshOutcome | None:
+        """Short-circuit when the download carries what is already cached.
+
+        Returns the outcome to report, or ``None`` to go on and rewrite.
+
+        The refresh is still recorded as a success, and ``last_refreshed_at``
+        still advances: the cache genuinely was checked against the upstream
+        just now, and reporting it as stale because nothing had changed would
+        invert the meaning of the age the dashboard shows.
+
+        Guarded on the cache being non-empty as well as on the digest, so a
+        database whose catalogue was cleared out from under the refresh row
+        rewrites rather than trusting a digest with nothing behind it.
+        """
+        row = self._repository.get_feed_refresh(feed)
+        if row is None or row.payload_digest != digest or row.record_count <= 0:
+            return None
+
+        _LOGGER.info("%s feed is unchanged (%d records); skipping the rewrite",
+                     feed, row.record_count)
+        self._repository.record_feed_refresh(
+            feed,
+            status=FeedStatus.OK,
+            record_count=row.record_count,
+            payload_digest=digest,
+        )
+        return FeedRefreshOutcome(
+            feed, FeedStatus.OK, record_count=row.record_count, unchanged=True
+        )
 
     def _record_failure(self, feed: str, exc: Exception) -> FeedRefreshOutcome:
         """Record a failed refresh, leaving the existing cache untouched."""
@@ -468,11 +554,29 @@ def refresh_feeds_and_reapply(
     succeeded, and :meth:`FindingEnricher.reapply_to_stored` already declines to
     apply a feed it cannot trust, so there is nothing here to decide.
 
+    **Demo mode never reapplies** (Req 15.6). The seeded fleet is a fixture with
+    authored exploitation values, including findings deliberately left unchecked,
+    and reapplying a real catalogue over it destroys the one thing the demo is
+    there to show. The HTTP route is refused outright by ``_demo_guard``, but a
+    route dependency does nothing for ``cvedeck-admin refresh-feeds``, which runs
+    against the database directly inside the container. 0.8.8 switched off the
+    periodic refresher and stopped there, which left two other ways in; the check
+    belongs here, where every path passes.
+
     Does not commit; the caller owns the transaction.
 
     Returns:
         The per-feed outcomes, and how many stored findings changed.
     """
+    from ..config import demo_mode
+
     outcomes = build_feed_refresh_service(repository).refresh_all()
+    if demo_mode():
+        return outcomes, 0
+    # Nothing a reapply could write would differ, so skip the fleet-wide scan
+    # (Req 10.14). Only when every outcome says so: one feed unchanged and the
+    # other rewritten still needs the pass.
+    if outcomes and all(outcome.unchanged for outcome in outcomes):
+        return outcomes, 0
     updated = FindingEnricher(repository).reapply_to_stored()
     return outcomes, updated

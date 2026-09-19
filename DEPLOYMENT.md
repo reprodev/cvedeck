@@ -75,7 +75,7 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_DEFAULT_SSH_KEY_PATH` | _(unset)_ | Path to a server-managed SSH private key. When set, a Linux scan target may omit credentials entirely and authenticate with this key -- this is what enables a fleet re-scan without retyping credentials per host. Re-read on every scan, so rotating the file takes effect without a restart. |
 | `CVEDECK_DEFAULT_SSH_KEY_PASSPHRASE` | _(unset)_ | Passphrase for the above key, if it is encrypted. |
 | `CVEDECK_DEFAULT_SSH_USER` | _(unset)_ | Username paired with the server-managed key when a target supplies none. |
-| `CVEDECK_DEMO_MODE` | `false` | Run as a public demo: seed a fictional fleet into an empty database, **refuse** scans, discovery sweeps and connection tests, and switch the built-in feed refresh off so the seeded unchecked findings stay unchecked. See "Demo mode" below. Leave off on any instance you actually scan with. |
+| `CVEDECK_DEMO_MODE` | `false` | Run as a public demo: seed a fictional fleet into an empty database (with its own fictional intel cache), and **refuse** scans, discovery sweeps, connection tests and the intel refresh, so the seeded unchecked findings stay unchecked. See "Demo mode" below. Leave off on any instance you actually scan with. |
 | `CVEDECK_CORS_ORIGINS` | unset | Comma-separated origins. Only needed if the dashboard is served from a different host than the API. |
 | `CVEDECK_AUTH` | `enabled` | Set to `disabled` to serve the dashboard and API without login, for an instance already behind an authenticating proxy. Any other value, including a typo, leaves login on. A warning is logged on every start while it is off. |
 | `CVEDECK_ADMIN_USERNAME` | unset | With a password, creates this account on start-up if none exists. Never changes an existing account. |
@@ -183,13 +183,16 @@ booting, and keeps it current.
 
 Each refresh also **reapplies the feeds to the findings already stored**, so a
 newly catalogued exploitation appears on your existing findings rather than
-waiting for the next scan of each host (Req 10.15). Findings that change are
+waiting for the next scan of each host (Req 10.15). A download that carries
+exactly the records already cached is recognised and skipped: nothing is
+rewritten and no findings are re-read, and the refresh reports the feed as
+`unchanged`. Most days, both feeds are. Findings that change are
 marked for synchronization again, so a deployment with `CVEDECK_ONLINE_DB_URL`
 propagates the new signals too.
 
-Demo mode switches the built-in refresh off, so a demo instance keeps the
-seeded findings whose exploitation status was never checked — press **Refresh
-intel** to fetch the feeds and watch the ranking appear. `GET /api/health`
+Demo mode refuses the refresh entirely and ships a fictional cache of its own
+instead, so a demo instance keeps the seeded findings whose exploitation status
+was never checked and never reaches the network for intel. `GET /api/health`
 reports `feed_refresh_hours: 0` there, because that is what is actually running.
 
 `CVEDECK_FEED_REFRESH_HOURS` changes the interval; `0` switches the built-in
@@ -219,12 +222,15 @@ curl -fsS -X POST -H "Authorization: Bearer $CVEDECK_TOKEN" \
 {"ok": true,
  "findings_updated": 14,
  "results": [{"feed_name": "kev",  "status": "ok", "record_count": 1687},
-             {"feed_name": "epss", "status": "ok", "record_count": 366848}]}
+             {"feed_name": "epss", "status": "ok", "record_count": 366848,
+              "unchanged": true}]}
 ```
 
 The two feeds refresh independently, so an outage at one upstream does not cost
 the other's update — `ok` is `false` if either failed, with the reason in
-`error_detail`.
+`error_detail`. `unchanged: true` means the download succeeded and carried
+exactly what was already cached, so the catalogue was not rewritten and no
+findings were re-read; `record_count` is still the size of the cache in effect.
 
 **Daily is enough**, because that is how often both upstreams publish.
 

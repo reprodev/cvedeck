@@ -109,6 +109,11 @@ def _seed_demo_if_requested(engine: Engine) -> None:
     at a database that already holds real scan results is a no-op instead of a
     surprise (Req 15.1, 15.2).
 
+    An already-seeded demo still has its intel feeds re-stamped as fresh
+    (Req 15.6). Seeding runs once, a cache goes stale after 48 hours, and a
+    public demo stays up for weeks -- without this it would start reporting
+    degraded enrichment on its third day and stop matching its own screenshots.
+
     A failure here must not stop the API coming up: the consequence of an
     unseeded demo is an empty dashboard, which is strictly better than a
     dashboard that will not load at all.
@@ -116,15 +121,22 @@ def _seed_demo_if_requested(engine: Engine) -> None:
     if not config.demo_mode():
         return
 
-    from ..data.demo_seed import fleet_is_empty, seed_demo_fleet
+    from ..data.demo_seed import (
+        fleet_is_empty,
+        refresh_demo_feed_timestamps,
+        seed_demo_fleet,
+    )
 
     try:
         with Session(engine) as session:
-            if not fleet_is_empty(session):
+            if fleet_is_empty(session):
+                count = seed_demo_fleet(session)
+                session.commit()
+                logger.info("Demo mode: seeded %d machines.", count)
                 return
-            count = seed_demo_fleet(session)
-            session.commit()
-        logger.info("Demo mode: seeded %d machines.", count)
+            if refresh_demo_feed_timestamps(session):
+                session.commit()
+                logger.info("Demo mode: re-stamped the seeded intel feeds.")
     except Exception:
         logger.exception("Demo mode: seeding failed; starting with an empty fleet.")
 

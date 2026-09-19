@@ -47,10 +47,20 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from ..enums import FindingChange, Platform, ScanStatus, Severity, SyncStatus
+from ..enums import (
+    FeedStatus,
+    FindingChange,
+    Platform,
+    ScanStatus,
+    Severity,
+    SyncStatus,
+)
 from .schema import (
     CveFinding,
+    EpssScore,
+    FeedRefresh,
     Inventory,
+    KevEntry,
     Package,
     ScanFindingChange,
     ScanRun,
@@ -63,8 +73,12 @@ def _uid() -> str:
     return str(uuid.uuid4())
 
 
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _ago(**kwargs: float) -> datetime:
-    return datetime.now(timezone.utc) - timedelta(**kwargs)
+    return _now() - timedelta(**kwargs)
 
 
 # (hostname, platform, os_name, os_version, kernel, status, scanned_ago_hours,
@@ -506,5 +520,96 @@ def seed_demo_fleet(session: Session) -> int:
             )
         )
 
+    _seed_intel_cache(session)
+
     session.flush()
     return len(machines)
+
+
+def _seed_intel_cache(session: Session) -> None:
+    """Give the demo a fictional KEV and EPSS cache of its own (Req 15.6).
+
+    Derived from ``_FINDINGS_LINUX`` rather than written out again, so the cache
+    and the findings cannot disagree: the catalogue lists exactly the CVEs the
+    fleet carries as exploited, and the score set carries exactly the
+    probabilities its findings were given.
+
+    The demo needs this because the dashboard gates the *display* of
+    exploitation on feed health, not on the findings: with no usable feed the
+    "actively exploited" triage card renders an em dash rather than a count. Up
+    to 0.8.9 a visitor got that dash until they pressed **Refresh intel**, which
+    downloaded the real catalogue and reapplied it over this fixture --
+    destroying the unchecked findings above, permanently, since nothing
+    re-seeds. Shipping the cache instead means the demo is right on first paint
+    and never needs the network at all.
+
+    Deliberately not a copy of the real catalogues. These are the four CVEs this
+    fictional fleet treats as exploited; what CISA lists today is a question
+    about the real world, which a demo has no business answering.
+    """
+    kev_cves = [cve for cve, *_rest, kev, _s, _p in _FINDINGS_LINUX if kev is True]
+    for cve_id in kev_cves:
+        session.add(
+            KevEntry(
+                cve_id=cve_id,
+                # A date far enough out that the demo does not drift into
+                # showing every federal deadline as overdue.
+                due_date=(_now() + timedelta(days=21)).date().isoformat(),
+            )
+        )
+
+    scored = [
+        (cve, score, percentile)
+        for cve, *_rest, _kev, score, percentile in _FINDINGS_LINUX
+        if score is not None and percentile is not None
+    ]
+    for cve_id, score, percentile in scored:
+        session.add(
+            EpssScore(
+                cve_id=cve_id,
+                score=score,
+                percentile=percentile,
+                scored_at=_now(),
+            )
+        )
+
+    _stamp_demo_feeds(session, kev_count=len(kev_cves), epss_count=len(scored))
+
+
+def _stamp_demo_feeds(session: Session, *, kev_count: int, epss_count: int) -> None:
+    """Record both demo feeds as refreshed just now.
+
+    Split out because it runs on every demo start-up, not only at seeding. A
+    cache is stale after 48 hours (``FindingEnricher._is_stale``), and seeding
+    happens once, so a long-lived public demo would otherwise start reporting
+    degraded enrichment after two days and stop matching its own screenshots.
+    Re-stamping costs one row per feed and touches no finding.
+    """
+    now = _now()
+    for feed_name, count in (("kev", kev_count), ("epss", epss_count)):
+        row = session.get(FeedRefresh, feed_name)
+        if row is None:
+            row = FeedRefresh(feed_name=feed_name)
+            session.add(row)
+        row.last_status = FeedStatus.OK
+        row.last_refreshed_at = now
+        row.last_attempted_at = now
+        row.record_count = count
+        row.error_detail = None
+
+
+def refresh_demo_feed_timestamps(session: Session) -> bool:
+    """Re-stamp the demo's seeded feeds, if this database has them.
+
+    Called on every start-up in demo mode. Returns whether anything was
+    stamped, so a database that predates the seeded cache -- or one seeded by
+    an older release -- is left alone rather than being given feed rows with no
+    catalogue behind them, which would report a usable feed holding nothing.
+    """
+    kev_count = session.query(KevEntry).count()
+    if kev_count == 0:
+        return False
+    _stamp_demo_feeds(
+        session, kev_count=kev_count, epss_count=session.query(EpssScore).count()
+    )
+    return True

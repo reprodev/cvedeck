@@ -483,6 +483,11 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
     ? machines.find((machine) => machine.machineId === selectedMachineId)
     : undefined;
 
+  // A demo ships with its own seeded intel and refuses the refresh with a 403,
+  // so offer no button rather than one that fails. Same shape as onRescan,
+  // which is withheld when the server has no key to scan with.
+  const offerIntelRefresh = !capabilities?.demoMode;
+
   return (
     <main>
       <div className="app-header">
@@ -684,7 +689,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onRescan={capabilities?.serverSshKey ? handleRescan : undefined}
           scanning={scanning}
           feeds={feeds}
-          onRefreshFeeds={handleRefreshFeeds}
+          onRefreshFeeds={offerIntelRefresh ? handleRefreshFeeds : undefined}
           refreshingFeeds={refreshingFeeds}
         />
       )}

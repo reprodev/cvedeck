@@ -817,6 +817,7 @@ class Repository:
         status: FeedStatus,
         record_count: int = 0,
         error_detail: str | None = None,
+        payload_digest: str | None = None,
     ) -> FeedRefresh:
         """Record the outcome of a feed refresh attempt.
 
@@ -824,6 +825,11 @@ class Repository:
         the dashboard is the age of the *data*, not of the last attempt. A feed
         that has been failing for a week therefore reports a week-old cache,
         which is the fact a user needs.
+
+        ``payload_digest`` is stored only on success, and only when given. A
+        failed attempt must not clear it: the digest describes the catalogue
+        actually held, and dropping it on an outage would force a pointless full
+        rewrite on the next success (Req 10.14).
         """
         now = datetime.now(timezone.utc)
         row = self._session.get(FeedRefresh, feed_name)
@@ -837,6 +843,8 @@ class Repository:
             row.last_refreshed_at = now
             row.record_count = record_count
             row.error_detail = None
+            if payload_digest is not None:
+                row.payload_digest = payload_digest
         else:
             row.error_detail = error_detail
         self._session.flush()

@@ -5,8 +5,16 @@ accepted a hostname, a CIDR and a set of credentials would be an open SSH,
 WinRM and port-scan proxy that anyone could aim at any address, with the
 traffic originating from the demo's IP rather than theirs. Every route that
 reaches the network from user-supplied input must be off, so each one is
-asserted individually -- adding a fourth such route and forgetting the guard is
+asserted individually -- adding another such route and forgetting the guard is
 exactly the mistake these tests exist to catch.
+
+The intel refresh is refused for a second reason, and it is worth stating
+separately because reasoning only about the first is what left it open through
+0.8.8: it rewrites the seeded fleet. A refresh reapplies the feeds to stored
+findings, which overwrites the deliberately unchecked findings Req 15.6 requires
+the demo to carry, and nothing re-seeds them. It also reaches the network
+without any user-supplied address at all, so "does this route take a hostname?"
+was the wrong question to ask of it.
 """
 
 from __future__ import annotations
@@ -15,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import create_app
+from app.enums import FeedStatus
 from tests.auth_helpers import override_auth
 
 
@@ -153,3 +162,50 @@ def test_flag_is_off_when_unset(monkeypatch):
 def test_pinned_host_keys_can_be_read_but_not_forgotten(demo):
     """Req 17.10 is a read; Req 17.7's forget stays refused (Req 15.3)."""
     assert demo.get("/api/host-keys").status_code == 200
+
+
+def test_refreshing_intel_is_refused(demo):
+    """The other door, closed in 0.8.9.
+
+    0.8.8 switched the *periodic* refresh off in demo mode to protect the
+    seeded findings whose exploitation status was deliberately never checked,
+    and left this route wide open -- unauthenticated, since demo mode needs no
+    login. One press reapplied the real catalogue over the fixture and turned
+    every one of those unknowns into a definite answer, permanently: nothing
+    re-seeds a fleet that is no longer empty.
+
+    Listed beside the other refusals for the reason this module's docstring
+    gives: each one is asserted individually so that adding a route and
+    forgetting the guard is caught here.
+    """
+    response = demo.post("/api/feeds/refresh")
+
+    assert response.status_code == 403
+    assert "demo mode" in response.json()["detail"].lower()
+
+
+def test_a_normal_instance_may_refresh_intel(normal, monkeypatch):
+    """The guard must be demo-only -- a real deployment still refreshes.
+
+    The upstreams are stubbed out: a test that let this route run for real
+    would download the live KEV and EPSS feeds, which is minutes of network in
+    a suite that otherwise touches none.
+    """
+    from app.services import enrichment
+
+    class _Service:
+        def refresh_all(self):
+            return [
+                enrichment.FeedRefreshOutcome(
+                    "kev", FeedStatus.OK, record_count=3
+                )
+            ]
+
+    monkeypatch.setattr(
+        enrichment, "build_feed_refresh_service", lambda repo: _Service()
+    )
+
+    response = normal.post("/api/feeds/refresh")
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["feed_name"] == "kev"

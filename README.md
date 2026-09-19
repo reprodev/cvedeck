@@ -196,11 +196,12 @@ docker run -d -p 3325:8000 -e CVEDECK_DEMO_MODE=true ghcr.io/reprodev/cvedeck:la
 
 This seeds a fictional twelve-host fleet, including a host that has never been
 scanned, one whose credentials failed, one scanned while an advisory source was
-down, and findings whose exploitation status was never checked. It also
-**disables scanning, discovery and connection tests**, and leaves the
-threat-intel feeds alone so those unchecked findings stay unchecked — press
-**Refresh intel** to download the feeds and watch the ranking in the screenshots
-above appear. Demo mode needs no login.
+down, and findings whose exploitation status was never checked. It arrives
+ranked exactly as the screenshots above, carrying its own fictional KEV and EPSS
+data, so it needs no network at all. Scanning, discovery, connection tests and
+the intel refresh are all **disabled** — a demo that fetched the real catalogue
+would overwrite its own fixture, including the unchecked findings that are the
+point of it. Demo mode needs no login.
 
 Leave demo mode off on any instance you actually scan with. A public instance
 with scanning enabled is an SSH/WinRM client and port scanner that any visitor

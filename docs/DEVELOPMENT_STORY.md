@@ -1837,3 +1837,111 @@ matter was documented as a limitation somewhere else and never reconciled.
 
 The automation was real. The download happened. The cache was fresh. And for
 one release, the only thing that ever read it was a scan that nobody had run.
+
+---
+
+## Chapter 19 — The other door (v0.8.9)
+
+The previous chapter ends well. It describes noticing, before shipping, that a
+fleet-wide reapply would enrich the demo's deliberately unchecked findings and
+delete the one place the project demonstrates its central distinction to
+strangers. It calls that "the safeguard that would have eaten its own
+demonstration". The fix went in, the test went in, the chapter was written.
+
+The safeguard covered the periodic refresher. There were three ways to trigger a
+refresh.
+
+### What was actually protected
+
+`POST /api/feeds/refresh` had no demo guard. Neither did the button that calls
+it. The README instructed demo visitors to press that button. And demo mode
+serves the route without a login, because a demo is meant to be clicked around
+by strangers.
+
+So the sequence the documentation recommended, to an anonymous visitor, was:
+press this, and permanently replace the fixture with live data. All 46 unknown
+findings became definite answers. The authored KEV flags and EPSS scores behind
+the ranking — the ones chosen so the screenshots show what they show — were
+overwritten with whatever CISA and FIRST said that morning. Nothing re-seeds a
+fleet that is no longer empty, so it did not come back.
+
+0.8.8's own commit message says it plainly, and it reads differently now:
+
+> Pressing "Refresh intel" still works, which is the demo's own intended
+> sequence.
+
+That sentence is the bug. It was written as a reassurance.
+
+### Why it was invisible
+
+Two reasons, and neither is carelessness.
+
+The first is that the fix was reasoned about in terms of the code that had just
+been written. The reapply had been added to the periodic task, so the question
+asked was "does the periodic task run in demo mode?" — rather than "what can
+reach this fixture?" One is a question about a code path, the other about the
+thing being protected. Only the second finds three answers.
+
+The second is worse, and is a lesson about documentation rather than code. The
+function that decides whether a demo needs a login read:
+
+```python
+def login_required() -> bool:
+    """...
+    Demo mode is a public, read-mostly showcase with its dangerous routes
+    already refused, so it stays open.
+    """
+```
+
+"Already refused" was true when it was written. It was load-bearing — it is the
+justification for serving a public instance without authentication — and it was
+never rechecked, because a docstring asserting a safety property reads like
+evidence of one. It is the same failure as Chapter 18's, where a limitation that
+was accurate in isolation became the hole in the feature shipped beside it. Here
+a reassurance that was accurate in isolation became the reason nobody looked.
+
+Both sentences have been rewritten to say what is actually enforced and where,
+and the demo-mode test module now explains that the intel refresh is refused for
+a *different* reason from the others: it reaches the network with no
+user-supplied address at all, so the question "does this route take a hostname?"
+— which is how the other four were found — was the wrong one to ask of it.
+
+### Closing three doors, and removing the need for any
+
+The route is refused. The service skips the reapply in demo mode however it was
+triggered, which is the one that also covers `cvedeck-admin refresh-feeds`,
+since a route dependency means nothing to a CLI run inside the container. The
+dashboard offers no button rather than one that fails.
+
+That is defence in depth in a release whose entire subject is having relied on a
+single layer. But the better half of the fix was to remove the reason anyone
+would press the button. The demo now ships a fictional KEV catalogue and EPSS
+score set of its own, derived from the same list that authors its findings so
+the two cannot disagree. It was pressing *Refresh intel* that made the demo look
+right, because the dashboard gates the display of exploitation on feed health;
+with its own cache the demo is right on first paint and never needs the network.
+
+### The unrelated thing found on the way
+
+Reading the refresh path closely for the first time since it was written turned
+up something with no bearing on the demo. Both feeds publish daily and are
+downloaded whole. Every refresh deleted and re-inserted the entire catalogue —
+about 270,000 rows for EPSS — and then re-read it onto every stored finding.
+Every day. Whether or not a single record had changed, which most days none had.
+
+The fix is a digest, and the only interesting decision is what to hash. The
+obvious answer, the response body, is wrong: CISA's KEV JSON carries a catalogue
+version and a release date that move every time it is published, so a payload
+digest would almost never match and the check would never fire. What matters is
+whether anything the deployment *stores* has changed, so the digest is taken
+over the normalized records — and EPSS's `scored_at` is excluded, because it is
+stamped at write time rather than carried by the feed, and including it would
+make every refresh differ from the last.
+
+### Closing thought
+
+The uncomfortable part is not that a door was left open. It is that the release
+which left it open was the one that went looking for exactly this, found one
+instance, fixed it, wrote it up at length, and stopped. Finding a class of
+problem and then fixing a single member of it feels, from the inside, exactly
+like finding and fixing the problem.

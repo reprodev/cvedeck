@@ -89,7 +89,7 @@ def _to_remediation_out(record) -> RemediationOut:
     )
 
 
-def _demo_guard(action: str):
+def _demo_guard(action: str, *, advice: str = "Run your own instance to scan real hosts."):
     """Build a route dependency that refuses `action` when in demo mode.
 
     Implements Req 15.3: every route that opens a connection to a
@@ -101,6 +101,14 @@ def _demo_guard(action: str):
     credentials and connect to it. Left enabled on a public instance, that is an
     open SSH/WinRM and port-scan proxy anyone can aim anywhere, with the traffic
     coming from the demo's IP rather than theirs.
+
+    Since 0.8.9 the intel refresh is refused here too, for two reasons that are
+    not about a user-supplied address. It rewrites the seeded fleet -- a refresh
+    reapplies the feeds to stored findings (Req 10.15), which would overwrite
+    the deliberately unchecked findings Req 15.6 requires the demo to carry, and
+    nothing re-seeds them. And demo mode needs no login (Req 16.11), so the
+    route was an unauthenticated, unrated way to make the instance download two
+    multi-megabyte feeds and rewrite the whole cache, once per click.
 
     This is a route-level dependency rather than a check inside the handler
     because FastAPI resolves a handler's parameter dependencies before its body
@@ -118,10 +126,7 @@ def _demo_guard(action: str):
         if config.demo_mode():
             raise HTTPException(
                 status_code=403,
-                detail=(
-                    f"{action} is disabled in demo mode. "
-                    "Run your own instance to scan real hosts."
-                ),
+                detail=f"{action} is disabled in demo mode. {advice}",
             )
 
     return guard
@@ -338,7 +343,18 @@ def trigger_sync(
     )
 
 
-@router.post("/feeds/refresh", response_model=FeedRefreshResponse)
+@router.post(
+    "/feeds/refresh",
+    response_model=FeedRefreshResponse,
+    dependencies=[
+        Depends(
+            _demo_guard(
+                "Refreshing threat intel",
+                advice="This demo ships with its own intel already loaded.",
+            )
+        )
+    ],
+)
 def refresh_feeds(
     session: Session = Depends(get_session),
 ) -> FeedRefreshResponse:
@@ -371,6 +387,7 @@ def refresh_feeds(
                 status=outcome.status,
                 record_count=outcome.record_count,
                 error_detail=outcome.error_detail,
+                unchanged=outcome.unchanged,
             )
             for outcome in outcomes
         ],

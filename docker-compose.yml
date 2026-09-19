@@ -31,12 +31,15 @@ services:
       # NVD allows only 5 requests per rolling 30 seconds.
       # CVEDECK_NVD_ENABLED: "true"
       # CVEDECK_NVD_API_KEY: "your-key-here"
-      # Uncomment to run as a public demo: seeds a fictional fleet and
-      # refuses scans, discovery sweeps, and connection tests. Do not enable
-      # on an instance you actually scan with.
+      # Uncomment to run as a public demo: seeds a fictional fleet, and
+      # refuses scans, discovery sweeps, connection tests and the intel
+      # refresh -- the demo ships its own seeded intel and reapplying a real
+      # catalogue over it would erase the findings it deliberately leaves
+      # unchecked. Do not enable on an instance you actually scan with.
       # CVEDECK_DEMO_MODE: "true"
       # Threat-intel feeds (CISA KEV, FIRST EPSS) need no configuration to work.
-      # Refresh them daily -- see DEPLOYMENT.md "Keeping threat intel fresh".
+      # The application refreshes them itself every 24 hours, starting at
+      # startup -- see DEPLOYMENT.md "Keeping threat intel fresh".
       # Login is on. The first start logs a setup code (docker compose logs).
       # To create the account here instead, set both of these; they never
       # change an account that already exists:
