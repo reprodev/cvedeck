@@ -105,17 +105,10 @@ def _refresh_feeds() -> int:
     Exits non-zero if either feed failed, so a scheduler reports it.
     """
     from ..data.repository import Repository
-    from ..scanner.epss_client import EpssHttpClient
-    from ..scanner.kev_client import KevHttpClient
-    from ..services.enrichment import FeedRefreshService
+    from ..services.enrichment import build_feed_refresh_service
 
     with _session() as session:
-        service = FeedRefreshService(
-            Repository(session),
-            kev_source=KevHttpClient(config.kev_feed_url(), timeout=config.feed_timeout()),
-            epss_source=EpssHttpClient(config.epss_feed_url(), timeout=config.feed_timeout()),
-        )
-        outcomes = service.refresh_all()
+        outcomes = build_feed_refresh_service(Repository(session)).refresh_all()
         session.commit()
     for outcome in outcomes:
         detail = f" ({outcome.error_detail})" if outcome.error_detail else ""

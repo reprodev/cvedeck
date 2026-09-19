@@ -227,13 +227,13 @@ def test_refresh_reports_per_feed_outcomes(client, session, monkeypatch):
     from app.scanner.kev_client import KevRecord
 
     monkeypatch.setattr(
-        "app.api.actions.KevHttpClient",
+        "app.scanner.kev_client.KevHttpClient",
         lambda *a, **k: type(
             "S", (), {"fetch": lambda self: [KevRecord(cve_id="CVE-2021-44228")]}
         )(),
     )
     monkeypatch.setattr(
-        "app.api.actions.EpssHttpClient",
+        "app.scanner.epss_client.EpssHttpClient",
         lambda *a, **k: type(
             "S",
             (),
@@ -262,11 +262,11 @@ def test_refresh_reports_not_ok_when_one_feed_fails(client, session, monkeypatch
         raise RuntimeError("cisa unreachable")
 
     monkeypatch.setattr(
-        "app.api.actions.KevHttpClient",
+        "app.scanner.kev_client.KevHttpClient",
         lambda *a, **k: type("S", (), {"fetch": _boom})(),
     )
     monkeypatch.setattr(
-        "app.api.actions.EpssHttpClient",
+        "app.scanner.epss_client.EpssHttpClient",
         lambda *a, **k: type(
             "S",
             (),
@@ -295,13 +295,13 @@ def test_a_successful_refresh_is_visible_through_the_feeds_endpoint(
     from app.scanner.kev_client import KevRecord
 
     monkeypatch.setattr(
-        "app.api.actions.KevHttpClient",
+        "app.scanner.kev_client.KevHttpClient",
         lambda *a, **k: type(
             "S", (), {"fetch": lambda self: [KevRecord(cve_id="CVE-2021-44228")]}
         )(),
     )
     monkeypatch.setattr(
-        "app.api.actions.EpssHttpClient",
+        "app.scanner.epss_client.EpssHttpClient",
         lambda *a, **k: type("S", (), {"fetch": lambda self: []})(),
     )
 

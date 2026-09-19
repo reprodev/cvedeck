@@ -43,6 +43,9 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 5. IF authentication to a Target_Machine fails, THEN THE Scanner_Engine SHALL record an authentication failure status for that Target_Machine.
 6. WHEN a Scan completes for a Target_Machine, THE Scanner_Engine SHALL persist the collected Inventory to the Local_Database.
 7. IF a Target_Machine authenticates but no package inventory can be read from it — every supported package manager failing, or returning nothing that parses as a package — THEN THE Scanner_Engine SHALL record the Scan as an inventory failure carrying the reason, and SHALL NOT persist an empty Inventory, report the Scan as successful, or treat findings from the previous Scan as resolved, since a host that could not be inventoried is not a host with nothing installed.
+8. WHEN the Scanner_Engine collects a Linux Inventory, THE Scanner_Engine SHALL select the package manager by testing for each one's presence, and SHALL NOT select it from the exit status of a shell pipeline, so that a probe for an absent manager cannot report success and mask the managers after it.
+9. WHEN the Scanner_Engine collects a Linux Inventory from any supported package manager, THE Scanner_Engine SHALL collect each package's declared dependencies alongside its name and version, so that impact assessment has the same evidence on every supported distribution.
+10. IF a Target_Machine authenticates but has none of the supported package managers, THEN THE Scanner_Engine SHALL record that as the reason, distinctly from a package manager whose command failed.
 
 ### Requirement 2: CVE Matching from Public Data Sources
 
@@ -210,6 +213,18 @@ incomplete, so that I do not mistake a partial scan for a clean host.
    place a finding that has no score explicitly and identically on every
    supported database, rather than inheriting the store's default ordering for
    absent values.
+13. WHERE THE CVE_Scanner_System records a package's dependencies, it SHALL
+   record only names the package manager named as packages, excluding file
+   paths, shared-object names, capability namespaces and version constraints,
+   since those names are both shown to the reader and counted to derive an
+   impact assessment, and a name that resolves to no package inflates the
+   dependents of everything that requires it.
+14. THE CVE_Scanner_System SHALL refresh its cached threat-intel feeds on a
+   schedule of its own, without requiring an external trigger, and SHALL report
+   that schedule; since a cache nobody refreshes ages silently and renders a
+   confident "none actively exploited" from a catalogue that was never fetched,
+   leaving the freshness of the exploitation signal to an operator's own cron
+   makes the absence of that cron indistinguishable from good news.
 
 ### Requirement 11: SSH key-based authentication
 

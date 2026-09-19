@@ -1078,7 +1078,10 @@ export function MachineDrillDownView({
                         </div>
                         <div className="dep-card-meta">
                           <span className={`badge badge-${group.highestSeverity}`}>
-                            {severityLabel(group.highestSeverity)} • CVSS {group.maxScore}
+                            {severityLabel(group.highestSeverity)} •{" "}
+                            {group.maxScore === null
+                              ? "No published CVSS"
+                              : `CVSS ${group.maxScore.toFixed(1)}`}
                           </span>
                           <span style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>
                             {group.findings.length} {group.findings.length === 1 ? "CVE" : "CVEs"}
@@ -1312,7 +1315,14 @@ export function MachineDrillDownView({
                               </span>
                             </td>
                             <td data-label="Top score">
-                              <span className="cvss-score-pill">
+                              <span
+                                className="cvss-score-pill"
+                                title={
+                                  group.maxScore === null
+                                    ? "No CVSS score published for any advisory on this package"
+                                    : undefined
+                                }
+                              >
                                 {group.maxScore ?? "—"}
                               </span>
                             </td>

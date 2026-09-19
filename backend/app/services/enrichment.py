@@ -347,3 +347,24 @@ class FindingEnricher:
             stamped = stamped.replace(tzinfo=timezone.utc)
         age = datetime.now(timezone.utc) - stamped
         return age > timedelta(hours=self._max_age_hours)
+
+
+def build_feed_refresh_service(repository: Repository) -> FeedRefreshService:
+    """A refresh service wired to the configured upstream feeds.
+
+    One factory rather than three copies of the same construction. It was
+    already written out identically in ``api/actions.py`` (the HTTP route) and
+    ``auth/cli.py`` (the CLI); the periodic refresher added in 0.8.7 would have
+    been a third, and a fourth caller that forgot one source would silently
+    refresh only half the intel (Req 10.14).
+    """
+    from ..config import epss_feed_url, feed_timeout, kev_feed_url
+    from ..scanner.epss_client import EpssHttpClient
+    from ..scanner.kev_client import KevHttpClient
+
+    timeout = feed_timeout()
+    return FeedRefreshService(
+        repository,
+        kev_source=KevHttpClient(kev_feed_url(), timeout=timeout),
+        epss_source=EpssHttpClient(epss_feed_url(), timeout=timeout),
+    )

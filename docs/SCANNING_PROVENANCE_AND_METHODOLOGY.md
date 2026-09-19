@@ -312,6 +312,21 @@ As target hosts scale up to 1,000+ installed packages and hundreds of CVEs, CveD
    - This is why ecosystem-name validity matters so much (section 4.E): a single unrecognized name fails the entire batch, and the client's fallback path then queries every item individually. Results stay correct, so nothing looks broken, while the optimisation silently stops applying.
 4. **$O(N)$ Reverse-Dependency Indexing:**
    - Single-pass forward and reverse mapping minimizes computation overhead during scan ingestion.
+   - **Where the graph comes from, per package manager.** Each manager is dispatched on an explicit presence test and normalised to `name<TAB>version<TAB>depends`:
+
+     | Manager | Source | Depends field |
+     | :--- | :--- | :--- |
+     | dpkg | `dpkg-query -W` | `${Depends}` — parenthesised constraints, `\|` alternatives, `:arch` qualifiers |
+     | rpm | `rpm -qa --qf` | `[%{REQUIRENAME},]`, iterating the array |
+     | apk | `/lib/apk/db/installed` | `D:` records — space-separated, `so:`/`cmd:`/`pc:` capabilities |
+     | pacman | `/var/lib/pacman/local/*/desc` | `%DEPENDS%` section |
+
+     Only names the manager gave as packages are kept: file paths (`/usr/bin/sh`), sonames (`libc.so.6()(64bit)`), apk capabilities, rpm internals (`rpmlib()`, `config()`, `rtld()`) and version constraints are all dropped, because this list is shown to the reader *and* counted to derive the blast radius, so a name resolving to no installed package inflates the dependents of everything requiring it (Req 10.13).
+
+     An arch-qualified or versioned rpm provide — `rpm-libs(x86-64)`, `rocky-repos(9)` — **is** a real package and is kept. Dropping every token containing parentheses is the obvious way to remove the rpm noise and costs 24 genuine edges on a stock Rocky 9 host.
+
+   - **Before 0.8.7 this was correct only on dpkg.** `%{REQUIRES}` expands to the *first* element of rpm's requires array, so RPM hosts reported one dependency per package — usually a file path. The apk arm collected no dependency data at all. The pacman arm was unreachable, because it was chained after a shell *pipeline* whose `sed` exits 0 on empty input, so Arch hosts collected nothing and were refused under Req 1.7. Measured on stock containers, resolvable dependency edges went 16 → 120 on Rocky 9, 0 → 9 on Alpine 3, and 0 → 472 on Arch; Debian was unchanged at 140, which is why nothing looked wrong.
+   - The apk and pacman databases are read directly rather than through `apk info -R` / `pacman -Qi`: one read instead of a per-package loop, and `pacman -Qi`'s field labels are localised, so parsing them breaks on a host that is not in English.
 
 ### B. Master-Detail Split-Pane & DOM Pagination
 1. **Master-Detail Workspace:**

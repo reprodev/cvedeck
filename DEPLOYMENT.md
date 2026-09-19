@@ -67,6 +67,7 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_KEV_FEED_URL` | CISA KEV catalogue JSON | Source for the Known Exploited Vulnerabilities catalogue. |
 | `CVEDECK_EPSS_FEED_URL` | FIRST EPSS current scores (`.csv.gz`) | Source for the EPSS exploitation-probability score set. |
 | `CVEDECK_FEED_TIMEOUT` | `120.0` | Timeout in seconds for a whole-feed download. Separate from `CVEDECK_HTTP_TIMEOUT` because the EPSS set is a multi-megabyte file, not a per-package query. |
+| `CVEDECK_FEED_REFRESH_HOURS` | `24.0` | How often the application refreshes the intel feeds itself, starting at startup. `0` switches the built-in refresh off, for a deployment that drives it from its own scheduler. Reported at `GET /api/health`. |
 | `CVEDECK_FEED_MAX_AGE_HOURS` | `48.0` | How old a cached feed may be before the dashboard reports it stale. Both feeds publish daily, so the default tolerates one missed publication. |
 | `CVEDECK_NVD_ENABLED` | `false` | Enable OS-level CVE matching against NVD. Off by default: NVD's rate limits make an unkeyed fleet scan slow, and the package-level OSV path already covers most Linux exposure. |
 | `CVEDECK_NVD_API_KEY` | _(unset)_ | NVD API key. Raises the request limit from 5 to 50 per 30 seconds. Free from `nvd.nist.gov/developers/request-an-api-key`. Strongly recommended if `CVEDECK_NVD_ENABLED` is on. |
@@ -176,8 +177,26 @@ then joined offline. Enrichment therefore adds no network dependency to a scan.
 
 ### Refreshing
 
-There is no scheduler in the application yet, so the refresh is triggered
-externally. The API requires a login, so a script uses an API token (create one
+**The application refreshes them itself, every 24 hours, starting at startup.**
+Nothing needs setting up: a fresh container has current intel within a minute of
+booting, and keeps it current.
+
+`CVEDECK_FEED_REFRESH_HOURS` changes the interval; `0` switches the built-in
+refresh off, for a deployment that would rather drive it from a scheduler it
+already runs. `GET /api/health` reports the interval in effect, so you can tell
+"this is handled for me" from "I still need a cron" without reading the
+container's environment.
+
+This is on by default because the alternative failed quietly. Before 0.8.7 the
+refresh was external-only, and a deployment whose owner never set up the cron ran
+on a KEV catalogue that aged silently — rendering a confident "0 actively
+exploited" from a catalogue nobody had fetched. A missing cron was
+indistinguishable from good news.
+
+#### Triggering a refresh yourself
+
+Still supported, and useful for an immediate refresh or when the built-in one is
+switched off. The API requires a login, so a script uses an API token (create one
 under **Settings** in the dashboard):
 
 ```bash
@@ -209,8 +228,10 @@ systemctl start cvedeck-feeds.service         # refresh right now
 journalctl -u cvedeck-feeds.service           # why a refresh failed
 ```
 
-For Docker, add a cron entry on the host. Either run the same command inside the
-container, which needs no token:
+For Docker, the built-in refresh covers this. If you have set
+`CVEDECK_FEED_REFRESH_HOURS=0` and want to drive it yourself, add a cron entry on
+the host. Either run the same command inside the container, which needs no
+token:
 
 ```cron
 17 3 * * * docker exec --user 1000:1000 cvedeck cvedeck-admin refresh-feeds >/dev/null
@@ -487,11 +508,12 @@ very large one.
   is implemented but gated behind `CVEDECK_NVD_ENABLED` because NVD's rate
   limits (5 requests per 30 seconds without a key) make an unkeyed fleet scan
   slow. Set `CVEDECK_NVD_API_KEY` before enabling it.
-- **Threat-intel feeds are refreshed manually.** `POST /api/feeds/refresh` pulls
-  the CISA KEV catalogue and the FIRST EPSS score set into a local cache; there
-  is no scheduler yet, so run it on a cron (daily is sufficient -- both publish
-  daily). `GET /api/feeds` reports each feed's age and whether it is stale, and
-  the dashboard shows a banner when enrichment is degraded.
+- **Threat-intel feeds refresh themselves every 24 hours** (since 0.8.7), at
+  startup and on the interval, with no external trigger. Set
+  `CVEDECK_FEED_REFRESH_HOURS=0` to switch that off and drive
+  `POST /api/feeds/refresh` or `cvedeck-admin refresh-feeds` yourself.
+  `GET /api/feeds` reports each feed's age and whether it is stale, and the
+  dashboard shows a banner when enrichment is degraded.
 - **Enrichment applies at scan time, not retroactively.** Refreshing the feeds
   updates the cache; findings pick up the new signals on their next scan.
 - **An unenriched finding is reported as unknown, never as safe.** If the KEV

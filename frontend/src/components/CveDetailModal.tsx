@@ -146,7 +146,14 @@ export function CveDetailModal({
               {cveId}
             </h2>
             <span className={`badge badge-${finding.severity}`}>
-              {severityLabel(finding.severity)} • CVSS {finding.cvssScore}
+              {severityLabel(finding.severity)} •{" "}
+              {/* An advisory may publish a band and no score (Req 2.6), or
+                  neither (Req 2.7). Rendering the null directly leaves a
+                  dangling "CVSS" with no number after it, because React
+                  renders null as nothing. */}
+              {finding.cvssScore === null
+                ? "No published CVSS"
+                : `CVSS ${finding.cvssScore.toFixed(1)}`}
             </span>
             {hasFix ? (
               <span className="badge badge-status-success"><Icon name="wrench" /> Vendor Patch Available</span>

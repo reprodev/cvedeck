@@ -97,10 +97,20 @@ def source_files() -> list[Path]:
 
     The spec is included because its own cross-references are citations too,
     and one of them has been wrong before.
+
+    This file is excluded. It is a ``.py`` under ``scripts/``, so it scanned
+    itself -- and the comment above ``GROUP_RE`` contains the example tokens
+    ``"Req 2"`` and ``"Req 10"``. A dotless token is whole-requirement
+    coverage, which short-circuits the per-criterion check, so Requirements 2
+    and 10 were exempt from the "cited nowhere" half of this script for as long
+    as that comment stood. The checker cannot be its own evidence.
     """
     found: list[Path] = []
+    this_file = Path(__file__).resolve()
     for path in REPO.rglob("*"):
         if not path.is_file():
+            continue
+        if path.resolve() == this_file:
             continue
         if any(part in SKIP_DIRS for part in path.parts):
             continue
@@ -161,9 +171,13 @@ def main() -> int:
 
     uncited: list[str] = []
     for req in sorted(criteria):
-        whole = (req, None) in cited
-        if whole:
-            continue
+        # A bare "Req N" is a valid reference -- it is not dangling -- but it
+        # does NOT stand in for citing each criterion. It used to: one bare
+        # "Req 17" in any source file exempted all of Requirement 17 from this
+        # check, and seven of the eighteen requirements were exempt that way,
+        # so the invariant AGENTS.md section 0 claims was substantially weaker
+        # than it read. Every criterion turned out to be cited explicitly
+        # anyway, so requiring it costs nothing and keeps costing nothing.
         have = {c for (r, c) in cited if r == req and c is not None}
         missing = [c for c in range(1, criteria[req] + 1) if c not in have]
         if missing:

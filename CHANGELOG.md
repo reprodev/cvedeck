@@ -8,6 +8,121 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.7] - 2026-09-19
+
+The dependency graph was correct on Debian and wrong everywhere else. No schema
+change and nothing to do on upgrade; the intel feeds now refresh themselves, so
+there is one less thing to set up.
+
+### Fixed
+
+- **Package dependencies are collected correctly on rpm, apk and pacman hosts.**
+  The blast radius -- how much of a host breaks if a package is removed -- is
+  computed from each package's declared dependencies. That collection was only
+  ever right for dpkg:
+
+  - `rpm -qa --qf '%{REQUIRES}'` expands to the **first element** of rpm's
+    requires array, not the whole list, so every RPM host reported exactly one
+    dependency per package -- and usually not even a package, but a file path
+    such as `/usr/bin/sh`. It now iterates `[%{REQUIRENAME},]`.
+  - The apk arm collected name and version only, so Alpine hosts had no
+    dependency graph at all and every impact assessment on them read
+    "not assessed". It now reads `/lib/apk/db/installed`.
+  - The pacman arm was **never reached**. The four arms were chained with `||`,
+    but `|` binds tighter, so the third arm was the pipeline
+    `apk info -v | sed ...` -- and a pipeline's exit status is its last
+    command's. On a host without `apk`, `sed` read empty stdin and exited 0, the
+    pipeline "succeeded", and `pacman` was never tried. Arch hosts collected an
+    empty inventory and were refused under Req 1.7. Each manager is now
+    dispatched on an explicit presence test.
+
+  Measured on stock containers, resolvable dependency edges:
+
+  | Host | Packages seen | Dependency edges |
+  | :--- | :--- | :--- |
+  | Debian 12 (dpkg) | 88 → 88 | 140 → 140 (unchanged) |
+  | Rocky 9 (rpm) | 141 → 141 | **16 → 120** |
+  | Alpine 3 (apk) | 16 → 16 | **0 → 9** |
+  | Arch (pacman) | **0 → 137** | 0 → 472 |
+
+  Rocky was deriving a blast radius from 16 of its 120 edges. Debian being
+  unchanged is why none of this looked wrong: the only fixture with a dependency
+  column was Debian's.
+
+- **A dependency list no longer contains things that are not packages.** The
+  filter for rpm's `rpmlib(...)` and `config(...)` internals was computed after
+  the name had already been split on `(`, so it could never match and every RPM
+  host carried dependencies named `rpmlib` and `config`. Applied to apk, the same
+  line would have turned `so:libc.musl-x86_64.so.1` into a package named `so`
+  that nearly everything depends on. File paths, sonames, apk `so:`/`cmd:`/`pc:`
+  capabilities, rpm internals and version constraints are now all dropped -- and
+  `glibc >= 2.38`, which rpm writes space-separated, loses its constraint instead
+  of keeping it and matching no installed package. An arch-qualified provide like
+  `rpm-libs(x86-64)` **is** a real package and is kept.
+
+- **A host with no supported package manager says so**, distinctly from a
+  package manager whose command failed, rather than both arriving as an
+  unexplained empty inventory.
+
+- **An unscored finding no longer shows a dangling "CVSS" label.** 0.8.6 made the
+  score nullable but two renders were left unguarded -- the CVE detail modal's
+  header badge and the drill-down's package-group card -- so an unscored finding
+  displayed "Unscored • CVSS" with no number after it. Both now read
+  "No published CVSS", matching the scan-history panel.
+
+### Added
+
+- **The threat-intel feeds refresh themselves, every 24 hours**, at startup and
+  then on the interval. Until now the only refresh was an operator's own cron, so
+  a deployment whose owner never set one up ran on a KEV catalogue that aged
+  silently -- and unlike a failed scan, nothing about that looks wrong: the
+  dashboard renders a confident "0 actively exploited" from a catalogue nobody
+  fetched. `CVEDECK_FEED_REFRESH_HOURS` changes the interval, `0` switches it off
+  for a deployment that drives it externally, and `GET /api/health` reports the
+  interval in effect. The refresh runs in a worker thread, so a multi-megabyte
+  EPSS download does not block the application, and a failed cycle keeps the
+  previous cache and tries again next time.
+
+- **A parity test between the backend and frontend severity lists.**
+  `SEVERITY_RANK` called itself the single definition of the order and named the
+  frontend as its mirror, but nothing failed if the two drifted: reorder one side
+  and the dashboard ranks findings differently from the API that served them.
+
+- **Tests for `app/api/wiring.py`**, which had none. Every suite that touches a
+  scan overrides the scanner engine specifically to avoid it, leaving the
+  host-key race tie-break, the machine upsert on rename or re-platform, and the
+  scan-status write covered only by hand.
+
+### Changed
+
+- **`scripts/check_spec_citations.py` no longer exempts whole requirements.** It
+  scanned itself, and its own comment contains the example tokens `"Req 2"` and
+  `"Req 10"`; a dotless citation counted as whole-requirement coverage, which
+  short-circuited the per-criterion check. Seven of the eighteen requirements
+  were exempt that way, so the invariant AGENTS.md claims was weaker than it
+  read. Every criterion turned out to be cited explicitly anyway, so requiring it
+  costs nothing.
+
+- **Why the NVD path still drops a CVE it cannot score**, where OSV reports one
+  as unscored, is now written down at the drop site. NVD matching is CPE-based
+  and capped, and unscored findings deliberately sort first so truncation cannot
+  drop them -- so keeping them would let unscored entries crowd out measured
+  ones. Sizing that safely needs real NVD data; the behaviour is unchanged and
+  the reasoning is no longer folklore.
+
+### Upgrading
+
+Nothing to do. No migration, and no configuration change is required: the feed
+refresh is on by default. If you already run a cron for
+`POST /api/feeds/refresh` or `cvedeck-admin refresh-feeds`, it remains supported
+and harmless -- or set `CVEDECK_FEED_REFRESH_HOURS=0` to leave the schedule
+entirely to your own scheduler.
+
+Blast-radius figures will change on rpm, apk and pacman hosts at their next
+scan, because the graph behind them was incomplete. They are expected to go up.
+
+---
+
 ## [0.8.6] - 2026-09-18
 
 A score CveDeck does not have is now absent rather than invented. This finishes

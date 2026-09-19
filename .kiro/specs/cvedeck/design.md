@@ -493,6 +493,15 @@ A dual approach is used. Property-based tests (minimum 100 iterations each, tagg
 This is the enrichment invariant applied to the field the entire triage ranking is built on. Before 0.8.6 an advisory with no severity data was given a CVSS_Score of 5.0, and a qualitative "HIGH" was given 8.0 — figures no feed published, indistinguishable afterwards from measured ones.
 
 **Validates: Requirements 2.6, 2.7**
+
+### Property 16: A dependency list names only packages the manager named
+
+*For any* dependency field a supported package manager emits, the parsed result SHALL be exactly the set of package names that field named, and SHALL contain no file path, shared-object name, capability namespace, rpm internal, architecture qualifier or version constraint. Nothing is added that the field did not name, and no name the field did name as a package is dropped.
+
+This is the impact-assessment counterpart of Property 15. Before 0.8.7 the parser was correct only for dpkg: rpm hosts carried dependencies named `rpmlib`, `config` and `/usr/bin/sh`, and kept space-separated constraints such as `glibc >= 2.38` that could never match an installed package; Alpine hosts would have carried three fictional packages named `so`, `cmd` and `pc` that nearly everything depends on. Since `_blast_radius` counts how many installed packages depend on a package, a name that resolves to nothing under-counts, and a name everything requires over-counts.
+
+**Validates: Requirements 1.9, 10.13**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).

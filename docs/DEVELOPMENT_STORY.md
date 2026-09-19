@@ -1593,3 +1593,132 @@ believed.
 
 The comment above it said "safe default". Nothing that a person will act on
 without being able to tell it from a measurement is a safe default.
+
+---
+
+## Chapter 17 — Correct on one distro (v0.8.7)
+
+The blast radius is the feature CveDeck is arguably built around: before you
+remove a package to close a CVE, it tells you how much of the host depends on it.
+It is not a stub. It has a dedicated test file, a shared vocabulary module, a
+careful three-valued "not assessed" state, and five separate commits hardening
+it — `stop scoring an unmeasured blast radius as low`, `an uncomputed blast
+radius is not a low one`, `one impact vocabulary, and numbering that cannot
+skip`. Every one of those was a real fix.
+
+All five were fixes to how the *answer was presented*. Nobody had checked the
+input.
+
+### Three bugs, one fixture
+
+The dependency data comes from one shell command with four arms, one per package
+manager. Running it in a container took about a minute each and produced this:
+
+- **rpm.** The arm asked for `%{REQUIRES}`. In rpm's format language a bare array
+  tag expands to its **first element**, not the list; you need `[%{REQUIRENAME},]`
+  to iterate. So every RPM host reported exactly one dependency per package. For
+  `bash` that one dependency was `/usr/bin/sh` — a file path, not a package. On a
+  stock Rocky 9 container the graph had 16 resolvable edges where there are 120.
+  The blast radius was computed, displayed, and 87% absent.
+
+- **apk.** The arm ran `apk info -v`, which prints name and version. No
+  dependency column exists, so Alpine hosts always reported "not assessed" — the
+  honest fallback doing its job, concealing that the input had never been
+  collected.
+
+- **pacman.** This one never ran at all. The four arms were chained with `||`,
+  but `|` binds tighter than `||`, so the third arm was the *pipeline*
+  `apk info -v | sed ...`, and a pipeline's exit status is its last command's.
+  On a host without `apk`, `sed` read empty stdin and exited **0**. The pipeline
+  "succeeded". `pacman` was unreachable. Arch hosts collected an empty inventory
+  and were refused as un-inventoriable — correctly, for entirely the wrong
+  reason.
+
+The obvious fix for the third — wrap the pipeline in braces — does not work, and
+took thirty seconds to disprove in a shell: `sed` still exits 0. Only not
+depending on a pipeline's exit status does.
+
+And a fourth, in the parser rather than the command. The filter meant to drop
+rpm's internal `rpmlib(...)` and `config(...)` requirements read:
+
+```python
+pkg_name = item.split("(")[0].strip().split(":")[0].strip()
+if pkg_name and not pkg_name.startswith("rpmlib("):
+```
+
+The name has already had everything from `(` onwards removed, so it can never
+start with `rpmlib(`. The filter had been dead code since it was written. Every
+RPM host carried fictional dependencies named `rpmlib` and `config`; applied to
+apk's `so:libc.musl-x86_64.so.1`, the same line would have produced a package
+called `so` that almost everything depends on — inflating, rather than
+deflating, every blast radius on the host.
+
+Why did none of this surface? There is one fixture per distro in the collector
+tests, and the RPM one is three lines with **no dependency column at all**. The
+tests covered Debian's dependency parsing thoroughly and asserted nothing about
+anyone else's. A feature can be live, tested, iterated on across five commits,
+and wrong everywhere except the distro the fixtures happened to cover.
+
+### The fix that lost 24 edges
+
+Filtering rpm's noise looks like it has an obvious rule: drop anything with
+parentheses. `rpmlib(FileDigests)`, `config(bash)`, `libc.so.6()(64bit)`,
+`rtld(GNU_HASH)` — all noise, all parenthesised.
+
+Measuring it against the real container output showed the edge count *dropping*,
+from 120 to 96. rpm writes an architecture-qualified package dependency the same
+way: `rpm-libs(x86-64)`. And a versioned virtual provide: `rocky-repos(9)`. Both
+are real installed packages. The tidy rule quietly deleted 24 genuine
+dependencies to remove noise that was never counted in the first place — the
+`rpmlib` entries resolve to no installed package, so they only ever polluted the
+displayed list.
+
+The correct rule is the inverse: drop by capability namespace and soname, keep
+the base name otherwise. It is less elegant and it is right, and the only reason
+the elegant version was caught is that the before/after numbers were measured on
+real data rather than assumed.
+
+### The checker that exempted itself
+
+While adding the spec criteria for all this, the citation checker — which
+enforces that every acceptance criterion is cited somewhere in the code —
+flagged a forward reference. Investigating why it had never complained about
+anything else turned up something better.
+
+The script scans every `.py` in the repository, including itself. The comment
+above its citation regex reads:
+
+```python
+# A whole citation group: "Req 4.1, 4.3, 5.1", "Req 5.2-5.4", "Req 2", "Req 10".
+```
+
+A dotless `Req N` is parsed as whole-requirement coverage, which short-circuits
+the per-criterion check. Its own documentation therefore exempted Requirements 2
+and 10 from the half of the check that matters, and a bare `Req 7)` in a
+docstring exempted a third. Counting the rest: seven of eighteen requirements
+were exempt.
+
+The measurement first, before the fix: were criteria hiding behind those
+wildcards? All 137 were explicitly cited anyway. The hole had masked nothing, so
+closing it cost nothing — which is the only reason it got closed in a patch
+release rather than becoming its own project.
+
+Then, having added a criterion for the periodic feed refresh and cited it as
+`Req 13.5`, the checker passed it happily. Requirement 13 is *fleet-scale
+operation*; 13.5 is about naming active filters on an empty list. The citation
+was structurally valid and semantically nonsense, and no tool will ever catch
+that. It moved to a new criterion under "Trustworthy scan reporting", where a
+silently ageing exploitation catalogue belongs.
+
+### Closing thought
+
+The previous six chapters were about output: a number presented as measured, an
+absence presented as an answer, a default presented as a finding. This one is
+about input, and it is the more uncomfortable failure, because every visible
+surface was already correct. The "not assessed" fallback worked. The three-valued
+state worked. The vocabulary was consistent. The tests passed.
+
+A careful presentation layer over data nobody verified produces something worse
+than an obvious bug: a confident, well-designed, internally consistent report of
+a graph that was 87% missing. The fix was not cleverness, it was running
+`docker run --rm rockylinux:9 rpm -qa --qf ...` and reading what came back.

@@ -190,6 +190,25 @@ def parse_nvd_response(payload: Any) -> list[RawCve]:
     HTTP. CVEs that are rejected upstream, or that carry no usable CVSS score,
     are dropped: a finding with an invented severity is worse than no finding,
     because it competes for attention with measured ones.
+
+    This deliberately differs from the OSV path, which since 0.8.6 keeps an
+    advisory it cannot score and reports it as ``Severity.UNSCORED`` (Req 2.7).
+    The asymmetry is not an oversight, and it is not settled either:
+
+    - OSV advisories arrive already matched to an installed package, so an
+      unscored one is a real finding about real software.
+    - NVD matching is CPE-based and returns everything associated with an
+      operating-system CPE, capped at ``_MAX_FINDINGS``. Keeping unscored CVEs
+      would let a CPE that returns many of them crowd out measured findings --
+      and the sort above deliberately places unscored FIRST so truncation cannot
+      drop them, which makes that crowding worse rather than better.
+
+    Sizing that safely needs real NVD response data across several CPEs, which
+    is why 0.8.7 documented the difference instead of changing the behaviour:
+    trading a known conservative rule for an unmeasured one, in a release about
+    not presenting guesses as measurements, would have been the wrong move. NVD
+    matching is also off by default (``CVEDECK_NVD_ENABLED``), so this affects
+    deployments that opted in.
     """
     if not isinstance(payload, dict):
         return []

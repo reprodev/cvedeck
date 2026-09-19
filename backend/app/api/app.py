@@ -34,7 +34,7 @@ from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.8.6"
+_VERSION = "0.8.7"
 
 
 def create_app(*, wire_production: bool = False) -> FastAPI:
@@ -100,6 +100,11 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
             # someone fill in a scan form that always 403s.
             "demo_mode": config.demo_mode(),
             "login_required": login_required(),
+            # Hours between automatic intel refreshes, or 0 when the deployment
+            # drives it externally. Reported so an operator can tell "the feeds
+            # are kept fresh for me" from "I still need a cron" without reading
+            # the container's environment (Req 10.14).
+            "feed_refresh_hours": config.feed_refresh_hours(),
         }
         if not login_required() or resolve_principal(request) is not None:
             capabilities["server_ssh_key"] = config.default_ssh_key_path() is not None
@@ -142,9 +147,23 @@ async def _open_database_at_startup(_: FastAPI):
 
     Migrations run and the first-run setup code is printed as soon as the
     container starts, rather than when someone first loads the page.
+
+    The periodic feed refresher starts here too, and is stopped on the way out
+    (Req 10.14). It lives on this hook rather than its own because this hook is
+    already the one that only runs for a wired production app -- a test app has
+    no lifespan, so no test grows a background task it did not ask for.
     """
-    get_engine()
-    yield
+    from ..services.feed_scheduler import (
+        start_periodic_refresh,
+        stop_periodic_refresh,
+    )
+
+    engine = get_engine()
+    refresher = start_periodic_refresh(engine, config.feed_refresh_hours())
+    try:
+        yield
+    finally:
+        await stop_periodic_refresh(refresher)
 
 
 def _configure_logging() -> None:

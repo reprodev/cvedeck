@@ -92,11 +92,54 @@ _LINUX_CONTEXT_CMD = (
     "if [ $? -eq 0 ]; then echo no; else echo yes; fi; "
     "else echo unknown; fi"
 )
+# One arm per package manager, each emitting `name<TAB>version<TAB>depends`.
+#
+# Dispatched on `command -v` rather than chained with `||`, because `|` binds
+# tighter than `||`: the previous version's third arm was the *pipeline*
+# `apk info -v | sed ...`, and a pipeline's status is its last command's. On a
+# host without `apk`, `sed` read empty stdin and exited 0, so the pipeline
+# "succeeded" and the `pacman` arm was never reached -- every Arch host
+# collected an empty inventory and was refused under Req 1.7. Wrapping the
+# pipeline in braces does not fix it; only not depending on its exit status
+# does (Req 1.1, 1.8).
+#
+# Every arm carries the package's declared dependencies as a third field, so
+# impact assessment has the same evidence on every supported distribution
+# (Req 1.9).
+#
+# The rpm arm iterates `[%{REQUIRENAME},]`. A bare `%{REQUIRES}` expands to the
+# FIRST element of the array only, so every RPM host reported exactly one
+# dependency per package -- usually a file path such as `/usr/bin/sh` rather
+# than a package at all (Req 10.13).
+#
+# apk and pacman are read from their local databases rather than from
+# `apk info -R` / `pacman -Qi`: one read instead of a per-package loop, and
+# `pacman -Qi`'s field labels are localised, so parsing them would break on a
+# host that is not in English.
+#
+# The final sentinel distinguishes "no supported package manager" from "the
+# command failed", so neither is inferred from an empty inventory.
+_NO_PKG_MANAGER = "CVEDECK_NO_PKG_MANAGER"
 _LINUX_PACKAGES_CMD = (
-    "dpkg-query -W -f='${Package}\\t${Version}\\t${Depends}\\n' 2>/dev/null "
-    "|| rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{REQUIRES}\\n' 2>/dev/null "
-    "|| apk info -v 2>/dev/null | sed -E 's/^(.*)-([0-9].*)-r([0-9]+)$/\\1\\t\\2-r\\3/' 2>/dev/null "
-    "|| pacman -Q 2>/dev/null | tr ' ' '\\t'"
+    "if command -v dpkg-query >/dev/null 2>&1; then "
+    "dpkg-query -W -f='${Package}\\t${Version}\\t${Depends}\\n'; "
+    "elif command -v rpm >/dev/null 2>&1; then "
+    "rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t[%{REQUIRENAME},]\\n'; "
+    "elif [ -f /lib/apk/db/installed ]; then "
+    "awk '/^P:/{p=substr($0,3)} /^V:/{v=substr($0,3)} "
+    '/^D:/{d=substr($0,3); gsub(/ +/,",",d)} '
+    '/^$/{if(p!="")print p"\\t"v"\\t"d; p="";v="";d=""} '
+    'END{if(p!="")print p"\\t"v"\\t"d}\' /lib/apk/db/installed; '
+    "elif [ -d /var/lib/pacman/local ]; then "
+    # NR!=1 rather than NR>1: equivalent here, and it keeps a '>' out of the
+    # command so the read-only guard in the test suite does not have to tell a
+    # comparison apart from a redirect.
+    "awk 'FNR==1&&NR!=1{if(n!=\"\")print n\"\\t\"v\"\\t\"d; n=\"\";v=\"\";d=\"\";s=\"\"} "
+    '/^%NAME%$/{s="n";next} /^%VERSION%$/{s="v";next} /^%DEPENDS%$/{s="d";next} '
+    '/^%/{s="";next} /^$/{next} '
+    's=="n"{n=$0} s=="v"{v=$0} s=="d"{d=d (d==""?"":",") $0} '
+    'END{if(n!="")print n"\\t"v"\\t"d}\' /var/lib/pacman/local/*/desc; '
+    f"else echo {_NO_PKG_MANAGER}; fi"
 )
 
 
@@ -250,11 +293,23 @@ class LinuxCollector:
 
         os_release, kernel_version, reboot_required = _split_context(context_output)
         os_info, eco = _parse_os_release(os_release)
+        if _NO_PKG_MANAGER in packages.stdout:
+            # The host answered, and said it has none of the four package
+            # managers CveDeck can read. That is a different fact from a
+            # command that failed, and saying so beats reporting an empty
+            # inventory or a generic failure (Req 1.7, 1.10).
+            raise InventoryUnavailableError(
+                target.hostname,
+                detail=(
+                    "no supported package manager found: CveDeck reads dpkg, "
+                    "rpm, apk and pacman"
+                ),
+            )
         parsed = _parse_linux_packages(packages.stdout, default_ecosystem=eco)
         if not parsed:
-            # Every arm of the package command failed, or none of its output
-            # parsed. Reporting that as an empty inventory would delete this
-            # host's findings and call them resolved (Req 1.7).
+            # The package command failed, or none of its output parsed.
+            # Reporting that as an empty inventory would delete this host's
+            # findings and call them resolved (Req 1.7).
             raise InventoryUnavailableError(
                 target.hostname, detail=packages.failure_detail()
             )
@@ -453,26 +508,96 @@ def _parse_os_release(output: str) -> tuple[OsInfo, str]:
     return OsInfo(name=name, version=version), eco
 
 
+#: Namespaced requirements that name a capability, not a package. apk writes
+#: these for shared objects, commands and pkg-config files.
+_DEP_NAMESPACES = ("so:", "cmd:", "pc:")
+
+#: rpm capability namespaces, written as ``namespace(detail)``. rpm emits these
+#: for every package, so filtering them is what keeps a displayed dependency
+#: list readable. They resolve to no installed package either way, so they
+#: never produced a false blast-radius edge -- only noise in the UI.
+#:
+#: Deliberately NOT "drop anything containing parentheses": rpm writes an
+#: architecture-qualified package dependency the same way, as
+#: ``rpm-libs(x86-64)``, and a versioned virtual provide as ``rocky-repos(9)``.
+#: Both are real installed packages, and dropping them cost 24 genuine edges on
+#: a stock Rocky 9 host when this was tried the other way round.
+_RPM_CAPABILITY_NAMESPACES = ("rpmlib", "config", "rtld", "pkgconfig")
+
+#: Characters that begin a version constraint written without a space, as apk
+#: (``musl>=1.2.3``) and pacman (``linux-api-headers>=4.10``) do.
+_DEP_CONSTRAINT_CHARS = "<>=!"
+
+
 def _parse_dependencies(depends_str: str) -> list[str]:
-    """Extract clean package dependency names from dpkg/rpm dependency strings."""
+    """Extract package dependency names from a package manager's depends field.
+
+    Handles all four supported managers, which the collection command has
+    already normalised to a comma-separated list:
+
+    - dpkg: ``libc6 (>= 2.38), gpgv | gpgv2, zlib1g:amd64``
+    - rpm:  ``/usr/bin/sh,config(bash),filesystem,libc.so.6()(64bit),rpmlib(...)``
+    - apk:  ``musl>=1.2.3,libapk=3.0.8-r0,so:libz.so.1,/bin/sh``
+    - pacman: ``readline,libreadline.so=8-64,linux-api-headers>=4.10``
+
+    Only names a package manager could actually resolve to an installed package
+    are kept, because this list is both shown to the reader and counted to
+    derive a blast radius (Req 10.13). A file path, a soname, an rpm internal
+    or an apk capability is not a package, and counting one inflates the
+    dependents of everything that requires it.
+
+    The filters run on the RAW token, before any splitting. The predecessor
+    computed ``item.split("(")[0].split(":")[0]`` first and only then tested
+    ``startswith("rpmlib(")``, so that test could never fire: ``rpmlib(X)`` had
+    already become ``rpmlib``. Every RPM host carried fictional packages named
+    ``rpmlib`` and ``config``; applied to apk, the same line turned
+    ``so:libc.musl-x86_64.so.1`` into ``so``.
+    """
     if not depends_str or depends_str.strip() == "(none)":
         return []
     deps: list[str] = []
-    for item in depends_str.split(","):
-        item = item.strip()
+    for raw in depends_str.split(","):
+        item = raw.strip()
         if not item:
             continue
-        # Take the first alternative if piped (e.g. 'pkgA | pkgB' -> 'pkgA')
+        # First alternative of a dpkg choice: 'pkgA | pkgB' -> 'pkgA'.
         item = item.split("|")[0].strip()
-        # Strip version constraints (e.g. 'libc6 (>= 2.38)' -> 'libc6')
-        pkg_name = item.split("(")[0].strip().split(":")[0].strip()
-        if (
-            pkg_name
-            and not pkg_name.startswith("rpmlib(")
-            and not pkg_name.startswith("config(")
-            and pkg_name not in deps
-        ):
-            deps.append(pkg_name)
+        if not item:
+            continue
+
+        # --- filters on the raw token, before any splitting ---
+        # An rpm file requirement, or an apk path dependency.
+        if item.startswith("/"):
+            continue
+        # An apk capability: so:, cmd:, pc:.
+        if item.startswith(_DEP_NAMESPACES):
+            continue
+        # An rpm rich dependency: '(a if b)'.
+        if item.startswith("("):
+            continue
+
+        # A space-separated constraint: rpm 'glibc >= 2.38', dpkg
+        # 'libc6 (>= 2.38)'. Everything after the name is the constraint.
+        name = item.split()[0]
+        # The base name, before any rpm qualifier or capability detail:
+        # 'rpm-libs(x86-64)' -> 'rpm-libs', 'rpmlib(FileDigests)' -> 'rpmlib'.
+        base = name.split("(")[0]
+        if base in _RPM_CAPABILITY_NAMESPACES:
+            continue
+        name = base
+        # A constraint written without a space: musl>=1.2.3, libapk=3.0.8-r0.
+        for index, char in enumerate(name):
+            if char in _DEP_CONSTRAINT_CHARS:
+                name = name[:index]
+                break
+        # A dpkg architecture qualifier: zlib1g:amd64.
+        name = name.split(":")[0].strip()
+        # A pacman or dpkg soname dependency: libreadline.so, libc.so.6.
+        if ".so" in name:
+            continue
+
+        if name and name not in deps:
+            deps.append(name)
     return deps
 
 

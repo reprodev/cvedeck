@@ -225,6 +225,35 @@ def feed_max_age_hours() -> float:
         ) from exc
 
 
+def feed_refresh_hours() -> float:
+    """How often the running application refreshes the intel feeds itself.
+
+    Defaults to 24 hours, matching how often both upstreams publish, and is on
+    by default (Req 10.14). Off-by-default was the wrong trade: until 0.8.7 the
+    only refresh was an operator's own cron, and a deployment whose owner never
+    set one up ran on a KEV catalogue that aged silently -- every day of which
+    under-reports exploitation, the one signal the whole ranking is built on.
+    A stale cache is visible at ``GET /api/feeds``, but only to someone looking.
+
+    ``0`` disables it, for a deployment that prefers to drive
+    ``cvedeck-admin refresh-feeds`` from a scheduler it already runs.
+    """
+    raw = os.environ.get("CVEDECK_FEED_REFRESH_HOURS")
+    if raw is None or not raw.strip():
+        return 24.0
+    try:
+        hours = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"CVEDECK_FEED_REFRESH_HOURS must be a float, got {raw!r}"
+        ) from exc
+    if hours < 0:
+        raise ValueError(
+            f"CVEDECK_FEED_REFRESH_HOURS must not be negative, got {hours}"
+        )
+    return hours
+
+
 def feed_timeout() -> float:
     """HTTP timeout in seconds for a whole-feed download.
 

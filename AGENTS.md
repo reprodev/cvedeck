@@ -131,6 +131,24 @@ environment the app reads, so no alembic.ini edit is needed.
   substituted 5.0 was. Anything that orders findings ranks by severity first and
   states its null ordering explicitly -- SQLite and PostgreSQL disagree about
   where NULLs land in a DESC sort (Req 10.12).
+  The severity list is mirrored by hand across app/enums.py, frontend types.ts
+  and frontend lib/severity.ts; backend/tests/test_severity_parity.py fails if
+  they drift. Add a band in one place and that test tells you the other two.
+  **The NVD path deliberately differs**: it DROPS a CVE it cannot score rather
+  than reporting it UNSCORED, because CPE matching returns everything for an OS
+  CPE under a 250-finding cap and unscored entries sort first. Read the
+  docstring on parse_nvd_response before "fixing" the inconsistency.
+- A dependency list contains only names the package manager named as packages
+  (_parse_dependencies in app/scanner/collectors.py; Req 10.13, Property 16). No
+  file path, soname, apk so:/cmd:/pc: capability, rpm rpmlib()/config()/rtld()
+  internal or version constraint. The filters run on the RAW token, BEFORE the
+  "(" and ":" splits -- reversing that order is what made the rpmlib filter
+  dead code for five releases, and applied to apk it turns
+  so:libc.musl-x86_64.so.1 into a package named "so" that everything depends on.
+  An arch-qualified or versioned rpm provide -- rpm-libs(x86-64),
+  rocky-repos(9) -- IS a real package: do not drop every token with parentheses.
+  Fixtures live in backend/tests/test_dependency_parsing.py and are real
+  container output. Add a distro by capturing its output, not by writing it.
 - Per-target fault isolation & timeout architecture (ScannerEngine): a ConnectionError /
   socket timeout / unhandled runtime exception -> CONNECTION_FAILURE, an AuthError ->
   AUTH_FAILURE, and a refused SSH host key -> HOST_KEY_MISMATCH / HOST_KEY_UNKNOWN for

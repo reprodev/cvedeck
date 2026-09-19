@@ -13,7 +13,7 @@ visualization: ``CveFinding`` carries a ``package_identifier`` (Req 7.1) and a
 ``dependency_path_id`` FK into ``DependencyPath`` (Req 5.5, 7.2), and
 ``DependencyPath`` has a ``parent_path_id`` self-reference so dependency chains can
 be modeled. These are stored now and remain inert until the visualization consumes
-them; no restructuring is required to add that feature (Req 7).
+them; no restructuring is required to add that feature (Req 7.1, 7.2, 7.3).
 
 Enum columns use SQLAlchemy's ``Enum`` type backed by the shared string enums in
 ``app.enums`` so values persist identically in both databases and match the JSON

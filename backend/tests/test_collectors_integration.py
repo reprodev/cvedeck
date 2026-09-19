@@ -35,6 +35,7 @@ from app.enums import Platform
 from app.models import Credentials, TargetMachine
 from app.scanner import collectors
 from app.scanner.collectors import LinuxCollector, WindowsCollector
+from app.scanner.exceptions import InventoryUnavailableError
 
 
 # ---------------------------------------------------------------------------
@@ -155,14 +156,23 @@ _FORBIDDEN_WINDOWS = (
 # `2>/dev/null` stderr discard the collectors legitimately use.
 _WRITE_REDIRECT = re.compile(r"(?<!2)>>?\s*[^&\s]")
 
+# A discard to /dev/null, either the `2>` stderr form or the plain `>` that a
+# `command -v` probe uses. Anchored with \b so a redirect to a path that merely
+# starts with /dev/null -- `>/dev/nullx` -- is NOT excused and still trips the
+# guard above.
+_DEV_NULL_DISCARD = re.compile(r"\d?>>?\s*/dev/null\b")
+
 
 def assert_no_write_redirect(command: str) -> None:
     """Fail if a command contains a filesystem-write redirect.
 
-    ``2>/dev/null`` (discarding stderr) is allowed because it does not write to
-    the target; any other ``>``/``>>`` is treated as a write.
+    Discards to ``/dev/null`` are allowed -- both the ``2>/dev/null`` stderr
+    form and the plain ``>/dev/null`` that ``command -v`` probes use -- because
+    neither writes anything to the target. Every other ``>``/``>>`` is treated
+    as a write, including a redirect to any other path, so only the exact
+    ``/dev/null`` literals are excused.
     """
-    sanitized = command.replace("2>/dev/null", "")
+    sanitized = _DEV_NULL_DISCARD.sub("", command)
     assert not _WRITE_REDIRECT.search(sanitized), (
         f"command contains a write redirect: {command!r}"
     )
@@ -195,12 +205,20 @@ _RHEL_OS_RELEASE = (
     b'ID="rhel"\n'
     b'PRETTY_NAME="Red Hat Enterprise Linux 9.3 (Plow)"\n'
 )
-# On an RPM host the dpkg part fails (`|| rpm ...`), so the transport returns
-# the rpm output for the same combined command string.
+# On an RPM host the `command -v rpm` arm is taken, so the transport returns the
+# rpm output for the same dispatching command string.
+#
+# The dependency column is real output from a `rockylinux:9` container. It was
+# absent from this fixture until 0.8.7, which is why four faults in rpm
+# dependency parsing went unnoticed across five releases: nothing here had any
+# dependencies to get wrong.
 _RHEL_RPM = (
-    b"openssl\t3.0.7\n"
-    b"glibc\t2.34\n"
-    b"kernel\t5.14.0\n"
+    b"openssl\t3.0.7\tbash,coreutils,libcrypto.so.3()(64bit),"
+    b"rpmlib(FileDigests),rtld(GNU_HASH),\n"
+    b"glibc\t2.34\tbasesystem,glibc-common,libgcc(x86-64),"
+    b"libc.so.6()(64bit),rpmlib(RichDependencies),\n"
+    b"kernel\t5.14.0\t/usr/bin/sh,dracut >= 049-207,"
+    b"rpmlib(CompressedFileNames),\n"
 )
 
 
@@ -278,6 +296,18 @@ def test_linux_ssh_collection_rhel_full_normalization():
     ]
     # Every package carries the collector's detected ecosystem tag.
     assert all(p.ecosystem == "Red Hat:9" for p in inv.packages)
+
+    # Dependencies: only names rpm gave as packages. The file path, the
+    # sonames, the rpm internals and the space-separated constraint are all
+    # gone, and an arch-qualified provide keeps its package name (Req 10.13).
+    by_name = {p.name: p for p in inv.packages}
+    assert by_name["openssl"].dependencies == ["bash", "coreutils"]
+    assert by_name["glibc"].dependencies == [
+        "basesystem",
+        "glibc-common",
+        "libgcc",
+    ]
+    assert by_name["kernel"].dependencies == ["dracut"]
 
 
 def test_linux_ssh_issued_commands_are_read_only():
@@ -458,3 +488,107 @@ def test_collection_issues_only_read_only_commands(platform):
         assert forbidden not in joined, (
             f"{platform.value} collector issued a mutating command: {forbidden!r}"
         )
+
+
+# --- The package command's dispatch (Req 1.1) --------------------------------
+
+_ARCH_OS_RELEASE = (
+    b'NAME="Arch Linux"\n'
+    b'PRETTY_NAME="Arch Linux"\n'
+    b'ID=arch\n'
+)
+# Real output of the pacman arm, from an `archlinux:base` container.
+_ARCH_PACMAN = (
+    b"bash\t5.3.15-1\treadline,libreadline.so=8-64,glibc,ncurses\n"
+    b"glibc\t2.44+r24+g16be1518495f-1\tlinux-api-headers>=4.10,tzdata,filesystem\n"
+    b"ncurses\t6.6-2\tglibc,libgcc,libstdc++\n"
+)
+# Real output of the apk arm, from an `alpine:3` container.
+_ALPINE_OS_RELEASE = b'NAME="Alpine Linux"\nID=alpine\nVERSION_ID=3.22.2\n'
+_ALPINE_APK = (
+    b"apk-tools\t3.0.8-r0\tmusl>=1.2.3_git20230424,libcrypto3>=3.5,"
+    b"libapk=3.0.8-r0,ca-certificates-bundle,so:libapk.so.3.0.0\n"
+    b"busybox\t1.37.0-r31\tso:libc.musl-x86_64.so.1\n"
+)
+
+
+def test_package_command_does_not_chain_on_a_pipeline_exit_status():
+    """The Arch regression, asserted on the command itself (Req 1.1).
+
+    The command used to be four arms chained with ``||``. Because ``|`` binds
+    tighter than ``||``, the third arm was the pipeline
+    ``apk info -v | sed ...``, whose exit status is ``sed``'s -- and ``sed``
+    exits 0 on empty input. So on any host without ``apk`` the pipeline
+    "succeeded", the ``pacman`` arm was never reached, and every Arch host
+    collected an empty inventory and was refused under Req 1.7.
+
+    Wrapping the pipeline in braces does not fix it; only not depending on a
+    pipeline's exit status does.
+    """
+    cmd = collectors._LINUX_PACKAGES_CMD
+
+    assert "||" not in cmd, (
+        "arms must not be chained on exit status; a pipeline's status is its "
+        "last command's"
+    )
+    # Every manager is dispatched on an explicit existence check.
+    assert cmd.count("command -v") == 2  # dpkg-query, rpm
+    assert "[ -f /lib/apk/db/installed ]" in cmd
+    assert "[ -d /var/lib/pacman/local ]" in cmd
+    # And a host with none of them says so, rather than returning nothing.
+    assert collectors._NO_PKG_MANAGER in cmd
+
+
+def test_linux_ssh_collection_arch_with_dependencies():
+    """An Arch host collects an inventory at all, with its dependencies."""
+    fake = _linux_client(_ARCH_OS_RELEASE, _ARCH_PACMAN)
+    collector = LinuxCollector(ssh_client_factory=lambda: fake)
+    target = TargetMachine(id="lin-arch", hostname="arch.example", platform=Platform.LINUX)
+
+    inv = collector.collect(target, CREDS)
+
+    assert [p.name for p in inv.packages] == ["bash", "glibc", "ncurses"]
+    by_name = {p.name: p for p in inv.packages}
+    # The soname dependency is dropped; the three real packages survive.
+    assert by_name["bash"].dependencies == ["readline", "glibc", "ncurses"]
+    assert by_name["glibc"].dependencies == [
+        "linux-api-headers",
+        "tzdata",
+        "filesystem",
+    ]
+
+
+def test_linux_ssh_collection_alpine_with_dependencies():
+    """An Alpine host has a dependency graph, which it never had before."""
+    fake = _linux_client(_ALPINE_OS_RELEASE, _ALPINE_APK)
+    collector = LinuxCollector(ssh_client_factory=lambda: fake)
+    target = TargetMachine(id="lin-alp", hostname="alpine.example", platform=Platform.LINUX)
+
+    inv = collector.collect(target, CREDS)
+
+    by_name = {p.name: p for p in inv.packages}
+    assert by_name["apk-tools"].dependencies == [
+        "musl",
+        "libcrypto3",
+        "libapk",
+        "ca-certificates-bundle",
+    ]
+    # so: is a capability, not a package named "so".
+    assert by_name["busybox"].dependencies == []
+
+
+def test_a_host_with_no_package_manager_says_so():
+    """The sentinel is a distinct fact from a failed command (Req 1.7).
+
+    Reporting it as an empty inventory would delete the host's findings and
+    call them resolved; reporting it as a generic failure would send someone
+    looking for a broken command.
+    """
+    fake = _linux_client(_UBUNTU_OS_RELEASE, collectors._NO_PKG_MANAGER.encode() + b"\n")
+    collector = LinuxCollector(ssh_client_factory=lambda: fake)
+    target = TargetMachine(id="lin-none", hostname="none.example", platform=Platform.LINUX)
+
+    with pytest.raises(InventoryUnavailableError) as excinfo:
+        collector.collect(target, CREDS)
+
+    assert "no supported package manager" in str(excinfo.value)

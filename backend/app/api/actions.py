@@ -36,8 +36,6 @@ from ..enums import Platform, ScanStatus
 from ..models import Credentials, TargetMachine
 from ..scanner.collectors import parse_private_key
 from ..scanner.engine import MachineScan, ScannerEngine
-from ..scanner.epss_client import EpssHttpClient
-from ..scanner.kev_client import KevHttpClient
 from ..scanner.exceptions import AuthError, HostKeyError, HostKeyMismatchError
 from ..scanner.host_keys import connect_pinned
 from ..services.remediation import (
@@ -357,18 +355,9 @@ def refresh_feeds(
     Findings are enriched at scan time from whatever the cache holds, so a
     refresh takes effect on the next scan rather than retroactively.
     """
-    from ..services.enrichment import FeedRefreshService
+    from ..services.enrichment import build_feed_refresh_service
 
-    service = FeedRefreshService(
-        Repository(session),
-        kev_source=KevHttpClient(
-            config.kev_feed_url(), timeout=config.feed_timeout()
-        ),
-        epss_source=EpssHttpClient(
-            config.epss_feed_url(), timeout=config.feed_timeout()
-        ),
-    )
-    outcomes = service.refresh_all()
+    outcomes = build_feed_refresh_service(Repository(session)).refresh_all()
     session.commit()
 
     return FeedRefreshResponse(

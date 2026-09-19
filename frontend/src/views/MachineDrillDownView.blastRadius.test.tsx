@@ -201,3 +201,54 @@ describe("CveDetailModal blast radius", () => {
     expect(screen.getByText(/High system impact/i)).toBeInTheDocument();
   });
 });
+
+// The same dangling-CVSS regression as CveDetailModal.test.tsx, in the two
+// places the drill-down renders a package group's top score. 0.8.6 left both
+// unguarded; nothing failed, because no test asserted a rendered score string.
+describe("MachineDrillDownView package group score", () => {
+  it("says no score was published on the dependency-map card", async () => {
+    const user = userEvent.setup();
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={[finding({ severity: "unscored", cvssScore: null })]}
+      />,
+    );
+    await openDependencyMap(user);
+
+    const badge = document.querySelector(".badge-unscored") as HTMLElement;
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe("Unscored • No published CVSS");
+    expect(badge.textContent).not.toMatch(/•\s*CVSS\s*$/);
+  });
+
+  it("keeps a published band on the card while reporting no score", async () => {
+    const user = userEvent.setup();
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={[finding({ severity: "high", cvssScore: null })]}
+      />,
+    );
+    await openDependencyMap(user);
+
+    const badge = document.querySelector(".badge-high") as HTMLElement;
+    expect(badge.textContent).toBe("High • No published CVSS");
+  });
+
+  it("marks an unscored Top score cell as unpublished rather than silently dashing it", async () => {
+    const user = userEvent.setup();
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={[finding({ severity: "unscored", cvssScore: null })]}
+      />,
+    );
+    await openPackageView(user);
+
+    const pill = document.querySelector(".cvss-score-pill") as HTMLElement;
+    expect(pill).not.toBeNull();
+    expect(pill.textContent?.trim()).toBe("—");
+    expect(pill).toHaveAttribute("title", expect.stringMatching(/No CVSS score published/i));
+  });
+});
