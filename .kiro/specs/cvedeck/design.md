@@ -648,6 +648,23 @@ a body check allowed `get_scanner_engine` to be constructed first and surfaced
 its `NotImplementedError` instead of the 403. Decorator-level dependencies are
 inserted ahead of the handler's own and therefore run first.
 
+A second class of refusal is not about a user-supplied address at all.
+`POST /api/feeds/refresh` and `cvedeck-admin refresh-feeds` download both
+catalogues and replace them wholesale, which destroys the seeded fixture — and
+because re-seeding is guarded on an empty fleet, nothing brings it back. The
+route carries the same dependency, but a route dependency does nothing for the
+CLI, which runs against the database inside the container, so the check lives
+in `refresh_feeds_and_reapply` where every trigger passes it (Req 15.8).
+
+**It runs before the download, and the position is the design.** 0.8.9 placed
+it after `refresh_all()`, so the feeds were still fetched and both catalogues
+still deleted and re-inserted; only the reapply was skipped. The result was a
+guard that read as complete, a fixture destroyed by the timer the deployment
+documentation recommends, and a recorded payload digest with no reapply behind
+it — which then suppressed the first genuine refresh after demo mode was
+switched off. A guard downstream of the side effect it exists to prevent is
+not a guard, and that is the general rule, not a note about this one function.
+
 The state is reported at `GET /api/health` as `capabilities.demo_mode`, which
 the dashboard uses to show a banner.
 

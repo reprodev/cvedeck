@@ -209,6 +209,47 @@ describe("MachineDrillDownView host summary", () => {
     expect(within(summary()).queryByText(/None actively exploited/)).not.toBeInTheDocument();
   });
 
+  it("does not clear a host whose findings were only partly checked", () => {
+    // The regression this pins: the summary asked whether *any* finding had
+    // been checked, so one checked-and-absent finding among many unchecked
+    // ones printed a confident "None actively exploited" -- directly
+    // contradicting the table below it, which showed the rest as unknown.
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={[
+          finding({ cveId: "CVE-A", kevListed: false }),
+          finding({ cveId: "CVE-B" }),
+          finding({ cveId: "CVE-C" }),
+        ]}
+      />,
+    );
+
+    expect(
+      within(summary()).queryByText(/None actively exploited/),
+    ).not.toBeInTheDocument();
+    expect(within(summary()).getByText(/1 of 3 checked/)).toBeInTheDocument();
+  });
+
+  it("says what it does not know, rather than blaming a feed that did load", () => {
+    // "No threat intel has been loaded" is false on a partially-checked host,
+    // and a message that is wrong about the reason is not a safe way to say
+    // "I don't know".
+    render(
+      <MachineDrillDownView
+        machineId="m1"
+        findings={[
+          finding({ cveId: "CVE-A", kevListed: false }),
+          finding({ cveId: "CVE-B" }),
+        ]}
+      />,
+    );
+
+    expect(
+      within(summary()).getByTitle(/never checked, so this host has not been cleared/i),
+    ).toBeInTheDocument();
+  });
+
   it("explains in the tooltip that unknown is not evidence of safety", () => {
     render(<MachineDrillDownView machineId="m1" findings={[finding()]} />);
 

@@ -1806,7 +1806,7 @@ fail is not evidence.
 The last piece was found by asking where a fleet-wide write would land that
 nobody would think to look.
 
-Demo mode seeds a fictional twelve-host fleet, and among the hosts it seeds are
+Demo mode seeds a fictional thirteen-host fleet, and among the hosts it seeds are
 findings whose exploitation status was **never checked** — `kev_listed` left
 `NULL`, rendered as a muted *unknown*. They are there on purpose. They are how a
 visitor sees, in thirty seconds, the distinction the entire tool is built on:
@@ -1945,3 +1945,139 @@ which left it open was the one that went looking for exactly this, found one
 instance, fixed it, wrote it up at length, and stopped. Finding a class of
 problem and then fixing a single member of it feels, from the inside, exactly
 like finding and fixing the problem.
+
+---
+
+## Chapter 20 — A guard behind the thing it guards (v0.8.10)
+
+Chapter 19 ended on the observation that fixing one member of a class and then
+stopping feels, from the inside, exactly like fixing the class. It turns out
+0.8.9 did that twice: once in the way it had just written about, and once in
+the fix itself.
+
+### The guard was in the wrong place
+
+0.8.9's release notes say the demo "never touches the network", and that the
+refusal lives in the service "regardless of how it was triggered (which is what
+also covers `cvedeck-admin refresh-feeds`, run inside the container where no
+HTTP guard applies)". That sentence is the right idea, written down correctly,
+and describing code that did not do it. The function read:
+
+```python
+outcomes = build_feed_refresh_service(repository).refresh_all()
+if demo_mode():
+    return outcomes, 0
+```
+
+`refresh_all()` is the half that downloads both feeds and deletes and
+re-inserts both catalogues. Only the reapply came after the check. So the demo
+still fetched several megabytes from CISA and FIRST, still replaced its own
+fictional KEV catalogue and EPSS set with the real ones, and then declined to
+push the result onto the stored findings — which is the smallest of the three
+things it should have declined to do. Re-seeding is guarded on an empty fleet,
+so the fixture it overwrote was not coming back.
+
+The check is now the first statement in the function. That is the whole fix, and
+it is two lines moved.
+
+What makes it worth a chapter is that the test which should have caught it could
+not have. `refresh_feeds_and_reapply` returned `([], 0)` under demo mode before
+and after — truthfully, both times. A test asserting on the return value passes
+against both. The only test that can tell them apart is one that refuses to be
+called:
+
+```python
+class _ExplodingSource:
+    def fetch(self):
+        raise AssertionError("demo mode reached for a feed")
+```
+
+Running the new tests against the old code prints the assertion twice, once per
+feed. There had been no test of demo mode in the enrichment suite at all — the
+refusal was covered at the HTTP layer and for the scheduler, which are the two
+paths that were already closed. The uncovered path was the one the release notes
+singled out by name.
+
+### A digest with nothing behind it
+
+The second thing 0.8.9 introduced was the digest short-circuit, and it came with
+a guard of its own, described in its docstring as protecting "a database whose
+catalogue was cleared out from under the refresh row". The guard read
+`row.record_count <= 0`.
+
+`record_count` is written by `record_feed_refresh` — the same statement that
+writes the digest. It reports what the last refresh believed it wrote. It agrees
+with the digest by construction, whatever the catalogue actually contains, so it
+cannot witness the thing it was there to witness. Empty the `kev_entries` table
+without touching `feed_refreshes` and the next refresh matches the digest,
+reports `unchanged`, rewrites nothing, and reads as usable — after which every
+stored finding is recorded as **not exploited**, on the authority of a catalogue
+with no rows in it. The enrichment invariant, inverted, by the feature written
+to make refreshes cheaper.
+
+The existing test passed because it reset `record_count` to zero by hand, which
+is to say it tested the guard against the one input the guard could see. It now
+empties the catalogue and leaves the refresh row exactly as it was, which is the
+shape the real failure takes. It fails against the old code.
+
+### The headline disagreed with the table
+
+The third thing is older than either, and was found by reading the host page
+rather than the diff.
+
+The drill-down decides between "N actively exploited", "None actively
+exploited", and "Exploitation unknown". The unknown state existed, was correct,
+and was reached by asking whether *any* finding on the host had been checked:
+
+```ts
+const anyChecked = findings.some(f => f.kevListed === true || f.kevListed === false);
+return anyChecked ? "clear" : "unknown";
+```
+
+One checked finding is enough. A host with one answered question and forty
+unanswered ones printed **None actively exploited**, under a tooltip saying no
+findings on this host appear in CISA's catalogue — directly above a table
+rendering those forty as `— unknown`, correctly, because the per-row classifier
+had the rule right all along.
+
+The two were never reconciled because they were written at different times and
+neither is obviously the same question. But a summary *is* the rows, and the
+summary is the part that gets read: nobody opens a host page and audits
+forty-one rows to find out whether the sentence at the top was entitled to its
+confidence. A clear is now only ever printed when every finding was checked, a
+partially-checked host says how far it got, and both live in one helper beside
+the per-row classifier so the next person changing one has the other in front of
+them.
+
+### What these have in common
+
+All three are the same shape, and it is not carelessness. Each is a correct rule
+applied at a point where it cannot see what it needs to see: a guard after the
+side effect, a check against a column that agrees with whatever it is checking,
+a summary computed from a weaker question than the one it answers. Each reads
+correctly in isolation. Each has a docstring or a release note stating the
+strong version of the property while the code implements the weak one — and the
+prose is what everyone subsequently trusted, including the people who wrote it.
+
+The practical lesson is narrow enough to act on: when a guard and the thing it
+guards are in the same function, the only interesting question is which comes
+first, and the test has to be one that fails if the guarded thing runs at all.
+Asserting on the result is asserting on the part that was already right.
+
+### Elsewhere
+
+The CVE detail dialog gained the exploitation signals its own header comment has
+claimed since the day it was extracted. It rendered neither KEV nor EPSS: tap
+*Inspect* on a KEV-listed finding and the signal the entire ranking is built on
+vanished, at the one moment a person is deciding what to do about that CVE. The
+comment was accurate about the intent and nobody re-read the file.
+
+And the push hooks now check who a commit says wrote it. The author check
+accepted any address matching `@users.noreply.github.com` or `noreply@` — which
+is to say it accepted another account's noreply, and a vendor's, and would have
+waved through most of what a misconfigured tool actually produces. It matches
+the one identity exactly now, name and address, and refuses a `Co-Authored-By:`
+line in any commit message being pushed. Nothing had ever looked at commit
+messages, which is precisely where such a line lands. Same shape as the rest of
+the release: a check positioned where it could not see the thing it was written
+to catch.

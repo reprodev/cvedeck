@@ -21,6 +21,11 @@ import {
   hasFix as findingHasFix,
 } from "../lib/remediation";
 import { severityLabel } from "../lib/labels";
+import {
+  exploitStatus,
+  formatEpssPercentile,
+  formatEpssScore,
+} from "../lib/intel";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { impactTone } from "../lib/impact";
@@ -73,6 +78,9 @@ export function CveDetailModal({
   const tone = impactTone(finding.blastRadius);
   const isLeaf = dependentsKnown && dependedOnBy.length === 0;
   const tooling = getDistroTooling(platform, osName, finding.packageIdentifier);
+  // The same helper the findings table uses, so one finding cannot read as
+  // exploited in the row and unknown in the dialog.
+  const exploitation = exploitStatus(finding);
 
   // What can be done where no package update exists, in the order to try them.
   // Only the options that apply are built, so nothing numbers around a gap.
@@ -174,6 +182,77 @@ export function CveDetailModal({
         </div>
 
         <div className="modal-body">
+          {/*
+            Exploitation, first. This dialog has always claimed to carry "its
+            exploitation signals" and never rendered one: a reader who tapped
+            Inspect on a KEV-listed finding lost the single signal the whole
+            ranking is built on, and the dialog is where someone goes precisely
+            when they are deciding what to do about one CVE.
+
+            Three states, matching the findings table exactly, because the same
+            finding must not read differently in two places. The unknown state
+            says what it does not know and why, rather than showing nothing --
+            an absent row reads as "no exploitation", which is the collapse the
+            enrichment invariant forbids.
+          */}
+          <div className="modal-section">
+            <div className="modal-section-title">
+              <span>
+                <Icon name="target" /> Exploitation Signals
+              </span>
+            </div>
+            <div className="action-card">
+              <div className="cve-exploit-row" data-exploitation={exploitation}>
+                {exploitation === "exploited" ? (
+                  <span
+                    className="badge badge-exploit"
+                    title={
+                      finding.kevDueDate
+                        ? `On CISA KEV. Federal remediation due ${finding.kevDueDate}.`
+                        : "Listed in CISA's Known Exploited Vulnerabilities catalogue."
+                    }
+                  >
+                    <Icon name="target" /> Known Exploited
+                  </span>
+                ) : exploitation === "not-exploited" ? (
+                  <span
+                    className="cve-exploit-absent"
+                    title="Checked against CISA KEV and not listed."
+                  >
+                    Not on CISA KEV
+                  </span>
+                ) : (
+                  <span
+                    className="cve-exploit-unknown"
+                    title="Not checked -- threat intel has not been loaded. This is not evidence the CVE is unexploited."
+                  >
+                    Exploitation unknown -- not checked
+                  </span>
+                )}
+                {exploitation === "exploited" && finding.kevDueDate && (
+                  <span className="cve-exploit-due">
+                    Federal remediation due <strong>{finding.kevDueDate}</strong>
+                  </span>
+                )}
+              </div>
+              <div className="cve-exploit-epss">
+                {finding.epssScore !== null && finding.epssScore !== undefined ? (
+                  <span
+                    title={`EPSS: ${formatEpssScore(finding.epssScore)} probability of exploitation in the next 30 days (${formatEpssPercentile(finding.epssPercentile)} percentile).`}
+                  >
+                    EPSS <strong>{formatEpssScore(finding.epssScore)}</strong> in the
+                    next 30 days ({formatEpssPercentile(finding.epssPercentile)}{" "}
+                    percentile)
+                  </span>
+                ) : (
+                  <span title="No EPSS score has been loaded for this CVE. This is not a score of zero.">
+                    EPSS not available
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* Target Package */}
           <div className="modal-section">
             <div className="modal-section-title">

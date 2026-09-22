@@ -810,11 +810,16 @@ section {
   white-space: nowrap;
 }
 
-/* Three states, three treatments. "unknown" is deliberately the quietest: it
-   is the absence of a claim, and must not read as reassurance. */
+/* Four states, three treatments. "unknown" and "partial" are deliberately the
+   quietest: neither is a claim, and neither must read as reassurance.
+   "partial" shares the unknown treatment rather than the clear one precisely
+   because a host with unchecked findings has not been cleared -- the styling
+   is the first thing read, and it should not say otherwise before the words
+   get a chance to. */
 .host-summary-exploit[data-state="exploited"] { color: var(--critical); }
 .host-summary-exploit[data-state="clear"]     { color: var(--text-muted); }
-.host-summary-exploit[data-state="unknown"] {
+.host-summary-exploit[data-state="unknown"],
+.host-summary-exploit[data-state="partial"] {
   color: var(--text-dim);
   opacity: 0.75;
   cursor: help;
@@ -3397,4 +3402,39 @@ th {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--warn-text);
+}
+
+/* CVE dialog: exploitation signals.
+   Same three-state treatment as the findings table -- the badge carries the
+   only red on the screen, absence is muted, and "unknown" is quieter still and
+   marked as help text, because it is the absence of a claim rather than a
+   reassuring one. */
+.cve-exploit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.cve-exploit-absent {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.cve-exploit-unknown {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  opacity: 0.8;
+  cursor: help;
+}
+
+.cve-exploit-due {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.cve-exploit-epss {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }

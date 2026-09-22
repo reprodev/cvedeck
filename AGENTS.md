@@ -327,7 +327,8 @@ environment the app reads, so no alembic.ini edit is needed.
   - Any test for `OsvHttpClient` that injects an `http_client` skips the branch that
     builds the client itself -- the only branch deployments take. Keep
     `tests/test_osv_client_live_path.py`, which covers that branch with no injected
-    client; it exists because a missing constant there went undetected by 215 passing tests.
+    client; it exists because a missing constant there went undetected by the entire
+    suite, which never exercised it.
 - Remediation is manual only. No scheduler, thread, timer, or background trigger may
   be added to RemediationService. Req 4.5 and tests/test_remediation_smoke.py guard this.
   The frontend generates commands for the user to run; it never executes one.

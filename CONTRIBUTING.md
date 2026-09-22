@@ -43,6 +43,16 @@ This is the mechanical half of the rule in `AGENTS.md` §6; the hooks exist
 because asking politely does not scale, and because a secret that reaches a
 public history cannot be recalled.
 
+Two of the push checks concern what a commit says about who wrote it, and they
+are worth knowing about before they refuse something. Every commit pushed to
+the public remote must carry one exact author **and** committer, name and
+address both; a different address that merely looks like a GitHub noreply is
+still not this project's, and the check says so rather than shrugging. And a
+commit message may not carry a `Co-Authored-By:` or tool-attribution line.
+Those lines are published and permanent, and they credit the work to something
+that is not the copyright holder — so if your tooling adds one automatically,
+turn that off rather than working around the hook.
+
 If a hook refuses something legitimate, that is a bug in the hook worth
 reporting — a guard with false positives is a guard people switch off. Prefer
 fixing the pattern over `--no-verify`, which skips every check including the

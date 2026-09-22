@@ -178,7 +178,10 @@ export function MachineListView({
     () => machines.reduce((total, m) => total + m.kevCount, 0),
     [machines],
   );
-  const intelWarning = useMemo(() => enrichmentWarning(feeds), [feeds]);
+  const intelWarning = useMemo(
+    () => enrichmentWarning(feeds, Boolean(onRefreshFeeds)),
+    [feeds, onRefreshFeeds],
+  );
   const intelUsable = useMemo(() => feeds.some((feed) => feed.usable), [feeds]);
 
   // A host needs attention when its findings cannot be trusted as current:

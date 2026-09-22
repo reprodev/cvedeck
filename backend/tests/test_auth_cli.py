@@ -98,3 +98,31 @@ def test_refresh_feeds_reports_each_feed_and_fails_when_one_does(data_dir, monke
     out = capsys.readouterr().out
     assert "kev: ok, 10 records" in out
     assert "epss: failed, 0 records (upstream down)" in out
+
+
+def test_refresh_feeds_in_demo_mode_refuses_and_says_so(data_dir, monkeypatch, capsys):
+    """The one refresh path a demo leaves reachable (Req 15.6).
+
+    ``cvedeck-admin refresh-feeds`` runs against the database inside the
+    container, where no HTTP guard applies, and DEPLOYMENT.md tells operators
+    to install it on a timer. Until 0.8.10 it downloaded both feeds and
+    replaced the demo's seeded catalogue, then printed an ordinary success --
+    so nothing told the operator the fixture was gone.
+
+    Exit status is 0, deliberately: a timer that reports failure every hour on
+    a healthy demo trains its operator to stop reading it.
+    """
+    from app.services import enrichment
+
+    monkeypatch.setenv("CVEDECK_DEMO_MODE", "true")
+    monkeypatch.setattr(
+        enrichment.FeedRefreshService,
+        "refresh_all",
+        lambda self: pytest.fail("demo mode refreshed a feed"),
+    )
+
+    assert cli.main(["refresh-feeds"]) == 0
+    out = capsys.readouterr().out.lower()
+    assert "demo mode" in out
+    assert "no feed was refreshed" in out
+    assert "records" not in out, "the ordinary success line must not appear"

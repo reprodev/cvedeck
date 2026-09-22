@@ -388,3 +388,65 @@ def test_the_host_keys_migration_round_trips(tmp_path):
 
 def test_there_is_exactly_one_head():
     assert len(ScriptDirectory.from_config(alembic_config()).get_heads()) == 1
+
+
+def test_the_payload_digest_migration_round_trips(tmp_path):
+    """Down and back up again, on the feed table (Req 10.14).
+
+    The drop is batched because SQLite below 3.35 has no native DROP COLUMN.
+    An unbatched one passes on a modern developer machine and fails on an older
+    runtime, which is the least useful place to find out.
+    """
+    engine = create_engine(f"sqlite:///{(tmp_path / 'digest.db').as_posix()}")
+    upgrade_to_head(engine)
+    assert "payload_digest" in {
+        c["name"] for c in inspect(engine).get_columns("feed_refreshes")
+    }
+
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.downgrade(cfg, "c71f4a2be095")
+    assert "payload_digest" not in {
+        c["name"] for c in inspect(engine).get_columns("feed_refreshes")
+    }
+
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "head")
+    assert _revision(engine) == _head()
+
+
+def test_an_upgraded_database_keeps_its_feed_row_and_digests_nothing_yet(tmp_path):
+    """Upgrading must not invent a digest for a catalogue it never checked.
+
+    A non-null digest here would match nothing on the next refresh, or -- worse,
+    if it somehow did -- would skip the first rewrite and leave the stored
+    findings reconciled against a catalogue that was never compared.
+    """
+    engine = create_engine(f"sqlite:///{(tmp_path / 'upgraded.db').as_posix()}")
+    upgrade_to_head(engine)
+
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.downgrade(cfg, "c71f4a2be095")
+        connection.execute(
+            text(
+                "INSERT INTO feed_refreshes (feed_name, last_status, record_count) "
+                "VALUES ('kev', 'ok', 1687)"
+            )
+        )
+
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "head")
+
+    with engine.connect() as connection:
+        row = connection.execute(
+            text("SELECT record_count, payload_digest FROM feed_refreshes")
+        ).one()
+    assert row[0] == 1687, "the existing cache state survives"
+    assert row[1] is None, "nothing has been digested yet"

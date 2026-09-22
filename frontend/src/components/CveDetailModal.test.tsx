@@ -101,3 +101,49 @@ describe("CveDetailModal dialog contract", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("CveDetailModal exploitation signals", () => {
+  // The dialog's own header comment promised "its exploitation signals" from
+  // the day it was extracted, and it rendered none: no KEV, no EPSS. Tapping
+  // Inspect on a KEV-listed finding lost the one signal the entire ranking is
+  // built on, at the exact moment someone is deciding what to do about it.
+
+  it("shows a KEV-listed finding as known exploited, with its due date", () => {
+    openModal(finding({ kevListed: true, kevDueDate: "2024-04-19" }));
+
+    expect(screen.getByText(/Known Exploited/)).toBeInTheDocument();
+    expect(screen.getByText(/2024-04-19/)).toBeInTheDocument();
+  });
+
+  it("distinguishes checked-and-absent from never-checked", () => {
+    const { unmount } = openModal(finding({ kevListed: false }));
+    expect(screen.getByText(/Not on CISA KEV/)).toBeInTheDocument();
+    expect(screen.queryByText(/unknown/i)).not.toBeInTheDocument();
+    unmount();
+
+    openModal(finding({ kevListed: null }));
+    expect(screen.getByText(/Exploitation unknown/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not on CISA KEV/)).not.toBeInTheDocument();
+  });
+
+  it("says an unchecked finding is not evidence of safety", () => {
+    openModal(finding({ kevListed: null }));
+
+    expect(screen.getByTitle(/not evidence the CVE is unexploited/i)).toBeInTheDocument();
+  });
+
+  it("reports a missing EPSS score as missing, never as zero", () => {
+    // A blank row reads as "no risk". An absent score is not a score of zero,
+    // and this dialog is where someone decides whether to act tonight.
+    openModal(finding({ kevListed: false, epssScore: null }));
+
+    expect(screen.getByText(/EPSS not available/)).toBeInTheDocument();
+  });
+
+  it("renders a present EPSS score with its percentile", () => {
+    openModal(finding({ kevListed: false, epssScore: 0.9412, epssPercentile: 0.99 }));
+
+    expect(screen.getByText(/94.1%/)).toBeInTheDocument();
+    expect(screen.getByText(/99th/)).toBeInTheDocument();
+  });
+});

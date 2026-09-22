@@ -40,6 +40,54 @@ export function countKnownExploited(findings: CveFinding[]): number {
 }
 
 /**
+ * How a whole host's exploitation state should be presented.
+ *
+ * `clear` is the only one of these that makes a claim, so it is the only one
+ * with a precondition: every finding on the host was checked.
+ */
+export interface HostExploitSummary {
+  state: "exploited" | "clear" | "partial" | "unknown";
+  /** Confirmed exploited. */
+  exploited: number;
+  /** Findings that were actually checked against the catalogue. */
+  checked: number;
+  total: number;
+}
+
+/**
+ * Summarise one host's exploitation state across its findings.
+ *
+ * The three-way rule this module exists for, lifted from the row to the host.
+ * A summary computed as "did *any* finding get checked?" reports a confident
+ * "None actively exploited" for a host with one checked finding and forty
+ * unchecked ones -- and contradicts the very table printed below it, which
+ * renders those forty as unknown. That is the enrichment invariant inverted at
+ * the level a reader actually reads: nobody scans a host to audit it row by
+ * row, they read the headline.
+ *
+ * `partial` is kept distinct from `unknown` because the wording differs. "No
+ * threat intel has been loaded" is simply false for a host where some findings
+ * were checked, and a message that is false about the reason is not a safe way
+ * to say "I don't know" (Req 10.16).
+ */
+export function hostExploitSummary(findings: CveFinding[]): HostExploitSummary {
+  let exploited = 0;
+  let checked = 0;
+  for (const finding of findings) {
+    const status = exploitStatus(finding);
+    if (status === "exploited") exploited += 1;
+    if (status !== "unknown") checked += 1;
+  }
+  const total = findings.length;
+
+  if (exploited > 0) return { state: "exploited", exploited, checked, total };
+  if (total > 0 && checked === total)
+    return { state: "clear", exploited, checked, total };
+  if (checked > 0) return { state: "partial", exploited, checked, total };
+  return { state: "unknown", exploited, checked, total };
+}
+
+/**
  * Format an EPSS score as a percentage string, or a dash when unknown.
  *
  * Two decimal places below 1%: the EPSS distribution is heavily skewed and the
@@ -122,15 +170,26 @@ export function feedLabel(feedName: string): string {
  * states change how the KEV and EPSS columns should be read. Silence here
  * means the signals on screen can be trusted at face value.
  */
-export function enrichmentWarning(feeds: FeedHealth[]): string | null {
+export function enrichmentWarning(
+  feeds: FeedHealth[],
+  canRefresh = true,
+): string | null {
   if (feeds.length === 0) return null;
 
   const unusable = feeds.filter((feed) => !feed.usable);
   if (unusable.length === feeds.length) {
+    // The instruction is withheld where the reader cannot act on it. On a demo
+    // the refresh route is refused and no button is offered, so "refresh the
+    // intel feeds" sent the one visitor who took it seriously looking for a
+    // control that is not there -- the in-app twin of the README sentence that
+    // was removed for the same reason.
+    const remedy = canRefresh
+      ? " Refresh the intel feeds to see which findings are actively exploited."
+      : "";
     return (
       "Threat intelligence has never been loaded. Findings are ranked by CVSS " +
-      "only -- no exploitation data is available. Refresh the intel feeds to " +
-      "see which findings are actively exploited."
+      "only -- no exploitation data is available." +
+      remedy
     );
   }
   if (unusable.length > 0) {

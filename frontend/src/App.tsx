@@ -486,7 +486,14 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
   // A demo ships with its own seeded intel and refuses the refresh with a 403,
   // so offer no button rather than one that fails. Same shape as onRescan,
   // which is withheld when the server has no key to scan with.
-  const offerIntelRefresh = !capabilities?.demoMode;
+  //
+  // Explicitly null-checked, not `!capabilities?.demoMode`: optional chaining
+  // makes that expression true while capabilities is still unresolved, and the
+  // two fetches race. If feed health arrived first, a demo painted the button
+  // for a render -- the failing button this was written to remove. Withholding
+  // it until the answer is in costs a demo nothing, and an unknown capability
+  // is not a licence to offer the action.
+  const offerIntelRefresh = capabilities !== null && !capabilities.demoMode;
 
   return (
     <main>

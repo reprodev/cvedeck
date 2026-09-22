@@ -8,6 +8,122 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.10] - 2026-09-22
+
+0.8.9 said the demo "never touches the network" and that its guard covered
+every trigger "regardless of how it was triggered". Neither was true: the check
+sat one call after the download. This release moves it, and fixes two places
+where a missing answer could be read as a good one -- the failure this project
+exists to prevent, found in its own dashboard.
+
+### Fixed
+
+- **A host with mostly unchecked findings no longer reports a clean bill of
+  health.** The host page's summary asked whether *any* finding had been checked
+  against CISA's catalogue. One checked-and-absent finding among forty unchecked
+  ones therefore printed a confident **"None actively exploited"**, with the
+  tooltip "No findings on this host appear in CISA's KEV catalogue" -- directly
+  above a table that correctly showed those forty as *unknown*. The summary and
+  its own table disagreed, and the summary is the part anyone reads: nobody
+  audits a host row by row to check whether the headline is entitled to its
+  confidence.
+
+  A host is now presented as clear only when **every** finding on it was
+  checked. A partially checked host says how far it got -- "1 of 41 checked --
+  none exploited so far" -- and carries the quiet styling of an unknown rather
+  than the settled styling of a clear one, because the styling is read before
+  the words are. The decision moved into one helper next to the per-row
+  classifier, so the two cannot drift apart again (Req 10.16).
+
+- **An emptied catalogue can no longer report itself usable.** The
+  unchanged-feed short-circuit added in 0.8.9 guarded on a record count taken
+  from the feed's own refresh row -- a column written by the same statement that
+  writes the digest, so it agrees with the digest whatever the catalogue
+  actually holds and can witness nothing. A catalogue emptied underneath it (a
+  partial restore, a prune that did not know about `feed_refreshes`) would match
+  the digest, report `unchanged`, read as usable, and then stamp every stored
+  finding as **not exploited** on the authority of no catalogue at all. The
+  guard now counts the rows (Req 10.17).
+
+- **Demo mode refuses a feed refresh before downloading it, not after.** This is
+  the half of 0.8.9 that did not land. `refresh_all()` ran first and the demo
+  check came after it, so only the reapply was skipped: both feeds were still
+  downloaded and both catalogues still deleted and re-inserted. Three
+  consequences, all of which 0.8.9's notes claim were closed:
+
+  - `docker exec cvedeck cvedeck-admin refresh-feeds` -- which `DEPLOYMENT.md`
+    and the shipped systemd unit tell operators to put on a timer -- replaced
+    the demo's fictional KEV catalogue and EPSS set with the real ones.
+    Permanently: re-seeding is guarded on an empty fleet, so nothing restores
+    them.
+  - It recorded a payload digest with no reapply behind it. Switching
+    `CVEDECK_DEMO_MODE` off on that data directory then left the next genuine
+    refresh matching that digest, reporting `unchanged`, and skipping the
+    fleet-wide reapply -- so stored findings were never reconciled with the
+    cached catalogue, self-healing only when upstream next moved.
+  - The unauthenticated download amplifier survived inside the container.
+
+  The check is now the first thing the function does, and its position is
+  written into the requirement rather than left as an implementation detail: a
+  guard downstream of the side effect it exists to prevent is not a guard
+  (Req 15.8).
+
+- **`cvedeck-admin refresh-feeds` says when it declined.** It previously printed
+  an ordinary `kev: ok, 1687 records` after replacing the fixture, so nothing
+  told the operator what had happened. A demo instance now reports the refusal
+  and exits **0** -- a timer that reports failure every hour on a healthy demo
+  teaches its operator to stop reading it.
+
+- **The dashboard cannot paint a "Refresh intel" button it will refuse.** The
+  gate read `!capabilities?.demoMode`, which is `true` while capabilities are
+  still unresolved, and the capability and feed-health requests race. If feed
+  health arrived first, a demo rendered the button for a render -- the failing
+  button 0.8.9 removed.
+
+- **The in-app banner no longer tells a demo visitor to refresh the feeds.**
+  The instruction is withheld wherever no refresh control is offered. It was the
+  twin of the README sentence 0.8.9 removed for the same reason.
+
+### Added
+
+- **The CVE detail dialog shows exploitation signals.** Its own header comment
+  has claimed to carry "its exploitation signals" since it was extracted, and it
+  rendered neither KEV nor EPSS: tapping **Inspect** on a KEV-listed finding
+  lost the single signal the entire ranking is built on, at the moment someone
+  is deciding what to do about that one CVE. It now shows both, in the same
+  three states and the same wording as the findings table, so one finding cannot
+  read as exploited in the row and unknown in the dialog. A missing EPSS score
+  is reported as missing rather than omitted, because a blank reads as zero.
+
+- **The push hooks check who a commit says wrote it.** The author check accepted
+  any address matching `@users.noreply.github.com` or `noreply@` -- a gate that
+  passes nearly everything a misconfigured tool produces, including another
+  account's noreply and a vendor's. It now matches this project's one identity
+  exactly, name and address, and refuses a `Co-Authored-By:` or
+  tool-attribution line in any commit message being pushed. Nothing looked at
+  commit messages before, which is exactly where such a line lands.
+
+### Changed
+
+- The demo section of `DEPLOYMENT.md` listed three refused routes; the code
+  guards five, and the omitted one was the entire subject of 0.8.9. It now lists
+  them all, says where each refusal is enforced, and drops the summary sentence
+  "the routes that could do harm are already refused" -- the shape of claim this
+  project has now twice found to have gone out of date with the code beneath it.
+- Three documents described the demo fleet as twelve hosts; it has been thirteen
+  since the Windows host was added. A test now pins the number to the fixture,
+  so the prose cannot drift again. `AGENTS.md` also stated a test count in a
+  live instruction, in the same file that forbids writing counts into documents.
+- The `payload_digest` migration's `downgrade()` wraps its `DROP COLUMN` in
+  `batch_alter_table`, matching every other column drop here: SQLite gained a
+  native `DROP COLUMN` only in 3.35. It had no test; it now has a round trip and
+  a check that upgrading an existing database digests nothing yet.
+- `refresh_feeds_and_reapply` builds its enricher with the configured feed age
+  rather than the constructor default, so it cannot come to disagree with the
+  route and the scheduler about what "stale" means.
+
+---
+
 ## [0.8.9] - 2026-09-20
 
 0.8.8 taught a feed refresh to reapply itself to stored findings, saw what that

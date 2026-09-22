@@ -44,6 +44,7 @@ import { Modal } from "../components/Modal";
 import { Icon } from "../components/Icon";
 import {
   exploitStatus,
+  hostExploitSummary,
   isKnownExploited,
   formatEpssPercentile,
   formatEpssScore,
@@ -297,16 +298,14 @@ export function MachineDrillDownView({
     [findings],
   );
 
-  // "unknown" when nothing here was ever checked against the catalogue. Kept
-  // distinct from zero, because a zero is a claim and this is the absence of
-  // one -- the same three-way distinction the findings table renders per row.
-  const exploitState: "exploited" | "clear" | "unknown" = useMemo(() => {
-    if (exploitedCount > 0) return "exploited";
-    const anyChecked = findings.some(
-      (f) => f.kevListed === true || f.kevListed === false,
-    );
-    return anyChecked ? "clear" : "unknown";
-  }, [findings, exploitedCount]);
+  // A zero is a claim; the absence of one is not. `hostExploitSummary` owns
+  // the distinction so this screen and the findings table below it cannot
+  // disagree -- they did, and the headline was the one that was wrong: it
+  // asked whether *any* finding had been checked, so one checked finding among
+  // forty unchecked ones printed "None actively exploited" over a table full
+  // of unknowns.
+  const exploit = useMemo(() => hostExploitSummary(findings), [findings]);
+  const exploitState = exploit.state;
 
   const remediationCounts = useMemo(() => {
     let remediated = 0;
@@ -689,12 +688,21 @@ export function MachineDrillDownView({
             <span title="No threat intel has been loaded, so exploitation status is unknown for every finding here. This is not evidence that none are exploited.">
               <Icon name="target" /> Exploitation unknown
             </span>
+          ) : exploitState === "partial" ? (
+            <span
+              title={`${exploit.checked} of ${exploit.total} findings were checked against CISA's KEV catalogue and none are listed. The remaining ${
+                exploit.total - exploit.checked
+              } were never checked, so this host has not been cleared.`}
+            >
+              <Icon name="target" /> {exploit.checked} of {exploit.total} checked
+              {" -- "}none exploited so far
+            </span>
           ) : exploitedCount > 0 ? (
             <span title="Listed in CISA's Known Exploited Vulnerabilities catalogue">
               <Icon name="target" /> <strong>{exploitedCount}</strong> actively exploited
             </span>
           ) : (
-            <span title="No findings on this host appear in CISA's KEV catalogue">
+            <span title="Every finding on this host was checked against CISA's KEV catalogue and none is listed.">
               <Icon name="target" /> None actively exploited
             </span>
           )}

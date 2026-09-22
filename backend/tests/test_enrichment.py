@@ -697,18 +697,41 @@ def test_a_failed_refresh_does_not_clear_the_digest(repo):
 
 
 def test_an_emptied_cache_is_rewritten_even_when_the_digest_matches(repo):
-    """A digest with nothing behind it must not be trusted."""
+    """A digest with nothing behind it must not be trusted.
+
+    The catalogue is emptied and the refresh row is left **exactly as it was**,
+    still claiming one record -- a partial restore, or a prune that did not know
+    about ``feed_refreshes``. This is the shape the real failure takes, and the
+    earlier version of this test did not have it: it reset ``record_count`` to 0
+    by hand, so it passed against a guard that only ever read that column and
+    could witness nothing. Trusting the column let an empty catalogue report
+    itself usable, and every finding was then stamped *not exploited* on the
+    authority of no catalogue at all.
+    """
     source = _StubSource([KevRecord(cve_id="CVE-2021-44228", due_date="2026-01-01")])
     service = FeedRefreshService(repo, kev_source=source, epss_source=None)
     service.refresh_kev()
 
     repo.replace_kev_entries([])
-    repo.record_feed_refresh(KEV_FEED, status=FeedStatus.OK, record_count=0)
+    assert repo.get_feed_refresh(KEV_FEED).record_count == 1, "the stale claim stands"
 
     outcome = service.refresh_kev()
 
     assert not outcome.unchanged
     assert repo.get_kev_map({"CVE-2021-44228"})
+    assert repo.count_kev_entries() == 1
+
+
+def test_an_emptied_epss_cache_is_rewritten_even_when_the_digest_matches(repo):
+    """The same guard, on the feed whose catalogue is 270,000 rows."""
+    source = _StubSource([EpssRecord(cve_id="CVE-2021-44228", score=0.42, percentile=0.97)])
+    service = FeedRefreshService(repo, kev_source=None, epss_source=source)
+    service.refresh_epss()
+
+    repo.replace_epss_scores([])
+
+    assert not service.refresh_epss().unchanged
+    assert repo.count_epss_scores() == 1
 
 
 def test_epss_ignores_its_write_timestamp_when_deciding(repo):
@@ -722,3 +745,161 @@ def test_epss_ignores_its_write_timestamp_when_deciding(repo):
 
     assert not service.refresh_epss().unchanged
     assert service.refresh_epss().unchanged
+
+
+# ---------------------------------------------------------------------------
+# refresh_feeds_and_reapply: the joined sequence
+#
+# Everything above tests the two halves separately. These test the function
+# that joins them, which is where 0.8.9's demo guard was placed one call too
+# late -- after the download and the wholesale catalogue rewrite, so it skipped
+# only the reapply. Nothing in this file mentioned demo mode at all, which is
+# the hole that let a guard land downstream of the side effect it was written
+# to prevent.
+# ---------------------------------------------------------------------------
+
+
+class _ExplodingSource:
+    """A feed source that fails the test if anything reaches for it.
+
+    Asserting on the return value is not enough: the bug being pinned here did
+    return ``([], 0)`` truthfully, having already downloaded both feeds and
+    replaced both catalogues on the way. Only refusing to be called can witness
+    that the network was never touched.
+    """
+
+    def fetch(self):  # pragma: no cover - the point is that it never runs
+        raise AssertionError("demo mode reached for a feed")
+
+
+@pytest.fixture()
+def demo(monkeypatch):
+    monkeypatch.setenv("CVEDECK_DEMO_MODE", "true")
+
+
+def test_demo_mode_refreshes_nothing_and_downloads_nothing(repo, demo, monkeypatch):
+    """The guard is before the download, not after it (Req 15.6)."""
+    from app.services import enrichment
+
+    monkeypatch.setattr(
+        enrichment,
+        "build_feed_refresh_service",
+        lambda repository: FeedRefreshService(
+            repository, kev_source=_ExplodingSource(), epss_source=_ExplodingSource()
+        ),
+    )
+
+    outcomes, updated = enrichment.refresh_feeds_and_reapply(repo)
+
+    assert updated == 0
+    assert {o.feed_name for o in outcomes} == {KEV_FEED, EPSS_FEED}
+    assert all(o.status is FeedStatus.SKIPPED for o in outcomes)
+    assert all(not o.ok for o in outcomes), "skipped is not success"
+
+
+def test_a_demo_refresh_leaves_the_seeded_catalogue_intact(repo, demo, monkeypatch):
+    """The fixture survives. Re-seeding is guarded on an empty fleet, so a
+    catalogue overwritten here is gone permanently."""
+    from app.services import enrichment
+
+    repo.replace_kev_entries(
+        [KevEntry(cve_id="CVE-2021-44228", due_date="2026-01-01")]
+    )
+    repo.replace_epss_scores(
+        [EpssScore(cve_id="CVE-2021-44228", score=0.97, percentile=0.99,
+                   scored_at=datetime.now(timezone.utc))]
+    )
+    monkeypatch.setattr(
+        enrichment,
+        "build_feed_refresh_service",
+        lambda repository: FeedRefreshService(
+            repository, kev_source=_ExplodingSource(), epss_source=_ExplodingSource()
+        ),
+    )
+
+    enrichment.refresh_feeds_and_reapply(repo)
+
+    assert repo.count_kev_entries() == 1
+    assert repo.count_epss_scores() == 1
+    assert repo.get_kev_map({"CVE-2021-44228"})
+
+
+def test_a_demo_refresh_records_no_digest(repo, demo, monkeypatch):
+    """A digest written with no reapply behind it suppresses the first real
+    refresh after demo mode is switched off, and it self-heals only when
+    upstream next changes."""
+    from app.services import enrichment
+
+    monkeypatch.setattr(
+        enrichment,
+        "build_feed_refresh_service",
+        lambda repository: FeedRefreshService(
+            repository, kev_source=_ExplodingSource(), epss_source=_ExplodingSource()
+        ),
+    )
+
+    enrichment.refresh_feeds_and_reapply(repo)
+
+    assert repo.get_feed_refresh(KEV_FEED) is None
+    assert repo.get_feed_refresh(EPSS_FEED) is None
+
+
+def test_both_feeds_unchanged_skips_the_reapply(repo, monkeypatch):
+    """The short-circuit, at the level that owns it."""
+    from app.services import enrichment
+
+    kev = _StubSource([KevRecord(cve_id="CVE-2021-44228", due_date="2026-01-01")])
+    epss = _StubSource([EpssRecord(cve_id="CVE-2021-44228", score=0.42, percentile=0.97)])
+    monkeypatch.setattr(
+        enrichment,
+        "build_feed_refresh_service",
+        lambda repository: FeedRefreshService(
+            repository, kev_source=kev, epss_source=epss
+        ),
+    )
+    enrichment.refresh_feeds_and_reapply(repo)  # first pass: rewrites and reapplies
+
+    called = []
+    monkeypatch.setattr(
+        enrichment.FindingEnricher,
+        "reapply_to_stored",
+        lambda self: called.append(True) or 0,
+    )
+    outcomes, updated = enrichment.refresh_feeds_and_reapply(repo)
+
+    assert all(o.unchanged for o in outcomes)
+    assert updated == 0
+    assert called == [], "nothing changed, so nothing needed reapplying"
+
+
+def test_one_unchanged_feed_still_reapplies(repo, monkeypatch):
+    """One feed unchanged and the other rewritten still needs the pass -- the
+    branch that decides this had no test of its own."""
+    from app.services import enrichment
+
+    kev = _StubSource([KevRecord(cve_id="CVE-2021-44228", due_date="2026-01-01")])
+    epss = _StubSource([EpssRecord(cve_id="CVE-2021-44228", score=0.42, percentile=0.97)])
+    monkeypatch.setattr(
+        enrichment,
+        "build_feed_refresh_service",
+        lambda repository: FeedRefreshService(
+            repository, kev_source=kev, epss_source=epss
+        ),
+    )
+    enrichment.refresh_feeds_and_reapply(repo)
+
+    # EPSS moves; KEV does not.
+    epss._records = [EpssRecord(cve_id="CVE-2021-44228", score=0.88, percentile=0.99)]
+
+    called = []
+    monkeypatch.setattr(
+        enrichment.FindingEnricher,
+        "reapply_to_stored",
+        lambda self: called.append(True) or 0,
+    )
+    outcomes, _ = enrichment.refresh_feeds_and_reapply(repo)
+
+    by_feed = {o.feed_name: o for o in outcomes}
+    assert by_feed[KEV_FEED].unchanged
+    assert not by_feed[EPSS_FEED].unchanged
+    assert called == [True], "a rewritten feed must reach the stored findings"

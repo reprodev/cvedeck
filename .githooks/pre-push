@@ -157,6 +157,14 @@ EOF
     # tool that quietly rewrites user.email, or a commit made before the local
     # identity was pinned, would leak one -- so check the commits rather than
     # trusting the config.
+    #
+    # Matched exactly, name and address, rather than as a noreply-shaped
+    # pattern. The earlier check accepted any '@users.noreply.github.com' and
+    # any 'noreply@' at all, which is a gate that passes almost everything a
+    # misconfigured tool would actually produce -- a different account's
+    # noreply, or a vendor's. It also never looked at the author name, and
+    # nothing looked at the commit message, which is where an agent's
+    # attribution trailer lands. Both are checked below.
     if [ "$IS_PUBLIC" -eq 1 ]; then
         # On a first push BASE is the empty *tree*, not a commit, and
         # `git log <tree>..<sha>` is an error. With stderr discarded that error
@@ -169,20 +177,21 @@ EOF
             IDENT_RANGE="$BASE..$LOCAL_SHA"
         fi
         BAD_IDENT=$(
-            git log --format='%H %ae%n%H %ce' $IDENT_RANGE |
-            grep -vE ' [^ ]+@users\.noreply\.github\.com$' |
-            grep -vE ' noreply@' |
+            git log --format='%H %an <%ae>%n%H %cn <%ce>' $IDENT_RANGE |
+            grep -vF " $CVEDECK_IDENTITY" |
             sort -u
         )
         if [ -n "$BAD_IDENT" ]; then
-            cvedeck_banner "a commit carries a non-noreply email address"
+            cvedeck_banner "a commit is not authored by the published identity"
             printf '%s\n' "$BAD_IDENT" | while IFS=' ' read -r _sha _mail; do
                 printf '    %s  %s\n' "$(git rev-parse --short "$_sha" 2>/dev/null || echo "$_sha")" "$_mail"
             done
             cat <<'EOF'
 
-  Author and committer emails are published and cannot be redacted later.
-  This repository's history uses the GitHub noreply address throughout.
+  Author and committer names and emails are published and cannot be redacted
+  later. Every commit in this repository's history is by one identity, and the
+  check is an exact match on it -- a different noreply address is still not
+  this project's.
 
   To fix the local identity for future commits:
 
@@ -191,6 +200,38 @@ EOF
 
   To rewrite what is already committed but not yet pushed, amend the commit
   (or rebase, for several) with --reset-author.
+
+EOF
+            FAIL=1
+        fi
+
+        # ---- attribution trailers, public remote only ----
+        #
+        # The identity check above reads the author and committer fields. An
+        # agent's attribution does not go there: it goes in the commit message,
+        # as a Co-Authored-By trailer or a "Generated with" line, and nothing
+        # on this machine has ever looked at commit messages. Those lines are
+        # published, permanent, and attribute the work to something that is not
+        # the copyright holder.
+        # -a: a commit message may contain a NUL or any other byte, and grep
+        # would otherwise call the stream binary and print "matches" instead of
+        # the offending line -- a refusal that does not say what it found.
+        BAD_TRAILER=$(
+            git log --format='%B' $IDENT_RANGE |
+            grep -iaE 'co-authored-by:|generated with \[?claude|^[[:space:]]*Signed-off-by:.*noreply@anthropic' |
+            sort -u
+        )
+        if [ -n "$BAD_TRAILER" ]; then
+            cvedeck_banner "a commit message carries an attribution line"
+            printf '%s
+' "$BAD_TRAILER" | sed 's/^/    /'
+            cat <<'EOF'
+
+  Commit messages are published and permanent. This project's commits carry no
+  co-author or tool-attribution lines.
+
+  To remove one, amend the commit (or rebase, for several) and delete the line
+  from the message.
 
 EOF
             FAIL=1

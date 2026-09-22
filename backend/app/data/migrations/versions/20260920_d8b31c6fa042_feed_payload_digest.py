@@ -34,4 +34,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("feed_refreshes", "payload_digest")
+    # Batched, like every other column drop here: SQLite gained a native
+    # ALTER TABLE ... DROP COLUMN only in 3.35, and the bundled SQLite in a
+    # supported Python is not something this project pins. Batch mode rebuilds
+    # the table instead, which works everywhere.
+    with op.batch_alter_table("feed_refreshes", schema=None) as batch_op:
+        batch_op.drop_column("payload_digest")

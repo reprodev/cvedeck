@@ -182,10 +182,13 @@ else {
                 if ($null -ne $health) {
                     Record 'demo mode reported at /api/health' ($health.capabilities.demo_mode -eq $true)
 
-                    # The refusal is the point of demo mode: each of these takes
-                    # a user-supplied address and connects to it, so a public
-                    # instance with them enabled is an open scanner.
-                    foreach ($route in @('/api/scans', '/api/discovery/sweep', '/api/scans/test-connection')) {
+                    # The refusal is the point of demo mode: the first three take
+                    # a user-supplied address and connect to it, so a public
+                    # instance with them enabled is an open scanner. The feed
+                    # refresh is here because it downloads several megabytes on
+                    # every press, without a login, and overwrites the seeded
+                    # fixture on the way through.
+                    foreach ($route in @('/api/scans', '/api/discovery/sweep', '/api/scans/test-connection', '/api/feeds/refresh')) {
                         $code = 0
                         try {
                             $resp = Invoke-WebRequest -Uri "http://localhost:8099$route" -Method POST `
@@ -198,6 +201,15 @@ else {
                         }
                         Record "POST $route refused with 403 (got $code)" ($code -eq 403)
                     }
+
+                    # The route is not the only way in. `cvedeck-admin
+                    # refresh-feeds` runs against the database inside the
+                    # container, where no HTTP guard applies, and 0.8.9 shipped
+                    # a demo whose CLI still replaced the fixture -- so probe
+                    # the path the HTTP check cannot see.
+                    $cli = docker exec cvedeck-verify cvedeck-admin refresh-feeds 2>&1 | Out-String
+                    Record 'cvedeck-admin refresh-feeds declines in demo mode' `
+                        ($LASTEXITCODE -eq 0 -and $cli -match 'demo mode' -and $cli -notmatch 'records')
 
                     $index = Invoke-WebRequest -Uri 'http://localhost:8099/' -TimeoutSec 5 -UseBasicParsing
                     $assets = [regex]::Matches($index.Content, '/assets/[A-Za-z0-9._-]+') |

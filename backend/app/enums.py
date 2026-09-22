@@ -121,11 +121,20 @@ class FeedStatus(str, Enum):
 
     ``NEVER_REFRESHED`` is the state of a deployment that has not yet pulled
     the feed at all, which is distinct from one whose pull failed.
+
+    ``SKIPPED`` is the one value that is **never persisted**: it reports a
+    refresh this instance declined to attempt, which is a fact about the
+    request rather than about the cache. Writing it to ``FeedRefresh`` would
+    overwrite the state of a catalogue nobody touched. It exists so a caller
+    can tell "refused to try" from "tried, and nothing had changed" -- two
+    outcomes that both write nothing, and that a single empty result made
+    indistinguishable.
     """
 
     NEVER_REFRESHED = "never_refreshed"
     OK = "ok"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class SyncStatus(str, Enum):

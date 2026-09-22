@@ -102,14 +102,29 @@ def main(argv: list[str] | None = None) -> int:
 def _refresh_feeds() -> int:
     """The same refresh as ``POST /api/feeds/refresh``, without going over HTTP.
 
-    Exits non-zero if either feed failed, so a scheduler reports it.
+    Exits non-zero if either feed failed, so a scheduler reports it. A refresh
+    declined because the instance is in demo mode is **not** a failure: the
+    documented deployment installs this command on a timer, and a timer that
+    reports failure every hour on a working demo trains its operator to ignore
+    it. It says what it did instead, because silently printing the usual
+    success line is how the operator would never learn their fixture was safe
+    only by accident (Req 15.6).
     """
     from ..data.repository import Repository
+    from ..enums import FeedStatus
     from ..services.enrichment import refresh_feeds_and_reapply
 
     with _session() as session:
         outcomes, updated = refresh_feeds_and_reapply(Repository(session))
         session.commit()
+
+    if outcomes and all(outcome.status is FeedStatus.SKIPPED for outcome in outcomes):
+        print(
+            "demo mode: no feed was refreshed. The seeded intel is a fixture "
+            "and refreshing would overwrite it permanently."
+        )
+        return 0
+
     for outcome in outcomes:
         detail = f" ({outcome.error_detail})" if outcome.error_detail else ""
         if outcome.unchanged:

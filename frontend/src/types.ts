@@ -220,8 +220,15 @@ export interface FindingChangeRow {
   remediationStatus: string | null;
 }
 
-/** Refresh state of one locally cached threat-intel feed. */
-export type FeedStatus = "never_refreshed" | "ok" | "failed";
+/**
+ * Refresh state of one locally cached threat-intel feed.
+ *
+ * `skipped` is never persisted and so never appears on `FeedHealth`: it
+ * reports a refresh the instance declined to attempt, which is a fact about
+ * the request rather than about the cache. A demo returns it; the dashboard
+ * never sees one, because the route is refused before it gets that far.
+ */
+export type FeedStatus = "never_refreshed" | "ok" | "failed" | "skipped";
 
 /**
  * Cache health for one intel feed (KEV or EPSS).

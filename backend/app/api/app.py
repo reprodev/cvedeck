@@ -34,7 +34,7 @@ from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.8.9"
+_VERSION = "0.8.10"
 
 
 def create_app(*, wire_production: bool = False) -> FastAPI:
@@ -159,8 +159,15 @@ async def _open_database_at_startup(_: FastAPI):
     exploitation status was deliberately never checked -- the unknown state the
     demo exists to show. An automatic refresh would enrich them on the first
     boot and quietly delete the illustration of the project's central
-    invariant. Pressing "Refresh intel" still works, which is the demo's own
-    intended sequence.
+    invariant.
+
+    Nothing else refreshes a demo either, and this docstring used to say
+    otherwise: "pressing 'Refresh intel' still works" was true when it was
+    written and became the reasoning that left the route open to an
+    unauthenticated visitor. The refusal now lives in
+    :func:`~app.services.enrichment.refresh_feeds_and_reapply`, ahead of the
+    download, so every trigger passes it -- this hook, the HTTP route and the
+    CLI alike (Req 15.6).
     """
     from ..services.feed_scheduler import (
         start_periodic_refresh,

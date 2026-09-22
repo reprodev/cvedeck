@@ -194,7 +194,7 @@ any hosts:
 docker run -d -p 3325:8000 -e CVEDECK_DEMO_MODE=true ghcr.io/reprodev/cvedeck:latest
 ```
 
-This seeds a fictional twelve-host fleet, including a host that has never been
+This seeds a fictional thirteen-host fleet, including a host that has never been
 scanned, one whose credentials failed, one scanned while an advisory source was
 down, and findings whose exploitation status was never checked. It arrives
 ranked exactly as the screenshots above, carrying its own fictional KEV and EPSS

@@ -22,6 +22,14 @@
 # seen. It makes "first push" and "incremental push" one code path.
 CVEDECK_EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
 
+# The one identity every published commit carries, author and committer alike.
+# Written here rather than matched as a pattern: "any GitHub noreply address"
+# accepts a different account's, and "any noreply@" accepts a vendor's. Both
+# are exactly the mistakes a misconfigured tool makes, and both are permanent
+# once pushed. This is also the copyright holder named in LICENSE, so it is not
+# a preference -- it is who the work is by.
+CVEDECK_IDENTITY="reprodev <8764255+reprodev@users.noreply.github.com>"
+
 # Personal patterns live outside the repository on purpose: a tracked file
 # naming the exact hosts that must never be published would publish them, which
 # defeats the point. Absent is fine; the generic checks below still run.

@@ -440,7 +440,7 @@ docker run -d -p 3325:8000 -e CVEDECK_DEMO_MODE=true ghcr.io/reprodev/cvedeck:la
 
 It does two things.
 
-**It seeds a fictional twelve-host fleet** into an empty database, covering the
+**It seeds a fictional thirteen-host fleet** into an empty database, covering the
 states worth seeing: a host that has never been scanned, one whose credentials
 failed, one that could not be reached, one scanned while an advisory source was
 down, a host last scanned a month ago, findings CISA lists as actively
@@ -449,18 +449,34 @@ report as unknown. Seeding is guarded on an empty fleet, so restarting the
 container does not duplicate it and enabling the flag against a database with
 real results in it does nothing.
 
-**It refuses every route that reaches the network** -- `POST /api/scans`,
-`POST /api/discovery/sweep`, and `POST /api/scans/test-connection` all return
-403. This is the more important half. Those routes take a hostname or a CIDR
+**It refuses every route that reaches the network.** `POST /api/scans`,
+`POST /api/discovery/sweep`, `POST /api/scans/test-connection`,
+`POST /api/feeds/refresh` and `DELETE /api/host-keys/{hostname}` all return
+403. This is the more important half. The first three take a hostname or a CIDR
 plus credentials and connect to them, so a public instance with them enabled is
 an SSH/WinRM client and port scanner that any visitor can aim at any address,
-with the traffic originating from your server rather than theirs.
+with the traffic originating from your server rather than theirs. The feed
+refresh downloads several megabytes from CISA and FIRST on every press, with no
+login and no rate limit, and rewrites the demo's own seeded intel on the way
+through.
+
+The refusals are enforced in two places, not one. The routes above are guarded
+individually, and `refresh_feeds_and_reapply` refuses before it downloads
+anything, whatever called it -- which is what also covers `cvedeck-admin
+refresh-feeds`, run inside the container where no HTTP guard applies. 0.8.9
+guarded only the route and placed the second check after the download, so the
+CLI still replaced the fixture; the position of that check is the fix in
+0.8.10.
 
 The dashboard shows a banner while demo mode is on, and
 `GET /api/health` reports it under `capabilities.demo_mode`.
 
-**It needs no login.** A demo is meant to be clicked around by strangers, and
-the routes that could do harm are already refused.
+**It needs no login.** A demo is meant to be clicked around by strangers. What
+makes that safe is the list above and the two places it is enforced -- named
+here rather than summarised as "the routes that could do harm are refused",
+because that sentence is the shape of claim this project has twice found to be
+out of date with the code it described. If you add a route that reaches the
+network, it does not inherit this: guard it, and add it to that list.
 
 ## Security
 

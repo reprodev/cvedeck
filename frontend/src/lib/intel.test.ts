@@ -16,6 +16,7 @@ import {
   formatEpssPercentile,
   formatEpssScore,
   formatFeedAge,
+  hostExploitSummary,
   isKnownExploited,
   sortByRisk,
 } from "./intel";
@@ -322,5 +323,81 @@ describe("feedLabel", () => {
 
   it("passes an unknown name through unchanged", () => {
     expect(feedLabel("something-new")).toBe("something-new");
+  });
+});
+
+describe("hostExploitSummary", () => {
+  it("reports exploited when anything is confirmed", () => {
+    expect(
+      hostExploitSummary([
+        finding({ kevListed: true }),
+        finding({ kevListed: null }),
+      ]).state,
+    ).toBe("exploited");
+  });
+
+  it("clears a host only when every finding was checked", () => {
+    expect(
+      hostExploitSummary([
+        finding({ kevListed: false }),
+        finding({ kevListed: false }),
+      ]).state,
+    ).toBe("clear");
+  });
+
+  it("reports partial when some findings were never checked", () => {
+    // The whole reason this helper exists. Computed as "was anything
+    // checked?", this case returned clear -- a confident all-clear resting on
+    // one answered question out of three.
+    const summary = hostExploitSummary([
+      finding({ kevListed: false }),
+      finding({ kevListed: null }),
+      finding({ kevListed: null }),
+    ]);
+
+    expect(summary.state).toBe("partial");
+    expect(summary.checked).toBe(1);
+    expect(summary.total).toBe(3);
+  });
+
+  it("reports unknown when nothing was checked", () => {
+    expect(
+      hostExploitSummary([finding({ kevListed: null })]).state,
+    ).toBe("unknown");
+  });
+
+  it("never reports clear for a host with no findings at all", () => {
+    // Zero findings is not a clean bill of health: it is a host nothing has
+    // been established about.
+    expect(hostExploitSummary([]).state).toBe("unknown");
+  });
+});
+
+describe("enrichmentWarning", () => {
+  const dead = (name: string) => ({
+    feedName: name,
+    status: "never_refreshed" as const,
+    lastRefreshedAt: null,
+    lastAttemptedAt: null,
+    recordCount: 0,
+    errorDetail: null,
+    stale: true,
+    usable: false,
+  });
+
+  it("tells a user who can refresh to do so", () => {
+    expect(enrichmentWarning([dead("kev"), dead("epss")], true)).toMatch(
+      /Refresh the intel feeds/,
+    );
+  });
+
+  it("withholds the instruction where there is no control to follow it with", () => {
+    // A demo refuses the refresh route and offers no button, so the sentence
+    // sent anyone who took it seriously looking for something that is not
+    // there.
+    const message = enrichmentWarning([dead("kev"), dead("epss")], false);
+
+    expect(message).toMatch(/never been loaded/);
+    expect(message).not.toMatch(/Refresh the intel feeds/);
   });
 });

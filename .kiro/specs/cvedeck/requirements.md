@@ -232,6 +232,22 @@ incomplete, so that I do not mistake a partial scan for a clean host.
    produced it, and that scan may be weeks old, a refresh that updates only the
    cache leaves the dashboard stating an exploitation status from a catalogue
    the system no longer holds (extends the enrichment invariant).
+16. WHERE THE Web_Dashboard summarises exploitation across a set of
+   CVE_Findings — a host, a group, a fleet — it SHALL present that summary as
+   clear only WHERE every finding in the set was checked against the
+   catalogue, and otherwise SHALL present it as incomplete and SHALL state how
+   many were checked; since a summary that asks only whether *any* finding was
+   checked reports a confident "none actively exploited" over a set that is
+   mostly unchecked, and a reader reads the headline rather than auditing the
+   rows beneath it (extends the enrichment invariant).
+17. WHERE THE CVE_Scanner_System declines to rewrite a cached threat-intel feed
+   because the downloaded records match the digest it recorded, it SHALL first
+   confirm that the cached catalogue holds records, counting them rather than
+   reading a count recorded alongside the digest; since that count is written
+   by the same operation that writes the digest and therefore agrees with it
+   whatever the catalogue contains, an emptied catalogue would report itself
+   usable and every finding would be recorded as not exploited on the authority
+   of no catalogue at all (extends the enrichment invariant).
 
 ### Requirement 11: SSH key-based authentication
 
@@ -357,6 +373,14 @@ want it to be safe to expose.
    others are not (extends Req 10 and the enrichment invariant).
 7. THE system SHALL default to demonstration mode being disabled, and SHALL
    treat an unrecognised setting as disabled.
+8. WHERE demonstration mode is enabled THEN the system SHALL NOT download a
+   threat-intel feed or replace a cached one, on any trigger — the HTTP route,
+   the command-line tool, or its own schedule — and SHALL refuse **before**
+   performing either, reporting the refusal rather than an ordinary success;
+   since the seeded intel is a fixture whose authored values include the
+   deliberately unchecked findings of Req 15.6, re-seeding is guarded on an
+   empty fleet and so cannot restore it, and a guard placed after the download
+   skips only what follows it while the catalogue has already been replaced.
 
 ### Requirement 16: Access control
 

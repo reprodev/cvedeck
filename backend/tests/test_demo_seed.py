@@ -403,3 +403,21 @@ def test_restamping_an_unseeded_database_does_nothing(session):
 
     assert refresh_demo_feed_timestamps(session) is False
     assert not FindingEnricher(Repository(session)).feed_health(KEV_FEED).usable
+
+
+def test_the_documented_host_count_is_what_gets_seeded(session):
+    """The number three documents state, pinned to the fixture that states it.
+
+    README, DEPLOYMENT and the development story all name this figure. They
+    said "twelve" for a release after the Windows host took the count to
+    thirteen, because nothing connected the prose to the list. AGENTS.md
+    section 0 forbids writing counts into documents for exactly this reason;
+    where one is genuinely useful to a reader, this is the test that keeps it
+    true.
+    """
+    from app.data.demo_seed import _HOSTS
+
+    seed_demo_fleet(session)
+
+    assert len(_HOSTS) == 13
+    assert session.query(TargetMachine).count() == 13

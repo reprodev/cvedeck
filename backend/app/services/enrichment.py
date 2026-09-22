@@ -288,25 +288,48 @@ class FeedRefreshService:
         just now, and reporting it as stale because nothing had changed would
         invert the meaning of the age the dashboard shows.
 
-        Guarded on the cache being non-empty as well as on the digest, so a
-        database whose catalogue was cleared out from under the refresh row
-        rewrites rather than trusting a digest with nothing behind it.
+        Guarded on the cached catalogue actually holding rows, as well as on
+        the digest, so a database whose catalogue was cleared out from under the
+        refresh row rewrites rather than trusting a digest with nothing behind
+        it. The count is taken from the catalogue tables, never from
+        ``FeedRefresh.record_count``: that column is written by the same
+        statement that writes the digest, so it agrees with the digest by
+        construction and can witness nothing. Trusting it let an emptied cache
+        report itself usable, and every finding was then stamped *not exploited*
+        on the authority of no catalogue at all -- the enrichment invariant
+        inverted (Req 10.14, 10.15, 10.17).
         """
         row = self._repository.get_feed_refresh(feed)
-        if row is None or row.payload_digest != digest or row.record_count <= 0:
+        if row is None or row.payload_digest != digest:
+            return None
+
+        cached = self._count_cached_records(feed)
+        if cached <= 0:
+            _LOGGER.warning(
+                "%s digest matches but the cached catalogue is empty; rewriting",
+                feed,
+            )
             return None
 
         _LOGGER.info("%s feed is unchanged (%d records); skipping the rewrite",
-                     feed, row.record_count)
+                     feed, cached)
         self._repository.record_feed_refresh(
             feed,
             status=FeedStatus.OK,
-            record_count=row.record_count,
+            record_count=cached,
             payload_digest=digest,
         )
         return FeedRefreshOutcome(
-            feed, FeedStatus.OK, record_count=row.record_count, unchanged=True
+            feed, FeedStatus.OK, record_count=cached, unchanged=True
         )
+
+    def _count_cached_records(self, feed: str) -> int:
+        """How many records this feed's catalogue actually holds."""
+        if feed == KEV_FEED:
+            return self._repository.count_kev_entries()
+        if feed == EPSS_FEED:
+            return self._repository.count_epss_scores()
+        raise ValueError(f"unknown feed: {feed}")
 
     def _record_failure(self, feed: str, exc: Exception) -> FeedRefreshOutcome:
         """Record a failed refresh, leaving the existing cache untouched."""
@@ -554,14 +577,25 @@ def refresh_feeds_and_reapply(
     succeeded, and :meth:`FindingEnricher.reapply_to_stored` already declines to
     apply a feed it cannot trust, so there is nothing here to decide.
 
-    **Demo mode never reapplies** (Req 15.6). The seeded fleet is a fixture with
-    authored exploitation values, including findings deliberately left unchecked,
-    and reapplying a real catalogue over it destroys the one thing the demo is
-    there to show. The HTTP route is refused outright by ``_demo_guard``, but a
-    route dependency does nothing for ``cvedeck-admin refresh-feeds``, which runs
-    against the database directly inside the container. 0.8.8 switched off the
-    periodic refresher and stopped there, which left two other ways in; the check
-    belongs here, where every path passes.
+    **Demo mode refreshes nothing at all** (Req 15.6). The seeded fleet is a
+    fixture with authored exploitation values, including findings deliberately
+    left unchecked, and reapplying a real catalogue over it destroys the one
+    thing the demo is there to show. The HTTP route is refused outright by
+    ``_demo_guard``, but a route dependency does nothing for ``cvedeck-admin
+    refresh-feeds``, which runs against the database directly inside the
+    container. 0.8.8 switched off the periodic refresher and stopped there,
+    which left two other ways in; the check belongs here, where every path
+    passes.
+
+    **The check comes before the download, and that position is the
+    requirement (Req 15.8).** 0.8.9 placed it after, which skipped only the
+    reapply: the
+    feeds were still fetched and both catalogues still deleted and rewritten,
+    so the CLI destroyed the demo's own seeded intel -- permanently, since
+    re-seeding is guarded on an empty fleet -- and left a payload digest behind
+    with no reapply to match it, which then suppressed the first real refresh
+    after demo mode was switched off. A guard downstream of the side effect is
+    not a guard.
 
     Does not commit; the caller owns the transaction.
 
@@ -570,13 +604,29 @@ def refresh_feeds_and_reapply(
     """
     from ..config import demo_mode
 
-    outcomes = build_feed_refresh_service(repository).refresh_all()
     if demo_mode():
-        return outcomes, 0
+        _LOGGER.info("demo mode: declining to refresh the threat-intel feeds")
+        return [
+            FeedRefreshOutcome(
+                feed,
+                FeedStatus.SKIPPED,
+                error_detail="demo mode: the seeded intel is a fixture and is never refreshed",
+            )
+            for feed in (KEV_FEED, EPSS_FEED)
+        ], 0
+
+    outcomes = build_feed_refresh_service(repository).refresh_all()
     # Nothing a reapply could write would differ, so skip the fleet-wide scan
     # (Req 10.14). Only when every outcome says so: one feed unchanged and the
     # other rewritten still needs the pass.
     if outcomes and all(outcome.unchanged for outcome in outcomes):
         return outcomes, 0
-    updated = FindingEnricher(repository).reapply_to_stored()
+    # The configured age, not the constructor default, so this path cannot
+    # disagree with the route and the scheduler about what "stale" means the
+    # day staleness starts gating anything.
+    from ..config import feed_max_age_hours
+
+    updated = FindingEnricher(
+        repository, max_age_hours=feed_max_age_hours()
+    ).reapply_to_stored()
     return outcomes, updated

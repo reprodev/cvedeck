@@ -810,6 +810,25 @@ class Repository:
         self._session.flush()
         return len(scores)
 
+    def count_kev_entries(self) -> int:
+        """Count the KEV entries actually cached.
+
+        Distinct from ``FeedRefresh.record_count``, which is written by
+        :meth:`record_feed_refresh` alongside the digest and therefore reports
+        what the last refresh *believed* it wrote. Only a count of the rows can
+        witness the catalogue, which is what the unchanged-feed short-circuit
+        needs before it trusts a digest (Req 10.14).
+        """
+        return int(
+            self._session.execute(select(func.count()).select_from(KevEntry)).scalar_one()
+        )
+
+    def count_epss_scores(self) -> int:
+        """Count the EPSS scores actually cached. See :meth:`count_kev_entries`."""
+        return int(
+            self._session.execute(select(func.count()).select_from(EpssScore)).scalar_one()
+        )
+
     def record_feed_refresh(
         self,
         feed_name: str,
