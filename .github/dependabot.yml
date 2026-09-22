@@ -25,6 +25,14 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # jsdom 30 drops Node 24.0 through 24.14, which this project supports and
+      # which carries no security reason to abandon. The decision was made once
+      # and then re-made every week, because nothing here recorded it: a major
+      # jsdom PR reopened, got closed, and came back. Recorded now. Minor and
+      # patch updates still arrive.
+      - dependency-name: jsdom
+        update-types: [version-update:semver-major]
     groups:
       frontend-dev-tooling:
         applies-to: version-updates
@@ -34,6 +42,24 @@ updates:
         applies-to: version-updates
         dependency-type: production
         update-types: [minor, patch]
+      # React, its DOM renderer and both type packages move as one set or not
+      # at all -- `@types/react-dom@18` peer-requires `@types/react@^18`, so a
+      # major that takes only half the set produces a lockfile npm cannot
+      # resolve. That is what happened: a PR bumped react and @types/react to
+      # 19, left react-dom and @types/react-dom at 18, and failed at `npm ci`
+      # before any test ran. The failure read as "React 19 is hard" when it was
+      # only ever a group that split a set.
+      #
+      # Majors included deliberately, unlike every other group here: a major is
+      # exactly when the set must not be split.
+      react:
+        applies-to: version-updates
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+        update-types: [major, minor, patch]
 
   - package-ecosystem: github-actions
     directory: /

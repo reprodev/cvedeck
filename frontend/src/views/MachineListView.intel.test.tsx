@@ -249,3 +249,100 @@ describe("exploitation is the only thing painted red", () => {
     expect(tone("Actively exploited")).toBeNull();
   });
 });
+
+describe("the fleet table's exploited column", () => {
+  function cellFor(hostname: string): HTMLElement {
+    const row = screen.getByText(hostname).closest("tr") as HTMLElement;
+    return within(row).getByText((_, el) =>
+      el?.parentElement?.classList.contains("kev-cell") === true,
+    ).parentElement as HTMLElement;
+  }
+
+  it("prints a plain zero only when every finding was checked", () => {
+    render(
+      <MachineListView
+        machines={[
+          makeMachine({ machineId: "m1", hostname: "all-checked", kevCount: 0, kevUncheckedCount: 0 }),
+        ]}
+        feeds={HEALTHY_FEEDS}
+      />,
+    );
+
+    expect(within(cellFor("all-checked")).getByTitle(/No findings on CISA KEV/i))
+      .toHaveTextContent("0");
+  });
+
+  it("does not clear a host holding unchecked findings", () => {
+    // The fleet twin of the host-summary bug 0.8.10 fixed. This cell gated its
+    // zero on fleet-wide feed health, which answers a weaker question: a host
+    // re-scanned while a feed was down carries unchecked findings however
+    // healthy the feed looks afterwards, and the column printed a confident 0
+    // over them.
+    render(
+      <MachineListView
+        machines={[
+          makeMachine({
+            machineId: "m1",
+            hostname: "partly-checked",
+            kevCount: 0,
+            kevUncheckedCount: 4,
+            // Twenty findings, four of them unchecked: some were asked about.
+            cveCounts: { critical: 2, unscored: 1, high: 9, medium: 5, low: 3 },
+          }),
+        ]}
+        feeds={HEALTHY_FEEDS}
+      />,
+    );
+
+    const cell = cellFor("partly-checked");
+    expect(within(cell).getByText(/0 so far/)).toBeInTheDocument();
+    expect(
+      within(cell).getByTitle(/never checked against CISA's KEV catalogue/i),
+    ).toBeInTheDocument();
+  });
+
+  it("still leads with the count when something is confirmed exploited", () => {
+    // Unchecked findings alongside a confirmed one must not soften it: the
+    // confirmed count is the fact that needs acting on.
+    render(
+      <MachineListView
+        machines={[
+          makeMachine({ machineId: "m1", hostname: "exploited", kevCount: 2, kevUncheckedCount: 7 }),
+        ]}
+        feeds={HEALTHY_FEEDS}
+      />,
+    );
+
+    const cell = cellFor("exploited");
+    expect(within(cell).getByText("2")).toBeInTheDocument();
+    expect(within(cell).queryByText(/0 so far/)).not.toBeInTheDocument();
+  });
+});
+
+describe("a host nobody checked at all", () => {
+  it("shows a dash, not a partial answer", () => {
+    // "0 so far" implies somebody asked. On a host where nobody did, that is
+    // its own small untruth -- and the host page has always distinguished the
+    // two, so the fleet must as well.
+    render(
+      <MachineListView
+        machines={[
+          makeMachine({
+            machineId: "m1",
+            hostname: "never-checked",
+            kevCount: 0,
+            kevUncheckedCount: 5,
+            cveCounts: { critical: 0, unscored: 0, high: 5, medium: 0, low: 0 },
+          }),
+        ]}
+        feeds={HEALTHY_FEEDS}
+      />,
+    );
+
+    const row = screen.getByText("never-checked").closest("tr") as HTMLElement;
+    expect(within(row).queryByText(/0 so far/)).not.toBeInTheDocument();
+    expect(
+      within(row).getByTitle(/None of this host's findings were checked/i),
+    ).toBeInTheDocument();
+  });
+});

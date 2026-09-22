@@ -162,6 +162,10 @@ _MACHINE_SUMMARY_KEYS = {
     # which on a fleet whose intel feeds never loaded is not the same as "none
     # exist" -- GET /api/feeds is what distinguishes them.
     "kev_count": int,
+    # Findings never checked against the catalogue. What makes a kev_count of
+    # zero safe to render as "none exploited": a host holding unchecked
+    # findings has not been cleared, whatever fleet-wide feed health says.
+    "kev_unchecked_count": int,
     # The pinned SSH host key's fingerprint; None until one is pinned.
     "host_key_fingerprint": (str, type(None)),
     # The key's type, so an operator knows which host key file to compare.

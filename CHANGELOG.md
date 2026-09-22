@@ -8,6 +8,98 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.11] - 2026-09-22
+
+0.8.10 fixed three guards that could not see what they guarded. This release is
+what happened when that question was asked of the checks themselves: two of the
+design-language guards were selecting their subjects by whether those subjects
+already complied, the fleet table was making the same claim the host page had
+just stopped making, and the demo could not show the state 0.8.10 added.
+
+### Fixed
+
+- **The fleet table no longer clears a host holding unchecked findings.** The
+  Exploited column gated its zero on fleet-wide feed health, which answers a
+  weaker question than the column asks: a host re-scanned while a feed was down
+  carries findings nobody checked, however healthy that feed looks afterwards.
+  Such a host showed a confident **0** -- the same claim the host page stopped
+  making in 0.8.10, one level up, and 0.8.10's own notes described this view as
+  "already strict". It is strict about the feed, not about the host.
+
+  The column now carries the same four states as the host page: a count when
+  something is confirmed, a plain zero only when every finding was checked,
+  **0 so far** when some were and none are listed, and a dash when none were
+  checked at all -- because "0 so far" implies somebody asked, which on a host
+  where nobody did is its own small untruth. `GET /api/machines` carries
+  `kev_unchecked_count` so the distinction is available to anything reading the
+  API (Req 10.16).
+
+- **Three tables were outside the mobile card system, with labels nothing read.**
+  The discovery sweep's host table and both of Settings' -- API tokens and pinned
+  host keys -- carried correct `data-label` attributes that did nothing, because
+  only `.table-container` prints them at phone width. All three now reflow into
+  cards like every other table.
+
+- **The guard that should have caught that was selecting on compliance.** Its
+  scope test was `if (!text.includes("table-container")) continue;` -- so a table
+  was examined only once it was already inside the card system, and every table
+  left out of it was exempt precisely because it was the offender. It selects on
+  `<table` now, and a companion check requires every table to be in the card
+  system at all.
+
+- **The emoji guard never read the stylesheet.** It scanned the components and
+  not `index.css`, which is the one file that can inject a pictograph by
+  `content:` and so bypass the palette by construction -- the exact reasoning in
+  the guard's own header comment. There were none; the hole is closed while it is
+  still empty.
+
+- **Two findings with no CVSS score compared as `NaN`.** `compareBySeverity`
+  returned `(b ?? Infinity) - (a ?? Infinity)`, and every finding in the Unscored
+  band lacks a score by definition, so every comparison within that band produced
+  one. It behaved correctly only because `Array.prototype.sort` coerces a NaN
+  comparison to zero. The ordering rule it implements -- a finding whose advisory
+  published a band but no number leads its band rather than falling to the bottom
+  (Req 10.11) -- had no test at all: inverting it left every suite green. Both are
+  now explicit and both are pinned.
+
+### Added
+
+- **The demo shows a partially checked host.** 0.8.10 introduced the state and
+  the fixture could not produce it: every seeded host either had confirmed
+  exploited findings or had never been checked. `cache-01.lan` is now a host
+  scanned again while the KEV feed was unusable -- the findings it already had
+  are enriched, the ones that scan added were never checked, and those are the
+  four this catalogue lists as exploited. So every count that can honestly be
+  computed about it reads zero while the host genuinely carries exploited
+  findings, which is the case worth being able to see (Req 10.16, 15.6).
+
+- **Contributors are told how their change gets published.** The publishing
+  model means a contributor's commit cannot survive into this repository's
+  history: it is a snapshot, re-authored, and the push hooks enforce the release
+  identity. `CONTRIBUTING.md` now says so plainly, along with the credit that is
+  actually on offer -- by name in this changelog -- rather than leaving it to be
+  discovered after the work is done.
+
+### Changed
+
+- **Dependabot groups React with its own renderer and types.** A major update
+  moved `react` and `@types/react` to 19 while leaving `react-dom` and
+  `@types/react-dom` at 18, and `@types/react-dom@18` peer-requires
+  `@types/react@^18` -- so the branch could not install and CI failed before a
+  test ran. The failure read as "React 19 is hard"; it was a group that split a
+  set which must move together. Majors are included in that group deliberately,
+  unlike every other group here, because a major is exactly when the set must not
+  be split.
+- **A jsdom major is ignored, with the reason recorded.** jsdom 30 drops Node
+  24.0 through 24.14 for no security benefit. That was decided once and re-made
+  weekly, because nothing told Dependabot.
+- Dependencies: alembic 1.20.0, SQLAlchemy 2.0.54, uvicorn 0.53.0, psycopg 3.3.5,
+  hypothesis 6.168.0, fast-check 4.10, vitest 5.0.1, `@testing-library/user-event`
+  14.6.7. TypeScript 7 and React 19 are deliberately not taken here; each is its
+  own change.
+
+---
+
 ## [0.8.10] - 2026-09-22
 
 0.8.9 said the demo "never touches the network" and that its guard covered

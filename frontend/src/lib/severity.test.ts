@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { filterBySeverity, groupCountsBySeverity } from "./severity";
-import type { CveFinding } from "../types";
+import {
+  compareBySeverity,
+  filterBySeverity,
+  groupCountsBySeverity,
+} from "./severity";
+import type { CveFinding, Severity } from "../types";
 
 function finding(cveId: string, severity: CveFinding["severity"]): CveFinding {
   return {
@@ -89,5 +93,55 @@ describe("groupCountsBySeverity", () => {
     const snapshot = [...input];
     groupCountsBySeverity(input);
     expect(input).toEqual(snapshot);
+  });
+});
+
+describe("compareBySeverity and the unscored band", () => {
+  const f = (severity: Severity, cvssScore: number | null) =>
+    ({ severity, cvssScore }) as Pick<CveFinding, "severity" | "cvssScore">;
+
+  it("never returns NaN, for any pair", () => {
+    // Every finding in the Unscored band lacks a score, so every comparison
+    // within it went through `Infinity - Infinity`. Sort coerces a NaN result
+    // to 0, which is the right answer by accident -- and the docstring on this
+    // very function warns against producing one.
+    const samples = [
+      f("critical", 9.8),
+      f("unscored", null),
+      f("unscored", null),
+      f("high", null),
+      f("high", 7.5),
+      f("low", null),
+    ];
+    for (const a of samples) {
+      for (const b of samples) {
+        expect(Number.isNaN(compareBySeverity(a, b))).toBe(false);
+      }
+    }
+  });
+
+  it("treats two unscored findings as equal rather than unordered", () => {
+    expect(compareBySeverity(f("unscored", null), f("unscored", null))).toBe(0);
+  });
+
+  it("leads a band with the finding that published no number", () => {
+    // Req 10.11: a band with no number could be anywhere in that band,
+    // including its top, so it keeps its place rather than falling to the
+    // bottom of the list. This was the specified behaviour with no test behind
+    // it -- inverting it left every suite green.
+    const sorted = [f("high", 7.5), f("high", null), f("high", 8.8)].sort(
+      compareBySeverity,
+    );
+
+    expect(sorted[0].cvssScore).toBeNull();
+    expect(sorted.map((x) => x.cvssScore)).toEqual([null, 8.8, 7.5]);
+  });
+
+  it("puts the unscored band below critical and above high", () => {
+    const sorted = [f("high", 9.9), f("unscored", null), f("critical", 9.0)].sort(
+      compareBySeverity,
+    );
+
+    expect(sorted.map((x) => x.severity)).toEqual(["critical", "unscored", "high"]);
   });
 });

@@ -2878,8 +2878,18 @@ th {
     border-bottom: 1px solid var(--border);
   }
   .table-container td.host-col::before,
-  .table-container td.select-col::before {
+  .table-container td.select-col::before,
+  .table-container td.token-actions::before {
     display: none;
+  }
+
+  /* A row of buttons needs no label: the buttons say what they do, and
+     "ACTIONS Revoke" reads worse than "Revoke". Right-aligned in a table,
+     it sits with the rest of the card here. */
+  .table-container td.token-actions {
+    text-align: left;
+    white-space: normal;
+    padding-top: 0.45rem;
   }
   .table-container td.select-col {
     border-bottom: 0;
@@ -3337,10 +3347,10 @@ th {
   user-select: all;
 }
 
-.table-scroll {
-  overflow-x: auto;
-}
-
+/* `.table-scroll` used to live here: a bare overflow-x scroller, which meant
+   the token and pinned-key tables kept their header rows at phone width and
+   their data-label attributes did nothing. They use `.table-container` now,
+   like every other table, so they reflow into cards. */
 .token-table {
   width: 100%;
 }

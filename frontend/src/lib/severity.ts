@@ -30,6 +30,15 @@ export const SEVERITY_RANK: Readonly<Record<Severity, number>> =
  *
  * Never compares cvssScore directly — subtracting a null yields NaN, which
  * leaves the sort order unspecified (Req 10.11, 10.12).
+ *
+ * The two-unscored case is returned explicitly rather than falling out of the
+ * arithmetic. `Infinity - Infinity` is NaN, and every finding in the Unscored
+ * band lacks a score by definition, so *every* comparison within that band
+ * produced one. It happened to behave: `Array.prototype.sort` coerces a NaN
+ * comparison to 0, which is the right answer here. But "correct because the
+ * specification rounds our mistake in our favour" is not a property to rest a
+ * ranking on, and the paragraph directly above already warns against producing
+ * the NaN this function then produced.
  */
 export function compareBySeverity(
   a: Pick<CveFinding, "severity" | "cvssScore">,
@@ -37,7 +46,15 @@ export function compareBySeverity(
 ): number {
   const byBand = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
   if (byBand !== 0) return byBand;
-  return (b.cvssScore ?? Infinity) - (a.cvssScore ?? Infinity);
+
+  const aScore = a.cvssScore ?? null;
+  const bScore = b.cvssScore ?? null;
+  if (aScore === null && bScore === null) return 0;
+  // An unscored finding leads its band: the advisory published a band and no
+  // number, so it could be anywhere in that band -- including the top of it.
+  if (aScore === null) return -1;
+  if (bScore === null) return 1;
+  return bScore - aScore;
 }
 
 /**

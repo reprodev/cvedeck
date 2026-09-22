@@ -2,13 +2,13 @@
 # Development and test dependencies live in requirements-dev.txt.
 fastapi==0.141.1
 pydantic==2.13.5
-sqlalchemy==2.0.52
-alembic==1.16.5
+sqlalchemy==2.0.54
+alembic==1.20.0
 paramiko==5.0.0
 pywinrm==0.5.0
-uvicorn==0.52.4
+uvicorn==0.53.0
 httpx==0.28.1
 
 # PostgreSQL driver, used when CVEDECK_DB_URL points at postgresql+psycopg://.
 # Harmless when the deployment stays on the default SQLite database.
-psycopg[binary]==3.3.4
+psycopg[binary]==3.3.5

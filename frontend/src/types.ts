@@ -76,6 +76,15 @@ export interface MachineSummary {
    */
   kevCount: number;
   /**
+   * Findings on this host never checked against the catalogue.
+   *
+   * What makes `kevCount: 0` safe to render as "none exploited". The fleet
+   * view used to gate that zero on fleet-wide feed health alone, which answers
+   * a different question: a host re-scanned while a feed was down carries
+   * unchecked findings whatever the feed reports afterwards (Req 10.16).
+   */
+  kevUncheckedCount: number;
+  /**
    * SHA-256 fingerprint of the SSH host key pinned for this host, or null when
    * nothing is pinned yet (Req 17.8).
    */

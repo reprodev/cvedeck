@@ -201,6 +201,32 @@ do not always match the revision chain, which has caught people out.
 7. Open the PR. Describe what changes for a *user*, not only what changed in the
    code.
 
+### How your change gets published, and how you are credited
+
+Worth knowing before you open a PR, because it is unusual and you should hear
+it from us rather than discover it.
+
+This repository's history is **published as snapshots**. Development happens in
+a private repository, and each release is exported into this one as a single
+commit. That is what keeps unpublished work, local paths and machine-specific
+tooling out of a public history that cannot be rewritten later — but it has a
+consequence for contributions: **a merged commit does not survive as your
+commit.** Every commit here is authored by the maintainer's release identity,
+and the push hooks enforce that, so there is no path by which your authorship
+reaches this repository's log.
+
+So a merged contribution is re-applied in the private repository and published
+in the next release snapshot, and **you are credited by name in `CHANGELOG.md`**
+for what you changed. That is the durable credit this project can actually
+offer. If you would rather not contribute on those terms, that is a reasonable
+position and no hard feelings — better to know now than after the work.
+
+Two practical notes. Your PR may be closed as *superseded* rather than merged
+once the change has landed that way; that is not a rejection, and the PR stays
+linked from the changelog entry. And if a PR *is* merged here directly, the
+publishing sync will refuse the next release until the two histories are
+reconciled by hand — so expect a maintainer to ask before merging anything.
+
 ### Commit messages
 
 Conventional Commits — `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`,

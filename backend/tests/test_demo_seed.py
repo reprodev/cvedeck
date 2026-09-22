@@ -421,3 +421,53 @@ def test_the_documented_host_count_is_what_gets_seeded(session):
 
     assert len(_HOSTS) == 13
     assert session.query(TargetMachine).count() == 13
+
+
+def test_a_partially_checked_host_is_seeded(session):
+    """The demo must show the state 0.8.10 exists to distinguish.
+
+    A host with some findings checked against the catalogue and some never
+    checked, and no confirmed exploited ones among the answers it does have.
+    Every count that can honestly be computed about it reads zero, and the host
+    nonetheless carries exploited findings -- which is exactly why "none
+    actively exploited" must not be said about it (Req 10.16, 15.6).
+
+    Without this the partially-checked presentation appears nowhere a visitor
+    can see it, and Req 15.6 is met only per row, never per host.
+    """
+    from app.data.demo_seed import _PARTIALLY_ENRICHED_HOSTS
+
+    seed_demo_fleet(session)
+
+    [hostname] = _PARTIALLY_ENRICHED_HOSTS
+    machine = session.query(TargetMachine).filter_by(hostname=hostname).one()
+    findings = session.query(CveFinding).filter_by(machine_id=machine.id).all()
+
+    checked = [f for f in findings if f.kev_listed is not None]
+    unchecked = [f for f in findings if f.kev_listed is None]
+
+    assert checked, "some findings must carry a real answer"
+    assert unchecked, "some findings must carry none"
+    assert not any(f.kev_listed is True for f in findings), (
+        "a confirmed exploited finding would make this host read as exploited, "
+        "not as partially checked"
+    )
+
+
+def test_the_partially_checked_host_is_never_half_enriched(session):
+    """An unchecked finding is NULL across every enrichment column (Req 15.6).
+
+    Half-answering is worse than not answering: an EPSS score beside a NULL
+    kev_listed reads as a finding that was looked at and found unremarkable.
+    """
+    from app.data.demo_seed import _PARTIALLY_ENRICHED_HOSTS
+
+    seed_demo_fleet(session)
+
+    [hostname] = _PARTIALLY_ENRICHED_HOSTS
+    machine = session.query(TargetMachine).filter_by(hostname=hostname).one()
+    for f in session.query(CveFinding).filter_by(machine_id=machine.id):
+        if f.kev_listed is None:
+            assert f.kev_due_date is None
+            assert f.epss_score is None
+            assert f.epss_percentile is None

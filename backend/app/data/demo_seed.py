@@ -192,6 +192,34 @@ _FINDINGS_LINUX: list[
 # render as unknown -- not as a clean bill of health.
 _UNENRICHED_HOSTS = {"nas-01.lan", "build-arm.lan"}
 
+# A host scanned again while the KEV feed was unusable: the findings it already
+# had are enriched, and the ones that scan added were never checked. Those
+# happen to be the four this catalogue lists as exploited, which is the whole
+# reason the state is worth seeding -- the host really does carry exploited
+# findings, and every count that can be honestly computed about it still reads
+# zero. Before 0.8.10 the host page called that "None actively exploited" and
+# the fleet table printed a confident 0, both on the strength of the sixteen
+# findings that *had* been checked.
+#
+# This is the only way a visitor sees the partially-checked state, and it is
+# the state the tool exists to distinguish (Req 10.16, 15.6).
+_PARTIALLY_ENRICHED_HOSTS = {"cache-01.lan"}
+
+
+def _checked(enriched: bool, partial: bool, kev: bool | None) -> bool:
+    """Whether this host's copy of a finding was checked against the feeds.
+
+    ``kev`` is the catalogue's own answer, and on a partially enriched host it
+    doubles as the marker for which findings the later scan added -- the ones
+    now listed as exploited. Returning False here leaves every enrichment
+    column NULL, which is what "never checked" has to look like.
+    """
+    if not enriched:
+        return False
+    if partial and kev is True:
+        return False
+    return True
+
 # What each package depends on -- the direction dpkg reports, which the API
 # reverses to answer "what breaks if this goes". The demo used to list it the
 # other way round, so openssl was recorded as depending on nginx.
@@ -384,6 +412,7 @@ def seed_demo_fleet(session: Session) -> int:
         session.add(inventory)
 
         enriched = hostname not in _UNENRICHED_HOSTS
+        partial = hostname in _PARTIALLY_ENRICHED_HOSTS
 
         # Only Linux hosts are ever scanned successfully in the demo, so there is
         # one catalogue. Windows scanning is refused (Req 10.8).
@@ -454,16 +483,29 @@ def seed_demo_fleet(session: Session) -> int:
                     source="osv" if platform is Platform.LINUX else "nvd",
                     package_identifier=_identifier(ecosystem, package, fixed),
                     # The three-valued field. An unenriched host keeps NULL
-                    # across all three enrichment columns -- never False.
-                    kev_listed=kev if enriched else None,
-                    kev_due_date="2024-07-01" if (enriched and kev) else None,
-                    epss_score=epss if enriched else None,
-                    epss_percentile=pct if enriched else None,
+                    # across all three enrichment columns -- never False. So
+                    # does a partially enriched host's unchecked slice: a
+                    # finding is enriched across every column or across none,
+                    # never half (Req 15.6).
+                    kev_listed=kev if _checked(enriched, partial, kev) else None,
+                    kev_due_date=(
+                        "2024-07-01" if (_checked(enriched, partial, kev) and kev) else None
+                    ),
+                    epss_score=epss if _checked(enriched, partial, kev) else None,
+                    epss_percentile=pct if _checked(enriched, partial, kev) else None,
                     first_seen_at=first_seen_by_cve.get(cve_id, baseline_at),
                     sync_status=SyncStatus.PENDING_SYNC,
                 )
             )
-            seeded.append((cve_id, cvss, severity, package, kev if enriched else None))
+            seeded.append(
+                (
+                    cve_id,
+                    cvss,
+                    severity,
+                    package,
+                    kev if _checked(enriched, partial, kev) else None,
+                )
+            )
 
         count = len(seeded)
         by_cve = {row[0]: row for row in seeded}

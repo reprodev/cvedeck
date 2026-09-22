@@ -71,18 +71,28 @@ describe("design language", () => {
     // At phone width `.table-container` tables become cards: the header row is
     // visually hidden and each cell prints `attr(data-label)` instead. A cell
     // without one renders as an unlabelled value under no heading at all.
+    //
+    // Scoped by `<table`, not by the presence of the string "table-container".
+    // Keying on the class name meant a table was in scope only once it was
+    // already inside the card system, so every table left out of it was exempt
+    // precisely because it was the offender -- the discovery sweep's and both
+    // of Settings', all three carrying correct data-labels that nothing read.
+    // A guard that selects its subjects by whether they already comply is not
+    // a guard.
     const offenders: string[] = [];
     for (const [path, text] of Object.entries(sources)) {
-      if (!text.includes("table-container")) continue;
+      if (!/<table[\s>]/.test(text)) continue;
       // Body cells only: `<td` inside a row, not the `<th>` header cells.
       const cells = text.match(/<td(\s[^>]*)?>/g) ?? [];
       for (const cell of cells) {
-        // `host-col` and `select-col` are exempt in the stylesheet itself: the
-        // hostname is the card's title and the checkbox needs no label, so both
-        // have `::before { display: none }`. A cell spanning the row is the
-        // expanded drawer, which carries its own heading.
+        // `host-col`, `select-col` and `token-actions` are exempt in the
+        // stylesheet itself: the hostname is the card's title, and neither a
+        // checkbox nor a row of buttons wants a label in front of it, so all
+        // three have `::before { display: none }`. A cell spanning the row is
+        // the expanded drawer, which carries its own heading.
         const exempt =
-          /className="(host-col|select-col)"/.test(cell) || cell.includes("colSpan");
+          /className="(host-col|select-col|token-actions)"/.test(cell) ||
+          cell.includes("colSpan");
         if (!cell.includes("data-label") && !exempt) {
           offenders.push(`${path} ${cell}`);
         }
@@ -92,9 +102,32 @@ describe("design language", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("puts every table in the card system", () => {
+    // The labels above only do anything inside `.table-container`, which is
+    // what prints `attr(data-label)` at phone width. A table outside it keeps
+    // its header row and scrolls sideways instead, so its labels are inert --
+    // which is what the discovery sweep's table and both of Settings' did,
+    // correctly labelled and never reflowing, for as long as the check above
+    // could not see them.
+    const offenders = Object.entries(sources)
+      .filter(([, text]) => /<table[\s>]/.test(text))
+      .filter(([, text]) => !text.includes("table-container"))
+      .map(([path]) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
   it("renders no emoji", () => {
     const offenders: string[] = [];
-    for (const [path, text] of Object.entries(sources)) {
+    // The stylesheet is scanned alongside the sources: `content: "..."` can
+    // inject a pictograph, and a pictograph renders in its own colour whatever
+    // the palette says -- the very reason this rule exists. Scanning only the
+    // components left the one file that can bypass the palette by construction
+    // unexamined.
+    for (const [path, text] of [...Object.entries(sources), ["src/index.css", css]] as [
+      string,
+      string,
+    ][]) {
       text.split("\n").forEach((line, i) => {
         const found = [...line].filter(
           (ch) => EMOJI.test(ch) && !TEXT_GLYPHS.has(ch),

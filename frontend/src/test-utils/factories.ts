@@ -32,6 +32,7 @@ export function makeMachine(
     lastScanSourcesOk: true,
     cveCounts: { ...NO_CVES },
     kevCount: 0,
+    kevUncheckedCount: 0,
     hostKeyFingerprint: null,
     hostKeyType: null,
     hostKeyPort: null,

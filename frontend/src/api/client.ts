@@ -158,6 +158,7 @@ interface MachineSummaryWire {
   last_scan_sources_ok?: boolean;
   cve_counts: MachineSummary["cveCounts"];
   kev_count?: number;
+  kev_unchecked_count?: number;
   host_key_fingerprint?: string | null;
   host_key_type?: string | null;
   host_key_port?: number | null;
@@ -347,6 +348,7 @@ function toMachineSummary(wire: MachineSummaryWire): MachineSummary {
       low: wire.cve_counts.low,
     },
     kevCount: wire.kev_count ?? 0,
+    kevUncheckedCount: wire.kev_unchecked_count ?? 0,
     hostKeyFingerprint: wire.host_key_fingerprint ?? null,
     hostKeyType: wire.host_key_type ?? null,
     hostKeyPort: wire.host_key_port ?? null,

@@ -68,6 +68,14 @@ class MachineSummary(BaseModel):
     #: ``GET /api/feeds`` exists alongside it. Zero means "none confirmed", not
     #: "none exist"; the feed health is what tells those two apart.
     kev_count: int = 0
+    #: Findings on this machine never checked against the catalogue. The
+    #: dashboard needs this to tell "checked, none exploited" from "nobody
+    #: asked about all of them": a zero ``kev_count`` is a claim, and it is
+    #: only safe to render as one when this is zero too. Fleet-wide feed
+    #: health cannot answer it, because a host re-scanned while a feed was
+    #: down carries unchecked findings whatever the feed reports now
+    #: (Req 10.16).
+    kev_unchecked_count: int = 0
     #: SHA-256 fingerprint of the SSH host key pinned for this machine's
     #: hostname on the configured port, or ``None`` when nothing is pinned
     #: (Req 17.8).

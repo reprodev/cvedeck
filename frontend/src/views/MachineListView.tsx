@@ -27,6 +27,16 @@ import { SkeletonRows } from "../components/Skeleton";
 import { Icon } from "../components/Icon";
 import { isScannable, WINDOWS_SCAN_UNSUPPORTED } from "../lib/platform";
 
+/**
+ * How many findings this host has, across every severity band.
+ *
+ * Paired with `kevUncheckedCount` it gives how many were actually checked,
+ * which is what separates "nobody asked" from "asked about some of them".
+ */
+function findingsOn(machine: MachineSummary): number {
+  return SEVERITIES.reduce((total, s) => total + machine.cveCounts[s], 0);
+}
+
 export interface MachineListViewProps {
   /** Machines to display. */
   machines: MachineSummary[];
@@ -875,10 +885,18 @@ export function MachineListView({
                     </span>
                   </td>
                   {/*
-                    Three states, not two. A dash when intel has never loaded
+                    Four states, not two. A dash when intel has never loaded
                     means "not checked" -- rendering a zero there would tell the
                     user this host is clear on the authority of a feed nobody
                     downloaded.
+
+                    The fourth exists because fleet-wide feed health answers a
+                    weaker question than this cell asks. A host re-scanned while
+                    a feed was down holds unchecked findings no matter how
+                    healthy the feed looks afterwards, and this cell was
+                    printing a confident 0 over them -- the same mistake the
+                    host page's summary made until 0.8.10, one level up
+                    (Req 10.16).
                   */}
                   <td className="kev-cell" data-label="Exploited">
                     {!intelUsable ? (
@@ -888,6 +906,26 @@ export function MachineListView({
                       >
                         —
                       </span>
+                    ) : machine.kevCount === 0 && machine.kevUncheckedCount > 0 ? (
+                      // Nothing checked at all is a different sentence from
+                      // some checked and none listed, exactly as it is on the
+                      // host page: "0 so far" implies somebody asked, and on a
+                      // host where nobody did that is its own small untruth.
+                      findingsOn(machine) > machine.kevUncheckedCount ? (
+                        <span
+                          className="kev-unknown"
+                          title={`${machine.kevUncheckedCount} of this host's findings were never checked against CISA's KEV catalogue. None of the rest are listed, so this host has not been cleared.`}
+                        >
+                          0 so far
+                        </span>
+                      ) : (
+                        <span
+                          className="kev-unknown"
+                          title="None of this host's findings were checked against CISA's KEV catalogue. This is not evidence the host is clear."
+                        >
+                          —
+                        </span>
+                      )
                     ) : machine.kevCount > 0 ? (
                       <span
                         className="badge badge-exploit"

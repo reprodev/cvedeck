@@ -262,6 +262,10 @@ class MachineListEntry:
     #: enriched, which is not evidence that it is safe, so it must not be
     #: folded into either side of this tally.
     kev_count: int = 0
+    #: Findings on this machine never checked against the KEV catalogue. A
+    #: zero in ``kev_count`` means "none exploited" only when this is also
+    #: zero; otherwise the host is partially checked, not clear (Req 10.16).
+    kev_unchecked_count: int = 0
 
 
 class Repository:
@@ -1004,6 +1008,21 @@ class Repository:
         )
         return int(self._session.execute(stmt).scalar_one() or 0)
 
+    def get_unchecked_kev_count(self, machine_id: str) -> int:
+        """Count a machine's findings never checked against the catalogue.
+
+        The companion to :meth:`get_kev_count`, and the reason that method's
+        zero can be rendered honestly: zero exploited is a claim about every
+        finding on the host, so it holds only when none of them are NULL here
+        (Req 10.16).
+        """
+        stmt = (
+            select(func.count(CveFinding.id))
+            .where(CveFinding.machine_id == machine_id)
+            .where(CveFinding.kev_listed.is_(None))
+        )
+        return int(self._session.execute(stmt).scalar_one() or 0)
+
     def list_machines(self) -> list[MachineListEntry]:
         """List scanned machines with severity-grouped CVE counts (Req 3.2, 6.1).
 
@@ -1035,6 +1054,20 @@ class Repository:
             self._session.execute(kev_stmt).all()
         )
 
+        # How many of this host's findings were never checked against the
+        # catalogue. A count of zero exploited findings is a claim, and it is
+        # only safe to make when every finding behind it was actually asked
+        # about: a host holding unchecked findings has not been cleared,
+        # whatever the fleet-wide feed health says (Req 10.16).
+        unchecked_stmt = (
+            select(CveFinding.machine_id, func.count(CveFinding.id))
+            .where(CveFinding.kev_listed.is_(None))
+            .group_by(CveFinding.machine_id)
+        )
+        unchecked_per_machine: dict[str, int] = dict(
+            self._session.execute(unchecked_stmt).all()
+        )
+
         entries: list[MachineListEntry] = []
         for machine in machines:
             tally = per_machine.get(machine.id, {})
@@ -1049,6 +1082,7 @@ class Repository:
                         low=tally.get(Severity.LOW, 0),
                     ),
                     kev_count=kev_per_machine.get(machine.id, 0),
+                    kev_unchecked_count=unchecked_per_machine.get(machine.id, 0),
                 )
             )
         return entries

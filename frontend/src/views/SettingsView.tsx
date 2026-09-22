@@ -294,7 +294,7 @@ function TokensPanel({
       ) : tokens.length === 0 ? (
         <p className="hint">No tokens yet.</p>
       ) : (
-        <div className="table-scroll">
+        <div className="table-container">
           <table className="token-table">
             <thead>
               <tr>
@@ -434,7 +434,7 @@ function HostKeysPanel({
           host pins its key.
         </p>
       ) : (
-        <div className="table-scroll">
+        <div className="table-container">
           <table className="token-table">
             <thead>
               <tr>

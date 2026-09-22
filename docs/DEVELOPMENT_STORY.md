@@ -2081,3 +2081,114 @@ line in any commit message being pushed. Nothing had ever looked at commit
 messages, which is precisely where such a line lands. Same shape as the rest of
 the release: a check positioned where it could not see the thing it was written
 to catch.
+
+---
+
+## Chapter 21 — Guards that picked their own subjects (v0.8.11)
+
+Chapter 20 said the practical lesson was narrow: when a guard and the thing it
+guards live in the same function, the only interesting question is which comes
+first. The obvious next move was to ask that question of the guards themselves,
+and it turned out to be the more productive one.
+
+### A check that examined only the compliant
+
+The design-language suite has a rule that every table cell carries a
+`data-label`, because at phone width `.table-container` hides the header row and
+prints `attr(data-label)` in its place. An unlabelled cell becomes a value under
+no heading. The rule is right. Its first line was:
+
+```ts
+if (!text.includes("table-container")) continue;
+```
+
+Which is to say: examine a table only if it is already in the card system. A
+table left out of the card system — the thing the rule exists to prevent — was
+out of scope for the rule, by construction. The check and the defect could not
+occupy the same file.
+
+Re-pointing it at `<table` found three tables, not the one the review had
+spotted: the discovery sweep's, and both of the Settings page's. All three
+carried complete, correct `data-label` attributes. Somebody had written them
+carefully. Nothing had ever read them, because none of the three sat inside the
+container that does the reading, and the guard that would have said so was
+skipping exactly those files.
+
+Two lessons, and the second is the useful one. A guard that selects its subjects
+by a property of compliant subjects tests nothing. And the labels being *right*
+in all three places is the tell: the convention was understood, the work was
+done, and the wiring was missing — which is the failure mode a guard is for.
+
+The emoji rule in the same file had a quieter version of the same shape. It
+scanned the components; it did not scan `index.css`. A stylesheet is the one
+file that can put a pictograph on screen through `content:`, bypassing the
+palette entirely — which is the reason given in the header comment of the very
+file that wasn't scanning it. There were no offenders. The hole was closed while
+it was still empty, which is the only comfortable time to do it.
+
+### The claim moved up a level
+
+0.8.10 fixed the host page's summary, which had been reporting "None actively
+exploited" for a host where one finding of forty-one had been checked. Its
+release notes described the fleet view as "already strict and needs no change".
+
+The fleet view is strict about the *feed*. Its Exploited column asked whether
+any feed was usable fleet-wide, and if so printed the host's KEV count — so a
+host holding unchecked findings got a confident `0`, exactly the claim the host
+page had just stopped making, one screen up. Feed health cannot answer the
+question that column asks: a host re-scanned while a feed was down carries
+unchecked findings no matter how healthy the feed looks by the time you load the
+page.
+
+It is a little uncomfortable that the previous release's notes vouched for this
+view while fixing its twin. The check that finally caught it was not cleverness;
+it was seeding a demo host in the state 0.8.10 had introduced and looking at the
+fleet table.
+
+### The fixture could not show the new state
+
+Which was itself the finding. 0.8.10 added a fourth presentation — partially
+checked, none exploited — and the demo fleet could not produce one. Every seeded
+host either had confirmed exploited findings or had never been checked at all,
+so the state the release existed to introduce appeared nowhere a visitor could
+see it, and Requirement 15.6 — the seeded findings exercise every state of
+exploitation knowledge — was being met per row and not per host.
+
+The fix had to be a story rather than a flag, because the demo is an argument
+and a contrived fixture is a weak one. `cache-01.lan` is now a host scanned
+again while the KEV feed was unusable: the findings it already had are enriched,
+and the ones that scan added were never checked. Those added findings happen to
+be the four the catalogue lists as exploited. So every number that can honestly
+be computed about that host reads zero, and the host really does carry four
+actively exploited findings. That is the case worth being able to see, and until
+0.8.10 both screens would have called it clean.
+
+### A comparator that was right by specification accident
+
+Found by mutation rather than by reading. Changing `?? Infinity` to `?? 0` in
+`compareBySeverity` left all 412 frontend tests green, which is the sort of
+result worth stopping on.
+
+Two things came out of it. The ordering rule the expression implements — a
+finding whose advisory published a band but no number leads its band, rather
+than falling to the bottom of a list sorted by a number it doesn't have — is
+specified in Requirement 10.11 and had no test whatsoever. And the expression
+returned `NaN` for any two findings that both lack a score, which is every pair
+in the Unscored band. It behaved correctly only because `Array.prototype.sort`
+coerces a NaN comparison to zero, which happens to be the right answer. The
+docstring immediately above it warned against producing a NaN.
+
+"Correct because the specification rounds our mistake in our favour" is not a
+property to rest a ranking on. Both cases are explicit now, and both are pinned.
+
+### And a group that split a set
+
+Dependabot had a React 19 pull request failing CI at `npm ci`, which reads at a
+glance like React 19 being hard. It was not: the runtime group covered minor and
+patch only, so a major arrived ungrouped and moved `react` and `@types/react`
+while leaving `react-dom` and `@types/react-dom` behind. `@types/react-dom@18`
+peer-requires `@types/react@^18`, so the lockfile was unsatisfiable.
+
+The same shape once more, in configuration rather than code: a rule that grouped
+things which change together, scoped so that it stopped applying in precisely
+the case where the grouping matters most.

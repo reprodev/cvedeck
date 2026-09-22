@@ -354,7 +354,12 @@ export function DiscoveryView({
             <div className="split-pane-container">
               {/* Master: Host List */}
               <div className="master-pane">
-                <div style={{ overflowX: "auto" }}>
+                {/* `.table-container`, like every other table in the product:
+                    it carries the phone-width card reflow, which is what makes
+                    the data-label attributes below do anything. As a bare
+                    overflow scroller this table kept its header row and scrolled
+                    sideways, and its labels were inert. */}
+                <div className="table-container">
                   <table>
                     <thead>
                       <tr>
