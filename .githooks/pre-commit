@@ -10,22 +10,14 @@
 CVEDECK_ACTION=COMMIT
 . "$(dirname "$0")/_checks.sh"
 
-# ---- the clean room is written only by the sync ----
-#
-# A folder whose role is `public` holds snapshots of committed work from a
-# private staging folder, and nothing else. A commit authored here directly
-# would be erased by the next snapshot, or worse, published without ever having
-# existed in the staging history. The sync sets CVEDECK_SYNC=1; nothing else
-# should.
-if [ "$(cvedeck_role)" = "public" ] && [ "${CVEDECK_SYNC:-0}" != "1" ]; then
-    cvedeck_banner "this is the public clean room"
-    cat >&2 <<'EOF'
-  Nothing is authored here. Make the change in the private staging folder,
-  commit it there, and run the sync to bring it across.
-
-EOF
-    exit 1
-fi
+# A seam for the local overlay, which is untracked and describes how this
+# repository is published rather than what its code may contain. A no-op here,
+# so this hook is complete on its own in an ordinary clone.
+cvedeck_policy_pre_commit() { :; }
+CVEDECK_LOCAL_POLICY="$(dirname "$0")/local-policy.sh"
+# shellcheck source=/dev/null
+[ -f "$CVEDECK_LOCAL_POLICY" ] && . "$CVEDECK_LOCAL_POLICY"
+cvedeck_policy_pre_commit
 
 _staged=$(git diff --cached --name-only --diff-filter=ACMR)
 if [ -z "$_staged" ]; then

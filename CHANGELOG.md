@@ -8,6 +8,56 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.12] - 2026-09-22
+
+The git hooks are the project's primary guard against publishing a secret, and
+nobody had turned the last three releases' question on them: does this check see
+what it claims to see? It did not, in two separate ways.
+
+### Fixed
+
+- **A secret added and then deleted was never caught on push.** The pre-push
+  content scan used `git diff BASE LOCAL_SHA`, which compares two *trees* -- so a
+  file added in one commit and removed in the next nets out to nothing and was
+  never examined. That is exactly the case the check was written for, and both
+  `AGENTS.md` §6 ("history included") and
+  `docs/SCANNING_PROVENANCE_AND_METHODOLOGY.md` ("a secret removed in a later
+  commit still leaks") described the behaviour correctly while the code did not
+  have it, from 0.6.0 until now.
+
+  It scans per-commit patches across the pushed range instead, so a secret is
+  caught by having been committed rather than by surviving to the tip. Verified
+  both ways in a scratch repository: a private key block and a forbidden
+  filename, each added and deleted before pushing, pass the old hook and are
+  refused by the new one -- on a first push against the empty tree as well as an
+  incremental one.
+
+### Changed
+
+- **The hooks no longer publish this repository's release machinery.** More than
+  half of `pre-push` implemented a workflow specific to one machine -- a private
+  staging folder, a clean room that only receives snapshots, the roles that tell
+  them apart, the release identity, version consistency and the spec-citation
+  gate. None of it does anything in a contributor's clone, and a public
+  repository has no reason to carry a description of how one maintainer's disk
+  is arranged.
+
+  What stays published is the half that is useful anywhere: the credential,
+  filename and content scanning, on commit and on push. The rest moved to an
+  untracked local overlay, `.githooks/local-policy.sh`, which the tracked hooks
+  source when it exists and are complete without -- the same shape as the
+  `local-denylist` that has always worked this way, and for the same reason.
+
+- **`CONTRIBUTING.md` no longer promises a gate contributors do not get.** It
+  said the hooks "refuse to push a branch whose tests are red or whose version
+  strings disagree". Both checks only ever ran when pushing to this project's
+  own remote, so a contributor's clone had neither. It now says what the hooks
+  actually do, notes that CI runs both suites and the image build on every pull
+  request, and says where the release checks went so that a reader who goes
+  looking does not conclude something is missing from their clone.
+
+---
+
 ## [0.8.11] - 2026-09-22
 
 0.8.10 fixed three guards that could not see what they guarded. This release is

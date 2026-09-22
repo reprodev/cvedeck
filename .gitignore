@@ -42,3 +42,9 @@ Thumbs.db
 # It names the specific hosts and identifiers that must never be published,
 # so publishing the list would publish them.
 .githooks/local-denylist
+
+# The maintainer's publishing policy -- branch rules, commit identity, version
+# consistency. The tracked hooks source it when present and are complete
+# without it. It describes how this repository is released rather than what its
+# code may contain, so it has nothing to say to anyone else's clone.
+.githooks/local-policy.sh

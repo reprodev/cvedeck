@@ -22,14 +22,6 @@
 # seen. It makes "first push" and "incremental push" one code path.
 CVEDECK_EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
 
-# The one identity every published commit carries, author and committer alike.
-# Written here rather than matched as a pattern: "any GitHub noreply address"
-# accepts a different account's, and "any noreply@" accepts a vendor's. Both
-# are exactly the mistakes a misconfigured tool makes, and both are permanent
-# once pushed. This is also the copyright holder named in LICENSE, so it is not
-# a preference -- it is who the work is by.
-CVEDECK_IDENTITY="reprodev <8764255+reprodev@users.noreply.github.com>"
-
 # Personal patterns live outside the repository on purpose: a tracked file
 # naming the exact hosts that must never be published would publish them, which
 # defeats the point. Absent is fine; the generic checks below still run.
@@ -43,16 +35,6 @@ cvedeck_banner() {
     printf '  ============================================================\n' >&2
     printf '   %s REFUSED: %s\n' "${CVEDECK_ACTION:-PUSH}" "$1" >&2
     printf '  ============================================================\n' >&2
-}
-
-# This folder's role, from local git config. Local config is never pushed, so
-# the role describes one checkout and says nothing to anyone who clones.
-#
-#   staging   a private working folder that must never publish
-#   public    a clean room that only receives snapshots and publishes them
-#   (unset)   an ordinary clone -- a contributor's, say -- with no role rules
-cvedeck_role() {
-    git config --get cvedeck.role 2>/dev/null || true
 }
 
 # ------------------------------------------------------- force-added ignores --

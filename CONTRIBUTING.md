@@ -38,20 +38,26 @@ travel with the repository and a fresh clone has the hooks **off**.
 
 They refuse to commit a file that looks like a credential — an `.env`, a
 database, a key or certificate, a private key block, or a provider token — and
-refuse to push a branch whose tests are red or whose version strings disagree.
-This is the mechanical half of the rule in `AGENTS.md` §6; the hooks exist
-because asking politely does not scale, and because a secret that reaches a
-public history cannot be recalled.
+they refuse to push one, scanning **every commit in the range**, not just the
+tree you end up with. A secret added in one commit and deleted in the next is
+still published by having been committed. This is the mechanical half of the
+rule in `AGENTS.md` §6; the hooks exist because asking politely does not
+scale, and because a secret that reaches a public history cannot be recalled.
 
-Two of the push checks concern what a commit says about who wrote it, and they
-are worth knowing about before they refuse something. Every commit pushed to
-the public remote must carry one exact author **and** committer, name and
-address both; a different address that merely looks like a GitHub noreply is
-still not this project's, and the check says so rather than shrugging. And a
-commit message may not carry a `Co-Authored-By:` or tool-attribution line.
-Those lines are published and permanent, and they credit the work to something
-that is not the copyright holder — so if your tooling adds one automatically,
-turn that off rather than working around the hook.
+That is all they do, and it is worth being exact about it, because this file
+used to claim more. They do **not** run the test suites or check version
+strings. [CI](https://github.com/reprodev/cvedeck/actions) runs both suites
+and the image build on every pull request, which is where that feedback comes
+from and where it belongs: a hook that refuses to back up work in progress is
+a hook people switch off.
+
+Releasing this project needs more checks than these — branch policy, commit
+identity, version consistency across three files. Those are specific to how
+the repository is published rather than to the code, so they live in an
+untracked local overlay (`.githooks/local-policy.sh`) that is not part of this
+repository. The hooks here source it when it exists and are complete without
+it. If you went looking for the release gate and could not find it, that is
+why — nothing is missing from your clone.
 
 If a hook refuses something legitimate, that is a bug in the hook worth
 reporting — a guard with false positives is a guard people switch off. Prefer

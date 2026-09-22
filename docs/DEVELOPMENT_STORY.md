@@ -2192,3 +2192,92 @@ peer-requires `@types/react@^18`, so the lockfile was unsatisfiable.
 The same shape once more, in configuration rather than code: a rule that grouped
 things which change together, scoped so that it stopped applying in precisely
 the case where the grouping matters most.
+
+---
+
+## Chapter 22 — The guard that guarded the guards (v0.8.12)
+
+Three releases in a row have been about checks positioned where they cannot see
+what they were written to catch. This one started from a question about a file
+on GitHub — *why is `.githooks/pre-push` published at all?* — and it turned out
+to have two answers, one editorial and one considerably worse.
+
+### The editorial answer
+
+The hooks have been published since 0.6.0, deliberately. `CONTRIBUTING.md`,
+`AGENTS.md` §6 and the pull-request template all tell contributors to enable
+them, and the 0.6.0 changelog presents them as a feature. Nothing secret is in
+them: the denylist is untracked, and the one email is the GitHub noreply that
+appears in the author field of every public commit anyway.
+
+But more than half of `pre-push` had nothing to do with the code. It described a
+private three-folder workflow — a staging repository that must never publish, a
+clean room that receives only snapshots, the `cvedeck.role` config that tells
+them apart, the `CVEDECK_SYNC=1` bypass — none of which does anything in anyone
+else's clone. `HANDOVER.md` gives the reason `sync-public.ps1` is kept local:
+"names local paths and has nothing to offer a public reader." That applies here
+word for word. It simply had never been separated, and for ten releases nobody
+read the file closely enough to notice, including the person who edited it two
+releases ago.
+
+The split follows a pattern the repository already had. `local-denylist` is
+untracked and sourced when present, on the principle that a tracked file naming
+the hosts that must never be published would publish them. `local-policy.sh` is
+the same idea applied to policy rather than patterns: the tracked hooks define
+each seam as a no-op, source the overlay if it exists, and are complete without
+it. A contributor gets secret scanning and stops there.
+
+### The worse answer
+
+Testing the split meant testing the halves, and the first test of the published
+half was the one the hook exists for: commit a private key, delete it in the
+next commit, push both.
+
+It passed. The push went through.
+
+The scan was `git diff "$BASE" "$LOCAL_SHA"` — a two-dot diff, which compares
+two *trees*. A file added in one commit and removed in the next nets out to
+nothing, so it was never in the diff and never examined. The comment three lines
+above read:
+
+> Paths touched anywhere in the range, plus every path in the tree being
+> published. The first catches a secret added then deleted
+
+It did not. Nor did `AGENTS.md` §6, which says "history included", nor
+`docs/SCANNING_PROVENANCE_AND_METHODOLOGY.md`, which says "a secret removed in a
+later commit still leaks". Three documents describing the correct behaviour,
+around code that had never implemented it, since 0.6.0.
+
+Running the same test against the pre-split hook confirmed it was not something
+the split introduced. It had always been there, in the project's single most
+important guard, in the specific scenario that guard was written to cover.
+
+The fix is to scan commits rather than trees — `git log --name-only` and
+`git log -p` across the range, so each commit is examined on its own and a
+secret is caught by having been committed rather than by surviving to the tip.
+The first-push case needed the same care the identity check learned in 0.8.10:
+the base is the empty *tree*, not a commit, and `git log <tree>..<sha>` is an
+error that reads as "nothing found" if its stderr is discarded.
+
+### What the three releases have in common, now that there are four
+
+Each time, prose was the load-bearing part. A docstring, a release note, a
+contributing guide: each stated the strong version of a property, everyone
+subsequently trusted the prose, and nobody re-derived it from the code. The
+0.8.10 demo guard, the 0.8.11 table guard, and now this.
+
+What is different here is that the documentation was not wrong. `AGENTS.md` and
+the methodology document both described exactly the right behaviour, in detail,
+with the reasoning. They were a specification nobody had tested against. The
+lesson from 0.8.10 — that the test has to be one which fails if the guarded
+thing runs at all — applies just as well to a guard as to a fix: the only test
+worth having is the one that commits the secret and tries to push it.
+
+### And the docs that were wrong
+
+`CONTRIBUTING.md` told contributors the hooks "refuse to push a branch whose
+tests are red or whose version strings disagree". Both lived behind the
+public-remote check, so a contributor's clone had neither — the file promised a
+gate that only ever ran for one person. It now says what the hooks do, points at
+CI for the suites, and says where the release checks went, so that a reader who
+looks for them does not conclude their clone is broken.
