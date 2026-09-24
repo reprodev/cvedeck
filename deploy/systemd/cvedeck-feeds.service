@@ -35,3 +35,15 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
+# Added in 0.8.13. UMask keeps the database and its journal readable by this
+# service alone; the rest remove what this service never needs.
+UMask=0077
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictRealtime=yes
+SystemCallArchitectures=native
+# Deliberately absent: RestrictAddressFamilies. glibc's getaddrinfo can open an
+# AF_NETLINK socket, and discovery's unprivileged ICMP needs AF_INET datagram
+# sockets; a list that misses one fails as "host unreachable", which is the
+# kind of silent wrong answer this project refuses to give.

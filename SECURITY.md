@@ -76,15 +76,26 @@ manage tokens, and nothing finer-grained exists. A bypass of the login itself
 **Login can be switched off.** `CVEDECK_AUTH=disabled` serves everything without
 authentication, for instances behind an authenticating proxy. An instance
 configured that way and exposed directly is a deployment choice, not a
-vulnerability.
+vulnerability. Two browser-borne routes in are still closed: a state-changing
+request that says it came from another site is refused, and
+`CVEDECK_ALLOWED_HOSTS` refuses a `Host` that is not this instance's, which is
+what stops DNS rebinding. The second is opt-in, since it needs the names you
+use; the log warns on every start while login is off and it is unset.
+
+**Demo mode needs no login, and is read-only.** Every request that could change
+stored state is refused, for every route at once rather than route by route. A
+way for an anonymous visitor to change what a demo shows *is* in scope.
 
 **Plain HTTP exposes credentials.** CveDeck does not terminate TLS itself. Over
 HTTP, the password, the session cookie and scan credentials are readable on the
 network; put a TLS reverse proxy in front anywhere beyond a trusted network.
 
 **Failed-login throttling is in memory.** It resets on restart and is per
-process, which fits the single-worker deployment. Behind a proxy that uvicorn
-does not trust, every client shares the proxy's address.
+process, which fits the single-worker deployment. It counts per address and
+username, and per address alone with a looser limit, so an attacker with many
+addresses can still spread attempts across them; the 12-character minimum is
+what bounds that. Behind a proxy that uvicorn does not trust, every client
+shares the proxy's address, and one person's failures slow everyone.
 
 **The first connection to a host trusts its SSH key.** CveDeck pins each host's
 key the first time a scan or connection test to it succeeds, and refuses the
@@ -96,14 +107,17 @@ page with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host, or set
 upgraded from 0.7.3 or earlier has no pins, so its next scan of each host is a
 first use.
 
-**WinRM defaults to HTTP.** Windows scans are refused in this release, so no
-WinRM connection is made by a scan — but **a connection test does connect**, and
-on the default `http` transport on port 5985 the NTLM exchange crosses the
-network unencrypted. Set `CVEDECK_WINRM_SCHEME=https` and
-`CVEDECK_WINRM_PORT=5986` before testing a Windows host outside a lab; both
-settings apply to the connection test today, and to scans when Windows matching
-lands. The test names the endpoint it reached, so a result reading `http://…`
-is telling you the password went out in the clear.
+**WinRM is not usable yet, and is not hardened.** Windows scans are refused in
+this release, so no scan makes a WinRM connection. The connection test does not
+make one either, though not by design: it builds its session with equal read
+and operation timeouts, which pywinrm 0.5 rejects before any network traffic,
+so every Windows connection test fails and no password is sent. The collector
+behind future Windows scans also switches certificate validation off, so over
+`https` it would not detect an interception. Both will be fixed together with
+Windows matching, and until then `CVEDECK_WINRM_SCHEME` and
+`CVEDECK_WINRM_PORT` have nothing to apply to. When they do, set them to
+`https` and `5986` outside a lab: on the default `http` transport the NTLM
+exchange crosses the network unencrypted.
 
 **Credentials are held in memory during a scan.** They arrive in the request
 body, are wrapped in `SecretStr` so they are not logged or serialized, and are
@@ -117,12 +131,23 @@ account on each target — not root.
 
 ## Hardening checklist
 
-- Bind to `127.0.0.1` and front it with nginx; TLS, and `auth_basic` at minimum.
-  See `deploy/nginx/cvedeck.conf.example`.
-- Use the hardened systemd unit in `deploy/systemd/`, or run the container as a
-  non-root user with `PUID`/`PGID`.
+- Bind to `127.0.0.1` (`BIND_ADDR=127.0.0.1` in the compose file) and front it
+  with a TLS reverse proxy. See `deploy/nginx/cvedeck.conf.example`, which adds
+  HSTS; CveDeck sends its own content policy and framing headers.
+- Set `CVEDECK_ALLOWED_HOSTS` to the names you reach it by. Essential with login
+  off.
+- Use the hardened systemd unit in `deploy/systemd/`, or the compose file, which
+  runs the container with `no-new-privileges` and every capability dropped but
+  the six it needs. `PUID`/`PGID` of 0 is refused.
+- Keep the server-managed SSH key readable by the service user alone (`0400`).
+- Watch the `app.security` log lines: they record every scan, sweep and
+  connection test with who asked, forgotten host keys, refused cross-site
+  requests, unknown tokens and throttled sign-ins.
+- After a suspected compromise, `cvedeck-admin reset-password` ends every session
+  and revokes every API token.
 - Give the scanner a dedicated read-only account on each target host.
-- Keep the database volume off world-readable storage — it holds your fleet's
+- Keep the database volume off shared storage — the container now writes it
+  readable by its own user and group only, but it holds your fleet's
   full software inventory, which is a useful document for an attacker.
 - Keep the image current. Watch releases for security fixes.
 

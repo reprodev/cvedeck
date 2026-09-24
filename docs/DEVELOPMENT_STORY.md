@@ -2281,3 +2281,103 @@ public-remote check, so a contributor's clone had neither — the file promised 
 gate that only ever ran for one person. It now says what the hooks do, points at
 CI for the suites, and says where the release checks went, so that a reader who
 looks for them does not conclude their clone is broken.
+
+## Chapter 23 — The doors around the lock (v0.8.13)
+
+This release was asked for as a release with nothing new in it: harden what is
+already there. So it began with a review rather than a feature list — three
+passes over the codebase, one each for the web surface, the scanner's reach into
+other machines, and the container and supply chain — and every finding was read
+against the code before it went into the plan.
+
+The headline result was a pleasant one. The lock itself held. Passwords are
+scrypt with a dummy hash for unknown users, sessions and tokens are stored as
+hashes, the cookie is `HttpOnly` and `SameSite=Strict` with an Origin check
+behind it, nothing is interpolated into a remote command, and target credentials
+are never written anywhere. What did not hold was everything *around* the lock.
+
+### The demo, a third time
+
+Demo mode needs no login, which is safe exactly as long as nothing a visitor
+sends can change anything. 0.8.8 protected the seeded fleet from the periodic
+refresh; 0.8.9 found the HTTP route to the same thing; 0.8.10 found the CLI.
+This time it was four more routes with no guard at all — remediation add and
+update, the sync, and discovery enroll. Enroll is an upsert, and it overwrote an
+existing machine's hostname, platform and scan status. One anonymous request
+could rewrite the demo for every visitor after it.
+
+The lesson of 0.8.9 was "ask what can reach the thing being protected". This
+release applied it one level up: the question is not which routes are dangerous
+but whether guarding route by route can ever be complete, and three misses in
+three releases answer it. The refusal now sits on the routers, attached the same
+way the login gate is, and a test walks every route with an empty body. It fails
+against a copy with the guard removed, and the four routes that were open are
+named in it so it cannot pass by walking nothing.
+
+### What a scanned host is allowed to say
+
+The scanner's threat model has always said that a scanned host is not trusted.
+The code agreed about commands — nothing from a host is ever placed in one — and
+disagreed about output. `stdout.read()` ran to EOF with no size limit, and the
+45-second timeout applied per read, so a host that sent a byte every 44 seconds
+held a scan open for ever.
+
+Bounding it had one trap, and it is the same trap as 0.8.4. A truncated
+inventory parses perfectly well; it is just smaller, and every finding on a
+package past the cut would be reported resolved. So a bound that is hit is a
+failed scan with a reason, never a short answer. The deadline had a second,
+smaller trap: paramiko's `read(n)` blocks until `n` bytes arrive, so a check of
+the clock between reads is never reached by the host it is meant to stop. The
+deadline closes the channel from a timer instead.
+
+The same review found the other direction. The dashboard hands the operator
+upgrade and purge commands to paste into a root shell, and put the package name
+in them unquoted — a name that comes off the host, from a parser that splits on
+the last `@`, so even a crafted version string could land inside it. The
+quoting follows `shlex.quote`, so an ordinary name reads exactly as before, and
+the property test reads each command back with a strict shell word splitter
+rather than checking for a list of dangerous characters. Writing that test found
+two more routes out of the fix script: host text in `#` comment lines, which a
+newline ends, and a quoted newline, which a shell reads as one word and a person
+pasting reads as two commands.
+
+### What a browser was never told
+
+The application sent no security headers at all. Adding them was easy because
+the dashboard already met the strictest policy worth writing — no inline script,
+no inline style, self-hosted fonts — which is the design language's "nothing
+from a CDN" rule paying off somewhere nobody had planned for it to.
+
+Login switched off was the more interesting case. The Origin check was tied to
+the session cookie, and with no login there is no session, so there was no
+check. The fix could not simply require an Origin, because every script sends
+none and scripts are why anyone runs without login; it refuses only a request
+that *says* it came from another site, which a browser always does. And an
+Origin check cannot see DNS rebinding at all, because the rebinding page is, as
+far as the browser knows, same-origin. The `Host` header is what gives it away,
+so `CVEDECK_ALLOWED_HOSTS` checks that — off by default, since on by default
+would break every install reached by an unlisted LAN name, and with a warning on
+every start while login is off and it is unset.
+
+### A test that tested itself
+
+One test is worth recording for the way it was wrong. The bound on concurrent
+scrypt verifications was first tested by counting the peak concurrency and
+asserting it was at most the semaphore's own value. Run against a copy with the
+semaphore widened to 64, it passed — it was comparing the implementation with
+itself. It now asserts against a named constant, and asserts the constant
+against a ceiling. That is the 0.8.8 lesson again in a new shape: a test is only
+evidence if a broken copy makes it fail, and "broken" has to include "configured
+to do nothing".
+
+### What was left alone
+
+Two things were found and deliberately not fixed. The WinRM connection test
+builds its session with equal read and operation timeouts, which pywinrm 0.5
+rejects before any network traffic — so it has never connected, and never sent
+a password. The collector behind future Windows scans turns certificate
+validation off. Fixing the first would switch the second on, and both belong to
+the release that makes Windows scanning real. What was fixed is `SECURITY.md`,
+which told readers that a Windows connection test "does connect". It was the
+same shape of claim as every other one this project has found out of date: a
+confident sentence that nobody had re-derived from the code.

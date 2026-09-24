@@ -27,6 +27,8 @@ real end-to-end behaviour against that contract.
 
 from __future__ import annotations
 
+import io
+
 import re
 
 import pytest
@@ -43,14 +45,8 @@ from app.scanner.exceptions import InventoryUnavailableError
 # ---------------------------------------------------------------------------
 
 
-class _StdoutFile:
+class _StdoutFile(io.BytesIO):
     """Mimics the file-like object paramiko returns for stdout/stderr."""
-
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def read(self) -> bytes:
-        return self._data
 
 
 class RecordingSSHClient:

@@ -50,41 +50,89 @@ export interface DistroTooling {
   isUbuntu: boolean;
 }
 
+// Package names come off the scanned host, and a scanned host is not trusted
+// (Req 14.10). These commands are copied into a root shell, so every name is
+// quoted before it reaches one -- the same rule as Python's shlex.quote: a name
+// made only of characters no shell treats specially is left bare, so an
+// ordinary command reads exactly as it always has, and anything else is
+// single-quoted, which a POSIX shell takes literally.
+const SHELL_SAFE = /^[A-Za-z0-9@%+=:,./_-]+$/;
+
+// No package manager accepts a name containing a control character, so such a
+// name is not a package -- it is an attempt. Quoted, a newline is still one
+// word to a shell, but pasted into a terminal it reads as two commands, so each
+// one becomes "?" and the command matches nothing.
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]/g;
+
+/** Quote `value` as one POSIX shell word. */
+export function shellQuote(value: string): string {
+  const printable = value.replace(CONTROL, "?");
+  if (printable !== "" && SHELL_SAFE.test(printable)) return printable;
+  return `'${printable.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Quote `value` as one PowerShell word.
+ *
+ * Inside single quotes PowerShell expands nothing, and a quote is escaped by
+ * doubling it -- including the typographic quotes it also accepts as quotes.
+ */
+export function powershellQuote(value: string): string {
+  const printable = value.replace(CONTROL, "?");
+  if (printable !== "" && SHELL_SAFE.test(printable)) return printable;
+  return `'${printable.replace(/(['\u2018\u2019\u201a\u201b])/g, "$1$1")}'`;
+}
+
+/**
+ * Make host-derived text safe to embed in a `#` comment line.
+ *
+ * A comment ends at a newline, so text carrying one would continue on the next
+ * line as a command. Every line break and other control character becomes a
+ * space.
+ */
+export function commentSafe(text: string): string {
+  return text.replace(CONTROL, " ");
+}
+
 const TOOLING: Record<Exclude<DistroFamily, "unknown">, DistroTooling> = {
   debian: {
     family: "debian",
     manager: "apt",
     label: "Debian / Ubuntu",
-    updateCmd: (p) => `sudo apt update && sudo apt install --only-upgrade ${p}`,
-    purgeCmd: (p) => `sudo apt remove --purge ${p}`,
-    checkUpdateCmd: (p) => `apt list --upgradable 2>/dev/null | grep '^${p}/'`,
+    updateCmd: (p) => `sudo apt update && sudo apt install --only-upgrade ${shellQuote(p)}`,
+    purgeCmd: (p) => `sudo apt remove --purge ${shellQuote(p)}`,
+    // apt filters the listing by name itself, which leaves no grep pattern to
+    // splice a name into.
+    checkUpdateCmd: (p) => `apt list --upgradable ${shellQuote(p)} 2>/dev/null`,
     isUbuntu: false,
   },
   rhel: {
     family: "rhel",
     manager: "dnf",
     label: "RHEL / Fedora / Rocky / Alma",
-    updateCmd: (p) => `sudo dnf upgrade -y ${p}`,
-    purgeCmd: (p) => `sudo dnf remove -y ${p}`,
-    checkUpdateCmd: (p) => `dnf check-update ${p}`,
+    updateCmd: (p) => `sudo dnf upgrade -y ${shellQuote(p)}`,
+    purgeCmd: (p) => `sudo dnf remove -y ${shellQuote(p)}`,
+    checkUpdateCmd: (p) => `dnf check-update ${shellQuote(p)}`,
     isUbuntu: false,
   },
   suse: {
     family: "suse",
     manager: "zypper",
     label: "openSUSE / SLES",
-    updateCmd: (p) => `sudo zypper update -y ${p}`,
-    purgeCmd: (p) => `sudo zypper remove -y ${p}`,
-    checkUpdateCmd: (p) => `zypper list-updates | grep ' ${p} '`,
+    updateCmd: (p) => `sudo zypper update -y ${shellQuote(p)}`,
+    purgeCmd: (p) => `sudo zypper remove -y ${shellQuote(p)}`,
+    // -F: the name is a literal, never a pattern.
+    checkUpdateCmd: (p) => `zypper list-updates | grep -F -- ${shellQuote(` ${p} `)}`,
     isUbuntu: false,
   },
   alpine: {
     family: "alpine",
     manager: "apk",
     label: "Alpine",
-    updateCmd: (p) => `sudo apk update && sudo apk upgrade ${p}`,
-    purgeCmd: (p) => `sudo apk del ${p}`,
-    checkUpdateCmd: (p) => `apk version ${p}`,
+    updateCmd: (p) => `sudo apk update && sudo apk upgrade ${shellQuote(p)}`,
+    purgeCmd: (p) => `sudo apk del ${shellQuote(p)}`,
+    checkUpdateCmd: (p) => `apk version ${shellQuote(p)}`,
     isUbuntu: false,
   },
   arch: {
@@ -95,16 +143,16 @@ const TOOLING: Record<Exclude<DistroFamily, "unknown">, DistroTooling> = {
     // explicitly unsupported upstream and routinely break the system, so the
     // correct advice is a full system upgrade.
     updateCmd: () => `sudo pacman -Syu`,
-    purgeCmd: (p) => `sudo pacman -Rns ${p}`,
-    checkUpdateCmd: (p) => `pacman -Qu ${p}`,
+    purgeCmd: (p) => `sudo pacman -Rns ${shellQuote(p)}`,
+    checkUpdateCmd: (p) => `pacman -Qu ${shellQuote(p)}`,
     isUbuntu: false,
   },
   windows: {
     family: "windows",
     manager: "winget",
     label: "Windows",
-    updateCmd: (p) => `winget upgrade --id ${p} --accept-source-agreements`,
-    purgeCmd: (p) => `winget uninstall --id ${p}`,
+    updateCmd: (p) => `winget upgrade --id ${powershellQuote(p)} --accept-source-agreements`,
+    purgeCmd: (p) => `winget uninstall --id ${powershellQuote(p)}`,
     checkUpdateCmd: () => `Get-HotFix | Sort-Object -Property InstalledOn -Descending`,
     isUbuntu: false,
   },
@@ -116,9 +164,9 @@ const UNKNOWN_TOOLING: DistroTooling = {
   label: "Unknown distribution",
   // Deliberately not a guess. Handing a user a confidently wrong command is
   // worse than telling them we do not know which one applies.
-  updateCmd: (p) => `# Unknown distribution -- upgrade '${p}' with your package manager`,
-  purgeCmd: (p) => `# Unknown distribution -- remove '${p}' with your package manager`,
-  checkUpdateCmd: (p) => `# Unknown distribution -- check updates for '${p}'`,
+  updateCmd: (p) => `# Unknown distribution -- upgrade ${commentSafe(shellQuote(p))} with your package manager`,
+  purgeCmd: (p) => `# Unknown distribution -- remove ${commentSafe(shellQuote(p))} with your package manager`,
+  checkUpdateCmd: (p) => `# Unknown distribution -- check updates for ${commentSafe(shellQuote(p))}`,
   isUbuntu: false,
 };
 
@@ -335,7 +383,7 @@ export function buildBulkFixScript(
 
   const tooling = getDistroTooling(platform, osName, fixable[0]?.packageIdentifier);
   const header = [
-    `# Remediation plan for ${osName ?? "this host"}`,
+    `# Remediation plan for ${commentSafe(osName ?? "this host")}`,
     `# ${packages.length} package(s) with fixes in this host's release, ` +
       `covering ${fixable.length} CVE(s).`,
     "# Review before running. Nothing here has been executed for you.",
@@ -353,7 +401,10 @@ export function buildBulkFixScript(
     // individually would be actively harmful advice.
     commands.push(tooling.updateCmd(""));
   } else if (tooling.family === "debian") {
-    commands.push("sudo apt update", `sudo apt install --only-upgrade ${packages.join(" ")}`);
+    commands.push(
+      "sudo apt update",
+      `sudo apt install --only-upgrade ${packages.map(shellQuote).join(" ")}`,
+    );
   } else {
     commands.push(...packages.map((pkg) => tooling.updateCmd(pkg)));
   }
@@ -383,8 +434,8 @@ function elsewhereSummary(findings: CveFinding[]): string[] {
     lines.push("", "# Not fixable on this release:");
     for (const [release, group] of newer) {
       lines.push(
-        `# ${group.cves} CVE(s) in ${group.packages.size} package(s) are fixed only in ${release}.`,
-        `#   ${[...group.packages].sort().join(" ")}`,
+        `# ${group.cves} CVE(s) in ${group.packages.size} package(s) are fixed only in ${commentSafe(release)}.`,
+        `#   ${commentSafe([...group.packages].sort().join(" "))}`,
       );
     }
     lines.push(
@@ -398,8 +449,8 @@ function elsewhereSummary(findings: CveFinding[]): string[] {
     lines.push("", "# Fixed upstream, not confirmed for this release:");
     for (const [release, group] of upstream) {
       lines.push(
-        `# ${group.cves} CVE(s) in ${group.packages.size} package(s) have a fix in ${release}.`,
-        `#   ${[...group.packages].sort().join(" ")}`,
+        `# ${group.cves} CVE(s) in ${group.packages.size} package(s) have a fix in ${commentSafe(release)}.`,
+        `#   ${commentSafe([...group.packages].sort().join(" "))}`,
       );
     }
     lines.push(

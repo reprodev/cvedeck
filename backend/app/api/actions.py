@@ -22,11 +22,12 @@ sync endpoints depend on overridable providers
 that never touch real hosts or an online database.
 """
 
+import logging
 import socket
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import paramiko
 from sqlalchemy.orm import Session
 
@@ -34,7 +35,11 @@ from .. import config
 from ..data.repository import Repository
 from ..enums import Platform, ScanStatus
 from ..models import Credentials, TargetMachine
-from ..scanner.collectors import parse_private_key
+from ..scanner.collectors import (
+    CommandOutputLimitError,
+    _run_ssh_command_detailed,
+    parse_private_key,
+)
 from ..scanner.engine import MachineScan, ScannerEngine
 from ..scanner.exceptions import AuthError, HostKeyError, HostKeyMismatchError
 from ..scanner.host_keys import connect_pinned
@@ -69,6 +74,23 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/api", tags=["actions"])
+
+security_log = logging.getLogger("app.security")
+
+
+def _audit(request: Request, action: str, detail: str) -> None:
+    """One line in the security log for an action that reaches other machines.
+
+    Req 16.19. These are the actions that aim CveDeck at a network -- possibly
+    with the server's own SSH key -- or that re-open trust in a host. The line
+    says who asked (session, token or open), from where, and what; it never
+    carries a credential.
+    """
+    principal = getattr(request.state, "principal", None)
+    # A session's username, "token:<name>" for a token, or "open" with login off.
+    who = (principal.username or principal.kind) if principal is not None else "unknown"
+    client = request.client.host if request.client else "unknown"
+    security_log.info("%s by %s from %s: %s", action, who, client, detail)
 
 
 def _get_remediation_service(
@@ -130,6 +152,33 @@ def _demo_guard(action: str, *, advice: str = "Run your own instance to scan rea
             )
 
     return guard
+
+
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def refuse_writes_in_demo_mode(request: Request) -> None:
+    """Refuse every state-changing request while in demo mode (Req 15.9).
+
+    Attached to whole routers at include time in ``create_app``, the same way
+    ``require_principal`` is, so a route added later is refused without anyone
+    remembering to ask. ``_demo_guard`` stays on the routes that have one,
+    because its message names the action; this is the catch-all behind it.
+
+    Guarding route by route is what failed twice. 0.8.8 protected the seeded
+    fleet from the periodic refresh and left the HTTP route open; 0.8.9 closed
+    that and still left remediation edits, the sync, and discovery enroll open
+    to every anonymous visitor -- and enroll overwrites an existing machine's
+    hostname, platform and scan status, so one request rewrote the fixture
+    permanently. The question is not "does this route reach the network?" but
+    "can this route change what the demo shows?", and for a public instance with
+    no login the only safe answer is that nothing can.
+    """
+    if config.demo_mode() and request.method not in _SAFE_METHODS:
+        raise HTTPException(
+            status_code=403,
+            detail="Changes are disabled in demo mode. Run your own instance to try this.",
+        )
 
 
 @router.post(
@@ -219,6 +268,7 @@ def _refuse_unsupported_platforms(body: ScanRequest) -> None:
 )
 def initiate_scan(
     body: ScanRequest,
+    request: Request,
     engine: ScannerEngine = Depends(get_scanner_engine),
 ) -> ScanResponse:
     """Manually initiate a scan over a batch of Linux targets (Req 1.1, 13.1).
@@ -232,6 +282,14 @@ def initiate_scan(
         TargetMachine(id=t.id, hostname=t.hostname, platform=t.platform)
         for t in body.targets
     ]
+    server_key = sum(1 for t in body.targets if not (t.password or t.private_key))
+    _audit(
+        request,
+        "Scan",
+        f"{len(targets)} target(s), {server_key} with the server-managed key: "
+        + ", ".join(t.hostname[:64] for t in body.targets[:10])
+        + (" ..." if len(body.targets) > 10 else ""),
+    )
 
     # Resolve every target's credentials up front. A target may supply a
     # password or a private key, or omit both and fall back to the deployment's
@@ -304,6 +362,7 @@ def _diff_counts(scan: MachineScan) -> dict[str, object]:
 )
 def forget_host_key(
     hostname: str,
+    request: Request,
     port: int | None = Query(default=None, ge=1, le=65535),
     session: Session = Depends(get_session),
 ) -> Response:
@@ -320,6 +379,12 @@ def forget_host_key(
     ):
         raise HTTPException(status_code=404, detail="No host key is pinned for that address")
     session.commit()
+    # The next connection to this address trusts whatever key it is shown.
+    _audit(
+        request,
+        "Host key forgotten",
+        f"{hostname[:64]}:{port if port is not None else config.ssh_port()}",
+    )
     return Response(status_code=204)
 
 
@@ -401,6 +466,7 @@ def refresh_feeds(
 )
 def discovery_sweep(
     body: DiscoverySweepRequest,
+    request: Request,
 ) -> DiscoverySweepResponse:
     """Zero-touch network discovery sweep (Phase 1) (Req 8.1, 8.3).
 
@@ -431,6 +497,11 @@ def discovery_sweep(
                 f"Maximum allowed is /20 (4096 addresses)."
             ),
         )
+    _audit(
+        request,
+        "Discovery sweep",
+        f"{network} ({network.num_addresses} addresses), ports {body.ports or 'default'}",
+    )
 
     engine = NetworkDiscoveryEngine(
         ports=body.ports,
@@ -527,6 +598,7 @@ def enroll_discovered_hosts(
 )
 def test_scan_connection(
     body: TestConnectionRequest,
+    request: Request,
     session: Session = Depends(get_session),
 ) -> TestConnectionResponse:
     """Pre-flight test connection reachability and credentials for a target.
@@ -548,6 +620,12 @@ def test_scan_connection(
     """
     start_time = time.perf_counter()
     target_host = body.hostname.strip()
+    _audit(
+        request,
+        "Connection test",
+        f"{body.platform.value} {target_host[:64]}"
+        + ("" if (body.password or body.private_key) else " with the server-managed key"),
+    )
 
     # Resolve the same way a real scan would, so pre-flight and the scan never
     # disagree about which credentials are in play.
@@ -616,15 +694,18 @@ def test_scan_connection(
             session.commit()
             pinned = host_keys.get(target_host, port)
             # Query OS release
-            _stdin, stdout, _stderr = client.exec_command(
-                "cat /etc/os-release 2>/dev/null || uname -srm", timeout=3.0
-            )
-            raw = stdout.read()
-            banner_text = (
-                raw.decode("utf-8", errors="replace").strip()
-                if isinstance(raw, bytes)
-                else str(raw).strip()
-            )
+            # Bounded like a scan's commands (Req 1.11): the host has only
+            # just been trusted, and a banner needs a few hundred bytes.
+            try:
+                banner_text = _run_ssh_command_detailed(
+                    client,
+                    "cat /etc/os-release 2>/dev/null || uname -srm",
+                    timeout=3.0,
+                    deadline=10.0,
+                    limit=64 * 1024,
+                ).stdout.strip()
+            except CommandOutputLimitError:
+                banner_text = ""
             os_line = ""
             for line in banner_text.splitlines():
                 if line.startswith("PRETTY_NAME="):

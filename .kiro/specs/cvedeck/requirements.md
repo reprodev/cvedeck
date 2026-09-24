@@ -46,6 +46,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 8. WHEN the Scanner_Engine collects a Linux Inventory, THE Scanner_Engine SHALL select the package manager by testing for each one's presence, and SHALL NOT select it from the exit status of a shell pipeline, so that a probe for an absent manager cannot report success and mask the managers after it.
 9. WHEN the Scanner_Engine collects a Linux Inventory from any supported package manager, THE Scanner_Engine SHALL collect each package's declared dependencies alongside its name and version, so that impact assessment has the same evidence on every supported distribution.
 10. IF a Target_Machine authenticates but has none of the supported package managers, THEN THE Scanner_Engine SHALL record that as the reason, distinctly from a package manager whose command failed.
+11. THE Scanner_Engine SHALL bound the output it reads from a Target_Machine in size and in total time, and IF either bound is exceeded THEN THE Scanner_Engine SHALL record the scan as unable to read an inventory, with the reason, and SHALL NOT record a truncated inventory, since a truncated inventory would report every finding past the cut as resolved (extends Req 1.7).
 
 ### Requirement 2: CVE Matching from Public Data Sources
 
@@ -344,6 +345,12 @@ host it is for, so that copying it produces a command that works.
 9. WHERE a finding names no package — a kernel or operating-system advisory —
    THE system SHALL report its fix status as unknown rather than as no fix
    published, since no vendor was asked about a package that was never named.
+10. WHEN the system places a package name, a release name or any other text
+    reported by a Target_Machine into a command or script offered for copying
+    THEN it SHALL quote the name so that a shell reads it as exactly one literal
+    argument, SHALL keep text placed in a comment line free of line breaks, and
+    SHALL NOT place a control character into a command, since a scanned host
+    is not trusted and these commands are run with root privileges.
 
 ### Requirement 15: Public demonstration mode
 
@@ -381,6 +388,12 @@ want it to be safe to expose.
    deliberately unchecked findings of Req 15.6, re-seeding is guarded on an
    empty fleet and so cannot restore it, and a guard placed after the download
    skips only what follows it while the catalogue has already been replaced.
+9. WHERE demonstration mode is enabled THEN the system SHALL refuse every
+   request that would change stored state -- every API method other than GET,
+   HEAD and OPTIONS outside the sign-in routes -- whether or not it reaches the
+   network, and SHALL apply that refusal to the routers as a whole rather than
+   route by route, so that a route added later is refused without being named
+   (extends Req 15.3 and 15.8).
 
 ### Requirement 16: Access control
 
@@ -430,7 +443,39 @@ scripting against the API, I want a token that does not depend on a browser.
 11. WHERE demonstration mode is enabled THEN the system SHALL NOT require login
     (extends Req 15).
 12. THE system SHALL provide a command, run on the host, that resets the account
-    password, ending every session, or creates the account when none exists.
+    password, ending every session and revoking every API token, or creates the
+    account when none exists.
+13. THE system SHALL refuse, before acting on it, a request whose lists or
+    strings exceed fixed upper bounds -- the targets in a scan, the hosts in an
+    enrolment, the ports in a sweep, each credential field and each note --
+    and SHALL refuse a port outside 1 to 65535.
+14. WHEN the system refuses a request as malformed THEN it SHALL name the field
+    and the reason, and SHALL NOT echo the rejected value, which may be a
+    password or a private key.
+15. THE system SHALL send with every response the headers that forbid another
+    site from framing it, forbid content-type sniffing, send no referrer, and
+    restrict the dashboard to running and styling itself only from its own
+    origin, with no inline script.
+16. WHERE login is disabled, WHEN a state-changing request states that it came
+    from another site -- by its Origin, its Referer or its fetch metadata --
+    THEN the system SHALL refuse it, while still accepting a request that
+    states no origin at all; AND THE system SHALL refuse to start with a
+    wildcard CORS origin, since credentials would then be granted to any site.
+17. WHERE a list of host names is configured THEN the system SHALL refuse any
+    request whose Host is not on it or loopback, as the defence against DNS
+    rebinding; AND WHERE login is disabled and no list is configured, THE
+    system SHALL warn at start-up that it is exposed to DNS rebinding.
+18. THE system SHALL let a signed-in person revoke every API token at once,
+    and SHALL NOT let an API token do so.
+19. THE system SHALL record in its log, with who asked and from where and
+    without any credential: each scan, discovery sweep and connection test,
+    including whether the server-managed key was used; each forgotten host
+    key; each refused cross-origin or cross-site request; each unknown or
+    revoked API token presented; and each attempt refused by throttling.
+20. THE system SHALL throttle failed sign-ins per client address across all
+    usernames as well as per account, with a looser limit, AND SHALL bound how
+    many password verifications run at once, so that sign-in attempts with
+    made-up usernames cannot consume memory and processor time without limit.
 
 ### Requirement 17: Pinned SSH host keys
 

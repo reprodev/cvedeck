@@ -17,9 +17,16 @@ docker run -d \
   -p 3325:8000 \
   -v /srv/cvedeck:/data \
   -e PUID="$(id -u)" -e PGID="$(id -g)" \
+  --security-opt no-new-privileges:true \
   --restart unless-stopped \
   ghcr.io/reprodev/cvedeck:latest
 ```
+
+`-p 3325:8000` listens on every interface, and Docker's port publishing
+bypasses host firewalls such as ufw. Use `-p 127.0.0.1:3325:8000` when a
+reverse proxy on the same host is the only way in. The compose file does the
+same with `BIND_ADDR`, and also drops every capability the container does not
+need -- see `docker-compose.yml`.
 
 The dashboard is then at `http://<host>:3325` and the API at
 `http://<host>:3325/api`. The database is written to `/srv/cvedeck/cvedeck.db`
@@ -60,8 +67,8 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_SSH_PORT` | `22` | Port the Linux collector and the connection test dial. |
 | `CVEDECK_SCAN_HISTORY_LIMIT` | `50` | Scan runs kept per machine, with what each one found new and resolved. Older runs are pruned when a new one is recorded; a machine's latest successful run is always kept. At least 1. |
 | `CVEDECK_SSH_HOST_KEY_POLICY` | `tofu` | What to do with a host whose SSH key is not pinned yet. `tofu` pins the key it presents on the first successful connection; `strict` refuses it. A host that presents a different key from its pinned one is refused under both. Any other value is an error. |
-| `CVEDECK_WINRM_PORT` | `5985` | Port the Windows collector and the connection test dial (`5986` for HTTPS). Windows scans are refused in this release, but a connection test does connect — see the note under Security. |
-| `CVEDECK_WINRM_SCHEME` | `http` | Transport for the WinRM endpoint: `http` or `https`. Any other value is an error. Applies to the connection test today, and to scans when Windows matching lands. The default sends the NTLM exchange unencrypted. |
+| `CVEDECK_WINRM_PORT` | `5985` | Port the Windows collector and the connection test dial (`5986` for HTTPS). Windows scans are refused in this release, and a Windows connection test currently fails before connecting — see the note under Security. |
+| `CVEDECK_WINRM_SCHEME` | `http` | Transport for the WinRM endpoint: `http` or `https`. Any other value is an error. Will apply to the connection test and to scans once WinRM works (see Security). The default sends the NTLM exchange unencrypted. |
 | `CVEDECK_OSV_API_URL` | `https://api.osv.dev/v1` | Base URL for the OSV.dev REST API. |
 | `CVEDECK_HTTP_TIMEOUT` | `15.0` | Timeout in seconds for vulnerability source HTTP requests. |
 | `CVEDECK_KEV_FEED_URL` | CISA KEV catalogue JSON | Source for the Known Exploited Vulnerabilities catalogue. |
@@ -75,8 +82,9 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_DEFAULT_SSH_KEY_PATH` | _(unset)_ | Path to a server-managed SSH private key. When set, a Linux scan target may omit credentials entirely and authenticate with this key -- this is what enables a fleet re-scan without retyping credentials per host. Re-read on every scan, so rotating the file takes effect without a restart. |
 | `CVEDECK_DEFAULT_SSH_KEY_PASSPHRASE` | _(unset)_ | Passphrase for the above key, if it is encrypted. |
 | `CVEDECK_DEFAULT_SSH_USER` | _(unset)_ | Username paired with the server-managed key when a target supplies none. |
-| `CVEDECK_DEMO_MODE` | `false` | Run as a public demo: seed a fictional fleet into an empty database (with its own fictional intel cache), and **refuse** scans, discovery sweeps, connection tests and the intel refresh, so the seeded unchecked findings stay unchecked. See "Demo mode" below. Leave off on any instance you actually scan with. |
-| `CVEDECK_CORS_ORIGINS` | unset | Comma-separated origins. Only needed if the dashboard is served from a different host than the API. |
+| `CVEDECK_DEMO_MODE` | `false` | Run as a public demo: seed a fictional fleet into an empty database (with its own fictional intel cache), and **refuse every change** -- scans, discovery sweeps, connection tests, the intel refresh, and every edit a visitor could make. See "Demo mode" below. Leave off on any instance you actually scan with. |
+| `CVEDECK_CORS_ORIGINS` | unset | Comma-separated origins. Only needed if the dashboard is served from a different host than the API. `*` is refused at start-up: with credentials allowed, it would admit every site. |
+| `CVEDECK_ALLOWED_HOSTS` | unset | Comma-separated host names this instance answers to; `*.example.lan` matches subdomains, and loopback is always accepted. Any other `Host` gets a 400. Unset accepts any name. Set it whenever login is off -- see "DNS rebinding" under Security. |
 | `CVEDECK_AUTH` | `enabled` | Set to `disabled` to serve the dashboard and API without login, for an instance already behind an authenticating proxy. Any other value, including a typo, leaves login on. A warning is logged on every start while it is off. |
 | `CVEDECK_ADMIN_USERNAME` | unset | With a password, creates this account on start-up if none exists. Never changes an existing account. |
 | `CVEDECK_ADMIN_PASSWORD` | unset | Password for the account above, at least 12 characters. |
@@ -84,7 +92,14 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_COOKIE_SECURE` | `auto` | Mark the session cookie `Secure`: `auto` does so when the request arrived over HTTPS, `true` always, `false` never. Set `true` behind a TLS proxy that uvicorn does not trust for `X-Forwarded-Proto`. |
 
 Container-only extras: `PUID` / `PGID` (default `1000`) set the ownership of
-files written to the data volume, and `TZ` sets the timezone.
+files written to the data volume, and `TZ` sets the timezone. `PUID=0` or
+`PGID=0` is refused, since it would run CveDeck as root; set
+`CVEDECK_ALLOW_ROOT=1` if you really mean it. Everything in the data volume is
+readable by that user and group only (files `0640`, the directory `0750`), and
+files an older release left world-readable are closed on the next start.
+
+`FORWARDED_ALLOW_IPS` is read by uvicorn, not CveDeck: the addresses whose
+`X-Forwarded-*` headers are trusted. See "Behind a reverse proxy".
 
 ## Data and backups
 
@@ -351,8 +366,10 @@ leaving them set does not undo a password changed later in the dashboard.
   7 days unused, or 30 days after sign-in, whichever comes first.
 - Changing the password in **Settings** signs out every other browser.
 - After 5 failed attempts from one address for one username, further attempts
-  are refused for 30 seconds, doubling up to 15 minutes. The count is kept in
-  memory, so a restart clears it.
+  are refused for 30 seconds, doubling up to 15 minutes. After 20 from one
+  address across all usernames, the address is slowed the same way -- trying a
+  new made-up username each time no longer escapes it. The counts are kept in
+  memory, so a restart clears them.
 
 ### API tokens
 
@@ -364,7 +381,8 @@ curl -H "Authorization: Bearer cvd_..." http://localhost:3325/api/machines
 ```
 
 A token can do anything the account can, except change the password or manage
-tokens. Revoke one in **Settings** and it stops working immediately.
+tokens. Revoke one in **Settings** and it stops working immediately; **Revoke
+all tokens** there ends every one at once, for a leak you cannot pin to one.
 
 ### Locked out
 
@@ -376,7 +394,9 @@ docker exec -it --user 1000:1000 cvedeck cvedeck-admin reset-password
 ```
 
 It prompts for the new password (or reads it from stdin with
-`--password-stdin`) and signs out every session. For a native install, run
+`--password-stdin`), signs out every session and revokes every API token -- it
+is the recovery after a compromise, so it ends every way in. Recreate the tokens
+your scripts need afterwards. For a native install, run
 `/opt/cvedeck/venv/bin/cvedeck-admin reset-password` as the `cvedeck` user with
 `/etc/cvedeck/cvedeck.env` loaded.
 
@@ -390,11 +410,23 @@ reach the port, and the log says so on every start. Only `disabled`, `off`,
 
 Demo mode (`CVEDECK_DEMO_MODE=true`) never asks for a login.
 
+With login off, a state-changing request that says it came from another site
+-- by its `Origin`, `Referer` or `Sec-Fetch-Site` header -- is refused. A
+request that says nothing, which is every script, is still served. That stops
+a web page elsewhere from posting to the instance through a user's browser, but
+not DNS rebinding: set `CVEDECK_ALLOWED_HOSTS` as well (see Security). The log
+warns on start while login is off and it is unset.
+
 ### Behind a reverse proxy
 
 - Pass the original `Host` header through (`proxy_set_header Host $host;` in
   nginx). Requests that change something must come from the dashboard's own
-  origin, and that check compares the browser's `Origin` with `Host`.
+  origin, and that check compares the browser's `Origin` with `Host`;
+  `CVEDECK_ALLOWED_HOSTS` checks it too.
+- CveDeck sends its own content policy, framing, referrer and `nosniff`
+  headers. Add only `Strict-Transport-Security` at the proxy, as the example
+  config does; a second content policy there would be enforced alongside the
+  first.
 - For the `Secure` cookie flag and accurate client addresses in the throttle and
   logs, uvicorn has to trust the proxy's `X-Forwarded-*` headers. It trusts
   `127.0.0.1` by default, which covers the systemd install with nginx on the same
@@ -421,7 +453,9 @@ For unattended fleet scanning, mount a dedicated key and point the service at it
 docker run -d   -v /srv/cvedeck/keys:/keys:ro   -e CVEDECK_DEFAULT_SSH_KEY_PATH=/keys/scanner_ed25519   -e CVEDECK_DEFAULT_SSH_USER=cvedeck   ...
 ```
 
-Give that key its own unprivileged account on each target. The collector only
+Keep the key file readable by the container user alone (`chmod 0400`, owned by
+`PUID:PGID`) -- anyone who can read it can log in to every host it is
+authorized on. Give that key its own unprivileged account on each target. The collector only
 issues read commands, so it needs no sudo and no write access anywhere. A
 `command=` restriction or `ForceCommand` in `authorized_keys` is a reasonable
 extra containment step, but note the collector runs a small set of shell
@@ -449,10 +483,17 @@ report as unknown. Seeding is guarded on an empty fleet, so restarting the
 container does not duplicate it and enabling the flag against a database with
 real results in it does nothing.
 
-**It refuses every route that reaches the network.** `POST /api/scans`,
-`POST /api/discovery/sweep`, `POST /api/scans/test-connection`,
-`POST /api/feeds/refresh` and `DELETE /api/host-keys/{hostname}` all return
-403. This is the more important half. The first three take a hostname or a CIDR
+**It is read-only.** Every request that could change stored state -- every
+method but `GET`, `HEAD` and `OPTIONS` outside the sign-in routes -- returns
+403. That is enforced once, on the routers as a whole, so a route added later is
+refused without anyone naming it. Before 0.8.13 the refusals were per route,
+and three write routes were missed: remediation edits, the sync, and discovery
+enroll, which overwrites an existing machine's hostname, platform and scan
+status. Any visitor could rewrite the demo fleet for every visitor after them.
+
+Among those, the ones that reach the network are the reason the mode exists:
+`POST /api/scans`, `POST /api/discovery/sweep`, `POST /api/scans/test-connection`
+and `POST /api/feeds/refresh`. The first three take a hostname or a CIDR
 plus credentials and connect to them, so a public instance with them enabled is
 an SSH/WinRM client and port scanner that any visitor can aim at any address,
 with the traffic originating from your server rather than theirs. The feed
@@ -460,8 +501,8 @@ refresh downloads several megabytes from CISA and FIRST on every press, with no
 login and no rate limit, and rewrites the demo's own seeded intel on the way
 through.
 
-The refusals are enforced in two places, not one. The routes above are guarded
-individually, and `refresh_feeds_and_reapply` refuses before it downloads
+The feed refresh is refused in two places, not one. The route is refused like
+every other write, and `refresh_feeds_and_reapply` refuses before it downloads
 anything, whatever called it -- which is what also covers `cvedeck-admin
 refresh-feeds`, run inside the container where no HTTP guard applies. 0.8.9
 guarded only the route and placed the second check after the download, so the
@@ -472,11 +513,12 @@ The dashboard shows a banner while demo mode is on, and
 `GET /api/health` reports it under `capabilities.demo_mode`.
 
 **It needs no login.** A demo is meant to be clicked around by strangers. What
-makes that safe is the list above and the two places it is enforced -- named
-here rather than summarised as "the routes that could do harm are refused",
-because that sentence is the shape of claim this project has twice found to be
-out of date with the code it described. If you add a route that reaches the
-network, it does not inherit this: guard it, and add it to that list.
+makes that safe is that nothing a visitor sends can change anything, enforced
+at the router and pinned by a test that walks every route
+(`backend/tests/test_demo_mode.py`). A route added later inherits the refusal.
+A background job does not -- it is not a request -- so anything new that
+changes stored state on a schedule needs its own demo check, as the feed
+refresh has.
 
 ## Security
 
@@ -502,6 +544,17 @@ Therefore:
   target credentials all cross the network readable.
 - If you set `CVEDECK_AUTH=disabled`, the login protection above no longer
   applies. Only do that behind something that authenticates people.
+- **DNS rebinding.** A web page elsewhere can point its own host name at your
+  instance's address; the browser then treats the dashboard as that page's own,
+  so the `Origin` check passes. What gives it away is the `Host` header, which
+  still carries the attacker's name. Set `CVEDECK_ALLOWED_HOSTS` to the names you
+  use for CveDeck and every other name is refused. It matters most with login
+  off, where nothing else stands in the way of a scan with the server's SSH key.
+- **The security log.** Lines from the `app.security` logger record each scan,
+  discovery sweep and connection test with who asked and from where (and whether
+  the server-managed key was used), each forgotten host key, refused cross-site
+  requests, unknown or revoked API tokens, and throttled sign-ins. No credential
+  appears in any of them. `docker logs cvedeck 2>&1 | grep app.security`.
 - Use TLS end to end if scan requests cross any untrusted network — otherwise
   target credentials are sent in plaintext.
 - Give the scanner accounts the least privilege that still allows reading
@@ -517,11 +570,12 @@ Therefore:
 - **Windows scans are refused.** `POST /api/scans` returns 422 for any batch
   containing a Windows target, because collected Windows inventory cannot yet be
   matched against vulnerability data and a scan would report the host as clean
-  without having checked it. **A connection test to a Windows host does connect**,
-  on `CVEDECK_WINRM_SCHEME` and `CVEDECK_WINRM_PORT`, so set them
-  (`https`, `5986`) before testing anything outside a lab: the default transport
-  on 5985 is unencrypted at the transport layer and the NTLM exchange crosses it
-  in the clear. The same settings carry the scan once Windows matching exists.
+  without having checked it. **A Windows connection test fails too**, before it
+  connects: it builds its WinRM session with equal read and operation timeouts,
+  which pywinrm 0.5 rejects, so no password is sent anywhere. The collector
+  behind future Windows scans also switches certificate validation off. Both
+  are known and will be fixed with Windows matching; when that lands, set
+  `CVEDECK_WINRM_SCHEME=https` and `CVEDECK_WINRM_PORT=5986` outside a lab.
 
 Outbound access the scanner needs: TCP 22 to Linux targets, and the configured
 WinRM port to any Windows host you run a connection test against.

@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from typing import Annotated
+
 from pydantic import BaseModel, Field
 
 from ..enums import (
@@ -296,6 +298,28 @@ class FeedRefreshResponse(BaseModel):
 # Action endpoint request/response models (task 8.2)
 # --------------------------------------------------------------------------- #
 
+# Upper bounds on what a request may carry (Req 16.13). Each is far above any
+# honest value and exists so that one request cannot pin a worker or fill the
+# database: a scan batch runs synchronously inside its request, a sweep's cost
+# is addresses times ports, and a note is stored as sent.
+#: The most targets in one scan batch, and hosts in one enroll -- the size of
+#: the largest sweep (a /20), which is where an enroll batch comes from.
+MAX_BATCH = 4096
+#: A DNS name is at most 253 characters; an id or username has no business
+#: being longer than a filesystem name.
+MAX_HOSTNAME = 253
+MAX_NAME = 255
+#: A password or key passphrase.
+MAX_SECRET = 1024
+#: An RSA-8192 private key in PEM is under 7 KiB.
+MAX_PRIVATE_KEY = 16 * 1024
+#: A remediation note.
+MAX_NOTE = 10_000
+#: Distinct TCP ports probed per discovered address.
+MAX_SWEEP_PORTS = 64
+
+Port = Annotated[int, Field(ge=1, le=65535)]
+
 
 class RemediationIn(BaseModel):
     """Request body to add or update a remediation record (Req 4.1, 4.3).
@@ -306,7 +330,7 @@ class RemediationIn(BaseModel):
     """
 
     status: RemediationStatus
-    note: str = ""
+    note: str = Field(default="", max_length=MAX_NOTE)
 
 
 class RemediationOut(BaseModel):
@@ -336,13 +360,13 @@ class TargetIn(BaseModel):
     without retyping credentials for every host.
     """
 
-    id: str
-    hostname: str
+    id: str = Field(max_length=MAX_NAME)
+    hostname: str = Field(max_length=MAX_HOSTNAME)
     platform: Platform
-    username: str | None = None
-    password: str | None = None
-    private_key: str | None = None
-    passphrase: str | None = None
+    username: str | None = Field(default=None, max_length=MAX_NAME)
+    password: str | None = Field(default=None, max_length=MAX_SECRET)
+    private_key: str | None = Field(default=None, max_length=MAX_PRIVATE_KEY)
+    passphrase: str | None = Field(default=None, max_length=MAX_SECRET)
 
 
 class ScanRequest(BaseModel):
@@ -352,7 +376,7 @@ class ScanRequest(BaseModel):
     validation so a scan always has at least one target (Req 1.1, 1.2).
     """
 
-    targets: list[TargetIn] = Field(min_length=1)
+    targets: list[TargetIn] = Field(min_length=1, max_length=MAX_BATCH)
 
 
 class MachineScanOut(BaseModel):
@@ -421,8 +445,9 @@ class DiscoverySweepRequest(BaseModel):
         description="IPv4 network in CIDR notation, e.g. '192.168.0.0/24'",
         examples=["192.168.0.0/24", "10.0.1.0/24"],
     )
-    ports: list[int] | None = Field(
+    ports: list[Port] | None = Field(
         default=None,
+        max_length=MAX_SWEEP_PORTS,
         description="TCP ports to probe (defaults to 22, 80, 443, 445, 3389, 5985)",
     )
     grab_banners: bool = Field(
@@ -474,9 +499,12 @@ class HostEnrollIn(BaseModel):
 
     id: str | None = Field(
         default=None,
+        max_length=MAX_NAME,
         description="Machine ID (defaults to hostname if not specified)",
     )
-    hostname: str = Field(..., description="Target hostname or IP address")
+    hostname: str = Field(
+        ..., max_length=MAX_HOSTNAME, description="Target hostname or IP address"
+    )
     platform: Platform = Field(
         default=Platform.LINUX,
         description="Operating system family (linux or windows)",
@@ -488,6 +516,7 @@ class HostEnrollBatchIn(BaseModel):
 
     hosts: list[HostEnrollIn] = Field(
         min_length=1,
+        max_length=MAX_BATCH,
         description="List of hosts to enroll into the target fleet",
     )
 
@@ -502,21 +531,28 @@ class HostEnrollResponse(BaseModel):
 class TestConnectionRequest(BaseModel):
     """Request payload to pre-flight test connection and credentials for a target."""
 
-    hostname: str = Field(..., min_length=1, description="Target hostname or IP address")
+    hostname: str = Field(
+        ..., min_length=1, max_length=MAX_HOSTNAME, description="Target hostname or IP address"
+    )
     platform: Platform = Field(
         default=Platform.LINUX,
         description="Target platform family (linux or windows)",
     )
     username: str | None = Field(
         default=None,
+        max_length=MAX_NAME,
         description="SSH or WinRM username; omit to use the server-managed default",
     )
-    password: str | None = Field(default=None, description="SSH or WinRM password")
+    password: str | None = Field(
+        default=None, max_length=MAX_SECRET, description="SSH or WinRM password"
+    )
     private_key: str | None = Field(
-        default=None, description="SSH private key (PEM or OpenSSH format)"
+        default=None,
+        max_length=MAX_PRIVATE_KEY,
+        description="SSH private key (PEM or OpenSSH format)",
     )
     passphrase: str | None = Field(
-        default=None, description="Passphrase for an encrypted private key"
+        default=None, max_length=MAX_SECRET, description="Passphrase for an encrypted private key"
     )
 
 

@@ -14,7 +14,28 @@ services:
       # Host port -> container port. The container port is fixed at 8000.
       # 3325 ("DECK" on a phone keypad) is IANA-unassigned and unused by common
       # self-hosted apps; 8080 collides with half a homelab. Override with PORT.
-      - "${PORT:-3325}:8000"
+      #
+      # BIND_ADDR is the host address it listens on. The default, 0.0.0.0, is
+      # every interface -- reachable from the whole network, and Docker's port
+      # publishing bypasses host firewalls such as ufw. Set BIND_ADDR=127.0.0.1
+      # when a reverse proxy on the same host is the only way in.
+      - "${BIND_ADDR:-0.0.0.0}:${PORT:-3325}:8000"
+    # Least privilege. The entrypoint needs CHOWN, DAC_OVERRIDE and FOWNER to
+    # fix up /data and SETUID/SETGID to drop to PUID:PGID; NET_RAW lets network
+    # discovery send ICMP. Nothing else is granted, and nothing the application
+    # runs can gain privileges later.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+      - NET_RAW
+    pids_limit: 512
     volumes:
       # The database lives here. Back this directory up.
       - "${DATA_DIR:-./data}:/data"
@@ -22,6 +43,14 @@ services:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
       TZ: "${TZ:-UTC}"
+      # The host names you reach CveDeck by, comma-separated; anything else is
+      # refused. Empty accepts any name. Set it whenever login is off -- it is
+      # the defence against DNS rebinding. See DEPLOYMENT.md.
+      CVEDECK_ALLOWED_HOSTS: "${CVEDECK_ALLOWED_HOSTS:-}"
+      # Addresses whose X-Forwarded-* headers are trusted: your reverse proxy.
+      # Needed for the Secure cookie flag and per-client sign-in throttling
+      # when the proxy runs in another container.
+      FORWARDED_ALLOW_IPS: "${FORWARDED_ALLOW_IPS:-127.0.0.1}"
       # Uncomment to use PostgreSQL instead of the bundled SQLite file.
       # CVEDECK_DB_URL: "postgresql+psycopg://user:password@db/cvedeck"
       # Uncomment to enable POST /api/sync.
@@ -31,11 +60,11 @@ services:
       # NVD allows only 5 requests per rolling 30 seconds.
       # CVEDECK_NVD_ENABLED: "true"
       # CVEDECK_NVD_API_KEY: "your-key-here"
-      # Uncomment to run as a public demo: seeds a fictional fleet, and
-      # refuses scans, discovery sweeps, connection tests and the intel
-      # refresh -- the demo ships its own seeded intel and reapplying a real
-      # catalogue over it would erase the findings it deliberately leaves
-      # unchecked. Do not enable on an instance you actually scan with.
+      # Uncomment to run as a public demo: seeds a fictional fleet and is
+      # read-only -- it refuses scans, discovery sweeps, connection tests, the
+      # intel refresh and every other change, since a demo needs no login and
+      # anything a visitor could change, every later visitor would see. Do not
+      # enable on an instance you actually scan with.
       # CVEDECK_DEMO_MODE: "true"
       # Threat-intel feeds (CISA KEV, FIRST EPSS) need no configuration to work.
       # The application refreshes them itself every 24 hours, starting at
@@ -45,11 +74,26 @@ services:
       # change an account that already exists:
       # CVEDECK_ADMIN_USERNAME: "admin"
       # CVEDECK_ADMIN_PASSWORD_FILE: "/run/secrets/cvedeck_admin_password"
+      # ...and uncomment the two `secrets:` blocks at the end of this file.
       # Only behind a proxy that already authenticates people:
       # CVEDECK_AUTH: "disabled"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+    # secrets:
+    #   - cvedeck_admin_password
+
+# The admin password as a file rather than an environment variable, so it is
+# not shown by `docker inspect`. Compose mounts it as it is on the host, so
+# make it owned by PUID:PGID and readable by that user alone, e.g.
+# install -m 0400 -o 1000 -g 1000 /dev/null admin-password, then write to it.
+# secrets:
+#   cvedeck_admin_password:
+#     file: ./admin-password

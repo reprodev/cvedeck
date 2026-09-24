@@ -22,6 +22,7 @@ import re
 
 import io
 import socket
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Protocol
@@ -40,6 +41,22 @@ from .releases import UBUNTU_CODENAMES, ubuntu_ecosystem
 _SSH_PORT = 22
 _CONNECT_TIMEOUT = 5.0
 _COMMAND_TIMEOUT = 45.0
+
+#: The most output one command may return. ``_COMMAND_TIMEOUT`` bounds each
+#: read, not the command, and nothing bounded the size: a scanned host is not
+#: trusted, and one that streamed forever held the scan open and grew the
+#: process without limit. A full dpkg listing with dependencies for thousands
+#: of packages is a few megabytes, so this is generous rather than tight.
+_OUTPUT_LIMIT_BYTES = 32 * 1024 * 1024
+
+#: Wall-clock ceiling for one command, however its bytes arrive. A host that
+#: sends one byte every 44 seconds never trips the per-read timeout.
+_COMMAND_DEADLINE = 180.0
+
+#: Stderr only ever feeds a 300-character failure detail.
+_STDERR_LIMIT_BYTES = 64 * 1024
+
+_READ_CHUNK = 64 * 1024
 
 
 class InventoryCollector(Protocol):
@@ -282,12 +299,18 @@ class LinuxCollector:
                     f"could not connect to {target.hostname}:{self._port}"
                 ) from exc
 
-            context_output = _run_ssh_command(
-                client, _LINUX_CONTEXT_CMD, timeout=self._command_timeout
-            )
-            packages = _run_ssh_command_detailed(
-                client, _LINUX_PACKAGES_CMD, timeout=self._command_timeout
-            )
+            try:
+                context_output = _run_ssh_command(
+                    client, _LINUX_CONTEXT_CMD, timeout=self._command_timeout
+                )
+                packages = _run_ssh_command_detailed(
+                    client, _LINUX_PACKAGES_CMD, timeout=self._command_timeout
+                )
+            except CommandOutputLimitError as exc:
+                # The host answered but would not stop. Failing the scan keeps
+                # the previous findings; a truncated inventory would not
+                # (Req 1.7, 1.11).
+                raise InventoryUnavailableError(target.hostname, detail=str(exc)) from exc
         finally:
             client.close()
 
@@ -360,23 +383,98 @@ def _run_ssh_command(client: "paramiko.SSHClient", command: str, timeout: float 
 
 
 def _run_ssh_command_detailed(
-    client: "paramiko.SSHClient", command: str, timeout: float = _COMMAND_TIMEOUT
+    client: "paramiko.SSHClient",
+    command: str,
+    timeout: float = _COMMAND_TIMEOUT,
+    *,
+    deadline: float | None = None,
+    limit: int | None = None,
 ) -> _CommandResult:
     """Execute a command over SSH and return stdout, stderr and exit status.
 
     The exit status is read through ``getattr`` because it lives on the
     channel behind the stdout file, which not every client object exposes.
+
+    Bounded in size and in time, because the other end is a host being
+    scanned, not one that is trusted (Req 1.11). The deadline is enforced by
+    closing the channel from a timer rather than by checking a clock between
+    reads: paramiko's ``read(n)`` blocks until ``n`` bytes or EOF, so a host
+    trickling bytes would never return control to a check. Either bound raises
+    ``CommandOutputLimitError`` -- never a truncated result, which would parse
+    as a smaller inventory and quietly report the missing packages resolved.
     """
+    deadline = _COMMAND_DEADLINE if deadline is None else deadline
+    limit = _OUTPUT_LIMIT_BYTES if limit is None else limit
+    watchdog: threading.Timer | None = None
+    expired = threading.Event()
     try:
         _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-        raw = stdout.read()
-        raw_err = stderr.read() if stderr is not None else b""
         channel = getattr(stdout, "channel", None)
+        close = getattr(channel, "close", None)
+        if callable(close):
+            def _expire() -> None:
+                expired.set()
+                close()
+
+            watchdog = threading.Timer(deadline, _expire)
+            watchdog.daemon = True
+            watchdog.start()
+        raw = _read_bounded(stdout, limit)
+        if raw is None:
+            if callable(close):
+                close()
+            raise CommandOutputLimitError(
+                f"the host sent more than {limit:,} bytes of output"
+            )
+        raw_err = _read_bounded(stderr, _STDERR_LIMIT_BYTES, truncate=True) if stderr is not None else b""
         recv_exit_status = getattr(channel, "recv_exit_status", None)
         exit_status = recv_exit_status() if callable(recv_exit_status) else None
     except (paramiko.SSHException, socket.error, OSError) as exc:
+        if expired.is_set():
+            raise CommandOutputLimitError(
+                f"the command did not finish within {deadline:.0f} seconds"
+            ) from exc
         raise ConnectionError(f"command failed over SSH: {command!r}") from exc
+    finally:
+        if watchdog is not None:
+            watchdog.cancel()
+    if expired.is_set():
+        raise CommandOutputLimitError(
+            f"the command did not finish within {deadline:.0f} seconds"
+        )
     return _CommandResult(_decode(raw), _decode(raw_err), exit_status)
+
+
+class CommandOutputLimitError(Exception):
+    """A remote command exceeded ``_OUTPUT_LIMIT_BYTES`` or ``_COMMAND_DEADLINE``.
+
+    Internal to this module: ``LinuxCollector.collect`` turns it into an
+    ``InventoryUnavailableError`` carrying the reason, so the scan fails loudly
+    and the previous findings stand (Req 1.7, 1.11).
+    """
+
+
+def _read_bounded(stream, limit: int, *, truncate: bool = False) -> bytes | None:
+    """Read ``stream`` to EOF, or up to ``limit`` bytes.
+
+    Returns ``None`` when the stream holds more than ``limit`` bytes, unless
+    ``truncate`` is set, in which case the first ``limit`` bytes are returned.
+    """
+    parts: list[bytes] = []
+    total = 0
+    while True:
+        chunk = stream.read(_READ_CHUNK)
+        if not chunk:
+            return b"".join(parts)
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8", errors="replace")
+        total += len(chunk)
+        if total > limit:
+            if truncate:
+                parts.append(chunk[: len(chunk) - (total - limit)])
+                return b"".join(parts)
+            return None
+        parts.append(chunk)
 
 
 def _split_context(output: str) -> tuple[str, str | None, bool | None]:

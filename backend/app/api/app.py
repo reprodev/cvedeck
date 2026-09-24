@@ -22,6 +22,8 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
@@ -29,12 +31,31 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import config
 from ..auth.dependencies import login_required, require_principal, resolve_principal
-from . import actions, auth_routes, routes
+from . import actions, auth_routes, routes, security
 from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.8.12"
+_VERSION = "0.8.13"
+
+
+async def _validation_error_without_input(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """FastAPI's 422, minus the rejected values (Req 16.14).
+
+    The default body echoes each rejected value back as ``input`` -- and for a
+    target whose ``private_key`` is one byte too long, or a sign-in whose
+    password is, the rejected value is the secret. It goes back to the caller
+    who sent it, but a response body is exactly what proxies, browser
+    extensions and debugging tools record. The field location and the reason
+    are what a client needs; the value it just sent, it already has.
+    """
+    errors = [
+        {key: value for key, value in error.items() if key not in ("input", "ctx")}
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
 
 def create_app(*, wire_production: bool = False) -> FastAPI:
@@ -66,6 +87,9 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
         redoc_url=None,
         openapi_url=None,
     )
+
+    app.add_exception_handler(RequestValidationError, _validation_error_without_input)
+    security.install(app)
 
     origins = config.cors_origins() if wire_production else []
     if origins:
@@ -114,7 +138,12 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
     # Every router except the public auth routes is protected here, at include
     # time, so a route added to any of them later is protected without anyone
     # remembering to ask (Req 16.1, Property 12).
-    protected = [Depends(require_principal)]
+    #
+    # Demo mode is read-only the same way, and for the same reason: guarding
+    # route by route left three write routes open to anonymous visitors through
+    # 0.8.12 (Req 15.9). The auth routers are excluded -- they already refuse
+    # every change while login is off.
+    protected = [Depends(require_principal), Depends(actions.refuse_writes_in_demo_mode)]
     app.include_router(auth_routes.public_router)
     app.include_router(auth_routes.account_router)
     app.include_router(routes.router, dependencies=protected)

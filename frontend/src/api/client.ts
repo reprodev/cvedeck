@@ -615,6 +615,12 @@ export class CveScannerApiClient {
     );
   }
 
+  /** DELETE /api/auth/tokens -- revoke every API token (Req 16.18). */
+  async revokeAllApiTokens(): Promise<number> {
+    const wire = await this.request<{ revoked: number }>("DELETE", "/api/auth/tokens");
+    return wire.revoked;
+  }
+
   /** GET /api/host-keys -- every pinned SSH host key (Req 17.10). */
   async listHostKeys(): Promise<HostKeyPin[]> {
     const wire = await this.request<HostKeyWire[]>("GET", "/api/host-keys");

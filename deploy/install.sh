@@ -45,14 +45,18 @@ cp "${REPO_DIR}/backend/pyproject.toml" "${REPO_DIR}/backend/README.md" \
 if [ ! -d "${APP_DIR}/venv" ]; then
     python3 -m venv "${APP_DIR}/venv"
 fi
-"${APP_DIR}/venv/bin/pip" install --upgrade pip
+# Pinned to the Dockerfile's version rather than whatever is newest today.
+"${APP_DIR}/venv/bin/pip" install --no-cache-dir pip==26.2.1
 "${APP_DIR}/venv/bin/pip" install --no-cache-dir -r "${APP_DIR}/backend/requirements.txt"
 "${APP_DIR}/venv/bin/pip" install --no-cache-dir --no-deps "${APP_DIR}/backend"
 
 echo "==> Building frontend"
 (
     cd "${REPO_DIR}/frontend"
-    npm ci
+    # This script runs as root. --ignore-scripts means no dependency's install
+    # hook runs with that; the build needs none (the only one in the lockfile is
+    # fsevents, which is macOS-only).
+    npm ci --ignore-scripts
     npm run build
 )
 rm -rf "${APP_DIR}/static"

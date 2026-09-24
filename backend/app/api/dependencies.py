@@ -72,6 +72,14 @@ def _prepare_access_control(engine: Engine) -> None:
             "who can reach this port. Only do this behind an authenticating "
             "proxy or on a network you trust."
         )
+        if not config.allowed_hosts():
+            # Req 16.17. Without login, the Host check is the only thing that
+            # stops a page elsewhere rebinding its own name to this address.
+            logger.warning(
+                "CVEDECK_ALLOWED_HOSTS is not set, so with login off any web page "
+                "a user on this network visits can reach this instance by DNS "
+                "rebinding. Set it to the names you use for CveDeck."
+            )
         return
     if config.demo_mode():
         return

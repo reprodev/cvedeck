@@ -209,3 +209,81 @@ def test_a_normal_instance_may_refresh_intel(normal, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["results"][0]["feed_name"] == "kev"
+
+
+# --- Req 15.9: demo mode is read-only by construction -------------------------
+
+_READ_ONLY = {"GET", "HEAD", "OPTIONS"}
+
+
+def _mutating_api_routes(app) -> list[tuple[str, str]]:
+    """Every state-changing (method, path) outside the sign-in routes.
+
+    Walks the generated OpenAPI document rather than a hand-kept list, so a
+    route added next month is covered the day it is written -- the same shape
+    as Property 12's walk in ``test_auth_enforcement.py``.
+    """
+    found = []
+    for path, operations in app.openapi()["paths"].items():
+        if not path.startswith("/api") or path.startswith("/api/auth"):
+            continue
+        for method in operations:
+            if method.upper() not in _READ_ONLY:
+                found.append((method.upper(), path))
+    return sorted(found)
+
+
+def _concrete(path: str) -> str:
+    """Fill every ``{param}`` so the request routes."""
+    import re
+
+    return re.sub(r"\{[^}]+\}", "x", path)
+
+
+def test_every_state_changing_route_is_refused(demo):
+    """Req 15.9: nothing an anonymous visitor sends may change the demo.
+
+    The body is deliberately empty. The refusal has to come from the router,
+    before validation -- a guard that only fires once the body is well formed
+    would let a visitor learn the schema and then walk straight past it.
+    """
+    routes = _mutating_api_routes(demo.app)
+
+    # The walk must not pass vacuously: these are the routes that were open to
+    # anonymous visitors through 0.8.12.
+    for known in [
+        ("POST", "/api/discovery/enroll"),
+        ("POST", "/api/sync"),
+        ("POST", "/api/machines/{machine_id}/cves/{cve_id}/remediation"),
+        ("PUT", "/api/remediation/{record_id}"),
+    ]:
+        assert known in routes
+
+    for method, path in routes:
+        response = demo.request(method, _concrete(path), json={})
+        assert response.status_code == 403, (method, path, response.status_code)
+        assert "demo mode" in response.json()["detail"].lower()
+
+
+def test_enroll_cannot_rewrite_a_seeded_machine(demo):
+    """The sharp case: enroll upserts, so it could overwrite the fixture."""
+    response = demo.post(
+        "/api/discovery/enroll",
+        json={"hosts": [{"ip": "192.0.2.10", "hostname": "web-01", "platform": "windows"}]},
+    )
+
+    assert response.status_code == 403
+
+
+def test_a_normal_instance_still_accepts_writes(normal):
+    """The guard is demo-only: an ordinary instance reaches the handler.
+
+    404 is the handler's own answer for an unknown machine, which proves the
+    request got past every router dependency.
+    """
+    response = normal.post(
+        "/api/machines/nope/cves/CVE-2024-0001/remediation",
+        json={"status": "open", "note": ""},
+    )
+
+    assert response.status_code == 404

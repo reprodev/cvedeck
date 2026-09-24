@@ -896,7 +896,7 @@ export function MachineDrillDownView({
                   </p>
                   <div style={{ marginTop: "auto", paddingTop: "0.5rem" }}>
                     <span style={{ fontSize: "0.74rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-                      {inspectorTooling.purgeCmd("<package>")}
+                      {inspectorTooling.purgeCmd("PACKAGE")}
                     </span>
                   </div>
                 </div>
@@ -1746,7 +1746,7 @@ export function MachineDrillDownView({
           platform={platform}
           osName={osName}
           onClose={() => setSelectedFinding(null)}
-          onSaveRemediation={handleSave}
+          onSaveRemediation={onSaveRemediation ? handleSave : undefined}
         />
       )}
     </section>

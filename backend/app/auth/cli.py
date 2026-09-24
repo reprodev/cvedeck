@@ -81,9 +81,12 @@ def main(argv: list[str] | None = None) -> int:
             service = AuthService(session)
             if args.command == "reset-password":
                 username = args.username or _only_username(session)
-                service.reset_password(username, _read_password(args.password_stdin))
+                revoked = service.reset_password(username, _read_password(args.password_stdin))
                 session.commit()
-                print(f"Password reset for {username!r}. Every session has been signed out.")
+                print(
+                    f"Password reset for {username!r}. Every session has been signed "
+                    f"out and {revoked} API token(s) revoked (Req 16.12)."
+                )
             else:
                 if service.has_users():
                     raise AuthError(

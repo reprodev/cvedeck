@@ -21,7 +21,8 @@ WORKDIR /build
 
 # Copy manifests first so `npm ci` is cached until dependencies actually change.
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# No dependency's install hook runs: the build needs none.
+RUN npm ci --ignore-scripts
 
 COPY frontend/ ./
 RUN npm run build
@@ -34,11 +35,13 @@ RUN npm run build
 FROM python:3.12-slim AS runtime
 
 # gosu drops privileges in the entrypoint after fixing up /data ownership;
-# curl backs the HEALTHCHECK below; iputils-ping backs network discovery's ICMP
-# probe. Without that last one every swept host reported "no response", which is
-# a fact about this image rather than about the host (Req 8.11).
+# iputils-ping backs network discovery's ICMP probe. Without that one every
+# swept host reported "no response", which is a fact about this image rather
+# than about the host (Req 8.11). curl used to be here for the HEALTHCHECK;
+# Python already does that job, and a vulnerability scanner's image should not
+# carry a network client it does not need.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gosu curl iputils-ping \
+    && apt-get install -y --no-install-recommends gosu iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -81,8 +84,11 @@ ENV CVEDECK_DATA_DIR=/data \
 VOLUME ["/data"]
 EXPOSE 8000
 
+# 127.0.0.1 is always accepted by the Host check, whatever
+# CVEDECK_ALLOWED_HOSTS says. urlopen raises on any non-2xx, so the exit status
+# is the answer.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"]
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 

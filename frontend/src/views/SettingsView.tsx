@@ -20,6 +20,8 @@ export interface SettingsViewProps {
   onListTokens: () => Promise<ApiToken[]>;
   onCreateToken: (name: string) => Promise<CreatedApiToken>;
   onRevokeToken: (tokenId: string) => Promise<void>;
+  /** Revoke every token at once; resolves to how many were live (Req 16.18). */
+  onRevokeAllTokens?: () => Promise<number>;
   /** Every pinned SSH host key (Req 17.10). */
   onListHostKeys?: () => Promise<HostKeyPin[]>;
   /** Forget one pin. The port is part of the address it is pinned under. */
@@ -43,6 +45,7 @@ export function SettingsView({
   onListTokens,
   onCreateToken,
   onRevokeToken,
+  onRevokeAllTokens,
   onListHostKeys,
   onForgetHostKey,
   onBack,
@@ -67,6 +70,7 @@ export function SettingsView({
         onListTokens={onListTokens}
         onCreateToken={onCreateToken}
         onRevokeToken={onRevokeToken}
+        onRevokeAllTokens={onRevokeAllTokens}
       />
       {onListHostKeys && onForgetHostKey && (
         <HostKeysPanel
@@ -178,7 +182,11 @@ function TokensPanel({
   onListTokens,
   onCreateToken,
   onRevokeToken,
-}: Pick<SettingsViewProps, "onListTokens" | "onCreateToken" | "onRevokeToken">) {
+  onRevokeAllTokens,
+}: Pick<
+  SettingsViewProps,
+  "onListTokens" | "onCreateToken" | "onRevokeToken" | "onRevokeAllTokens"
+>) {
   const toast = useToast();
   const clipboard = useClipboard(toast.error, 2500);
   const [tokens, setTokens] = useState<ApiToken[] | null>(null);
@@ -229,6 +237,23 @@ function TokensPanel({
       setError(errorText(err, "The token could not be revoked."));
     }
   };
+
+  // For when a token may have leaked and nobody knows which (Req 16.18).
+  const revokeAll = async () => {
+    if (!onRevokeAllTokens) return;
+    setError(null);
+    try {
+      const count = await onRevokeAllTokens();
+      setConfirmRevoke(null);
+      setCreated(null);
+      toast.success(`Revoked ${count} token(s). Anything using them will now be refused.`);
+      await load();
+    } catch (err) {
+      setError(errorText(err, "The tokens could not be revoked."));
+    }
+  };
+
+  const liveTokens = tokens?.filter((token) => !token.revokedAt).length ?? 0;
 
   return (
     <section className="card settings-panel" aria-labelledby="tokens-heading">
@@ -349,9 +374,39 @@ function TokensPanel({
           </table>
         </div>
       )}
+
+      {onRevokeAllTokens && liveTokens > 1 && (
+        <div className="token-revoke-all">
+          {confirmRevoke === REVOKE_ALL ? (
+            <span className="token-confirm">
+              <button type="button" onClick={() => void revokeAll()}>
+                Revoke all {liveTokens} tokens
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setConfirmRevoke(null)}
+              >
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setConfirmRevoke(REVOKE_ALL)}
+            >
+              <Icon name="trash" /> Revoke all tokens
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
 }
+
+/** Stands in for a token id (always a UUID) while "revoke all" awaits confirmation. */
+const REVOKE_ALL = "*all*";
 
 /**
  * Every pinned SSH host key, and a way to forget one (Req 17.10).

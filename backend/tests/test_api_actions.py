@@ -17,6 +17,7 @@ hosts or an online database:
   backed by an in-memory online store (Req 5.2).
 """
 
+import io
 from datetime import datetime, timezone
 
 import pytest
@@ -476,9 +477,9 @@ def test_test_connection_ssh_success(monkeypatch, client):
             pass
 
         def exec_command(self, cmd, timeout=None):
-            class MockStdout:
-                def read(self):
-                    return b"Linux test-host 5.15.0 #1 SMP Ubuntu 22.04 LTS x86_64\n"
+            class MockStdout(io.BytesIO):
+                def __init__(self):
+                    super().__init__(b"Linux test-host 5.15.0 #1 SMP Ubuntu 22.04 LTS x86_64\n")
 
             class MockChannel:
                 def recv_exit_status(self):

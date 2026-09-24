@@ -17,6 +17,7 @@ import base64
 import hashlib
 import hmac
 import secrets
+import threading
 
 MIN_LENGTH = 12
 #: An upper bound, so a multi-megabyte "password" cannot be used to make the
@@ -55,16 +56,27 @@ def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
+#: How many scrypt derivations may run at once. Each holds about 32 MiB for
+#: about a tenth of a second, and sign-in runs in a thread pool about forty
+#: threads wide, so without a bound a burst of sign-ins -- real usernames or
+#: made-up ones, which cost the same by design -- could ask for over a
+#: gigabyte at once. Queued callers wait their turn; nothing is refused
+#: (Req 16.20).
+SCRYPT_CONCURRENCY = 4
+_SCRYPT_SLOTS = threading.BoundedSemaphore(SCRYPT_CONCURRENCY)
+
+
 def _derive(password: str, salt: bytes, n: int, r: int, p: int) -> bytes:
-    return hashlib.scrypt(
-        password.encode("utf-8"),
-        salt=salt,
-        n=n,
-        r=r,
-        p=p,
-        maxmem=_MAXMEM,
-        dklen=_KEY_BYTES,
-    )
+    with _SCRYPT_SLOTS:
+        return hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=salt,
+            n=n,
+            r=r,
+            p=p,
+            maxmem=_MAXMEM,
+            dklen=_KEY_BYTES,
+        )
 
 
 def hash_password(password: str) -> str:

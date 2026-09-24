@@ -28,7 +28,13 @@ from ..auth.dependencies import (
     require_principal,
     resolve_principal,
 )
-from ..auth.service import SESSION_ABSOLUTE, AuthError, AuthService, Principal
+from ..auth.service import (
+    SESSION_ABSOLUTE,
+    AuthError,
+    AuthService,
+    Principal,
+    WrongSecretError,
+)
 from ..auth.throttle import throttle
 from .dependencies import get_session
 from .schemas import (
@@ -42,6 +48,7 @@ from .schemas import (
 )
 
 logger = logging.getLogger(__name__)
+security_log = logging.getLogger("app.security")
 
 public_router = APIRouter(prefix="/api/auth", tags=["auth"])
 account_router = APIRouter(
@@ -76,6 +83,11 @@ def _set_session_cookie(request: Request, response: Response, token: str) -> Non
 def _refuse_if_throttled(request: Request, key: str) -> None:
     wait = throttle.retry_after(_client(request), key)
     if wait:
+        # Req 16.19: a lockout is the one sign of a guessing attack in progress.
+        security_log.warning(
+            "Refused %s from %s: throttled for %d more seconds.",
+            request.url.path, _client(request), wait,
+        )
         raise HTTPException(
             status_code=429,
             detail=f"Too many failed attempts. Try again in {wait} seconds.",
@@ -116,7 +128,7 @@ def complete_setup(
         user = service.complete_setup(body.setup_code, body.username, body.password)
     except AuthError as exc:
         session.rollback()
-        if "setup code" in str(exc):
+        if isinstance(exc, WrongSecretError):
             throttle.record_failure(_client(request), _SETUP_KEY)
             logger.warning("Setup refused from %s: invalid setup code.", _client(request))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -196,7 +208,7 @@ def change_password(
         )
     except AuthError as exc:
         session.rollback()
-        if "current password" in str(exc):
+        if isinstance(exc, WrongSecretError):
             throttle.record_failure(_client(request), principal.username)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session.commit()
@@ -237,6 +249,22 @@ def create_token(
     session.commit()
     logger.info("API token %r created by %r.", row.name, principal.username)
     return ApiTokenCreatedOut(**_token_out(row).model_dump(), token=token)
+
+
+@account_router.delete("/tokens", status_code=200)
+def revoke_all_tokens(
+    principal: Principal = Depends(_session_principal),
+    session: Session = Depends(get_session),
+) -> dict[str, int]:
+    """Revoke every API token at once (Req 16.18).
+
+    For when a token may have leaked and nobody knows which: revoking them one
+    by one means knowing which one to worry about.
+    """
+    revoked = AuthService(session).revoke_all_api_tokens()
+    session.commit()
+    security_log.warning("All %d API token(s) revoked by %r.", revoked, principal.username)
+    return {"revoked": revoked}
 
 
 @account_router.delete("/tokens/{token_id}", status_code=204)

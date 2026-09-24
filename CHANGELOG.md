@@ -8,6 +8,120 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.13] - 2026-09-24
+
+A release with no features in it. The lock -- sign-in, sessions, tokens, pinned
+host keys -- held up to a full review; what did not were the doors around it:
+the routes a demo left open, what a scanned host was allowed to send back, the
+commands handed to an operator's root shell, and what a browser was never told.
+
+### Security
+
+- **Demo mode is read-only, for every route at once.** A demo needs no login,
+  and through 0.8.12 four write routes had no demo guard: remediation add and
+  update, the sync, and discovery enroll. Enroll upserts, and overwrote an
+  existing machine's hostname, platform and scan status, so any visitor could
+  rewrite the seeded fleet for every visitor after them. Refusals were per
+  route, which is how 0.8.8 and 0.8.9 each missed one too; they are now attached
+  to the routers as a whole, like the login gate, so a route added later is
+  refused without being named. A test walks every route with an empty body and
+  asserts the refusal (Req 15.9).
+
+- **Copyable fix commands quote every name that came off a scanned host.** The
+  upgrade, purge and check commands copied into a root shell interpolated the
+  package name unquoted, and a crafted version string can end up inside that
+  name. Names are now quoted the way `shlex.quote` does -- an ordinary name
+  stays bare, so commands read as before -- with a PowerShell equivalent for
+  Windows ids. Host-derived text in the fix script's comment lines loses its
+  line breaks, and a control character in a name becomes `?`. Property-tested
+  against a strict shell word splitter over arbitrary Unicode (Req 14.10).
+
+- **What a scanned host sends back is bounded.** Remote output was read to EOF
+  with no size limit, and the 45-second timeout applied per read, so a host
+  trickling a byte at a time held a scan open indefinitely. Commands now stop at
+  32 MiB and 180 seconds, enforced by closing the channel rather than by a clock
+  a blocked read never returns to, and either bound fails the scan with the
+  reason -- never a truncated inventory, which would report every finding past
+  the cut as resolved (Req 1.11).
+
+- **Security headers on every response.** There were none. The dashboard now
+  runs under a content policy allowing nothing but itself -- no CDN, no inline
+  script or style -- with framing denied, no referrer, `nosniff`, and a
+  permissions policy (Req 16.15).
+
+- **With login off, a request from another site is refused.** The cookie
+  Origin check never ran without a session, so any page a user visited could
+  POST to an instance running with `CVEDECK_AUTH=disabled`. A state-changing
+  request whose `Origin`, `Referer` or `Sec-Fetch-Site` names another site is
+  now refused; one that names nothing, which is every script, is still served.
+  `CVEDECK_CORS_ORIGINS=*` is refused at start-up (Req 16.16).
+
+- **`CVEDECK_ALLOWED_HOSTS`, against DNS rebinding.** An Origin check cannot
+  see a rebinding page, which the browser thinks is same-origin; the `Host`
+  header can. Set the names you reach CveDeck by and any other gets a 400.
+  Loopback always passes, so health checks keep working. Off by default, since
+  defaulting it on would break every install reached by an unlisted name, and
+  the log warns while login is off and it is unset (Req 16.17).
+
+- **Sign-in attempts with made-up usernames are throttled.** The throttle keyed
+  on address and username, so a new username each time never tripped it -- and
+  each attempt costs a full scrypt verification, about 32 MiB, by design. Failures
+  now also count per address, with a looser limit of 20, and at most four
+  verifications run at once (Req 16.20).
+
+- **`cvedeck-admin reset-password` revokes every API token.** It is the
+  recovery after a compromise and it ended sessions only, so a token planted by
+  whoever got in survived it (Req 16.12). **Settings** gains **Revoke all
+  tokens** (Req 16.18).
+
+- **A 422 no longer echoes the rejected value.** FastAPI's default returned it
+  as `input` -- for an oversized private key, or a scan target missing its id,
+  that was the key or the password. Requests also gain upper bounds on every
+  list and string a caller controls, and ports outside 1-65535 are refused
+  (Req 16.13, 16.14).
+
+- **The container writes its data readable by its own user only.** The
+  database -- the fleet's inventory, token hashes, host-key pins -- was written
+  `0644`. The entrypoint now sets `umask 0027` and closes the volume to other
+  users on every start, fixing files an older release left open. `PUID=0` and
+  `PGID=0` are refused, as is a `CVEDECK_DATA_DIR` inside the image.
+
+### Added
+
+- **A security log.** `app.security` lines record each scan, sweep and
+  connection test with who asked, from where and whether the server's SSH key
+  was used; each forgotten host key; refused cross-site requests; unknown or
+  revoked tokens; and throttled sign-ins. No credential appears in any of them
+  (Req 16.19).
+- **`BIND_ADDR`** in the compose file and `.env.example`. The default stays
+  `0.0.0.0`; the docs now say that Docker's port publishing bypasses ufw.
+
+### Changed
+
+- **The compose file runs least-privilege**: `no-new-privileges`, every
+  capability dropped and six added back (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`,
+  `SETUID`, `SETGID`, `NET_RAW`), a pids limit. Discovery's ICMP was verified
+  working under it. The admin-password secret its comments referred to now has
+  the `secrets:` blocks to go with it.
+- **curl is gone from the image**; the health check is a Python probe.
+- **No dependency install script runs** during the image build or `install.sh`,
+  which runs as root. `install.sh` pins pip like the Dockerfile.
+- **The systemd units** add `UMask=0077`, `ProtectClock`, `ProtectHostname`,
+  `ProtectProc=invisible`, `RestrictRealtime` and `SystemCallArchitectures`.
+- **The nginx example** adds HSTS, TLS 1.2+ and `server_tokens off` -- and only
+  those, since CveDeck now sends its own content policy.
+
+### Documented
+
+- **WinRM is not usable yet, and SECURITY.md now says so.** It claimed a Windows
+  connection test "does connect". It does not: the session is built with equal
+  read and operation timeouts, which pywinrm 0.5 rejects before any traffic, so
+  no password is ever sent. The collector also turns certificate validation
+  off. Both are left for the release that brings Windows matching, and are
+  listed under known limitations until then.
+
+---
+
 ## [0.8.12] - 2026-09-22
 
 The git hooks are the project's primary guard against publishing a secret, and

@@ -44,6 +44,15 @@ class AuthError(Exception):
     """A refused auth operation. The message is safe to show the user."""
 
 
+class WrongSecretError(AuthError):
+    """A guessable secret was wrong: a setup code, or the current password.
+
+    Its own type so that the routes count it towards throttling by what it is,
+    not by matching the wording of its message -- which a reworded error would
+    silently stop doing (Req 16.8).
+    """
+
+
 @dataclass(frozen=True)
 class Principal:
     """Who a request is acting as.
@@ -132,18 +141,23 @@ class AuthService:
         """Change a password and sign out every other session (Req 16.6)."""
         user = self.authenticate(username, current)
         if user is None:
-            raise AuthError("Your current password is incorrect.")
+            raise WrongSecretError("Your current password is incorrect.")
         self._set_password(user, new, keep_session_hash)
 
-    def reset_password(self, username: str, new: str) -> None:
-        """Set a password without the old one, and sign out everywhere.
+    def reset_password(self, username: str, new: str) -> int:
+        """Set a password without the old one, sign out everywhere, revoke every token.
 
-        Only reachable from ``cvedeck-admin``, i.e. from a shell on the host.
+        Only reachable from ``cvedeck-admin``, i.e. from a shell on the host --
+        which makes it the recovery path after a compromise, so it has to end
+        every way in. Before 0.8.13 it ended sessions and left API tokens
+        working: a token planted by whoever got in survived the reset meant to
+        lock them out (Req 16.12). Returns how many tokens it revoked.
         """
         user = self.get_user(username)
         if user is None:
             raise AuthError(f"No account named {username!r}.")
         self._set_password(user, new, keep_session_hash=None)
+        return self.revoke_all_api_tokens()
 
     def _set_password(self, user: User, new: str, keep_session_hash: str | None) -> None:
         try:
@@ -202,7 +216,7 @@ class AuthService:
             or _as_utc(row.expires_at) <= self._now()
             or not _constant_eq(supplied, row.code_hash)
         ):
-            raise AuthError(
+            raise WrongSecretError(
                 "That setup code is not valid. Use the latest code from the "
                 "container logs; restarting the container issues a new one."
             )
@@ -284,6 +298,14 @@ class AuthService:
         if row.revoked_at is None:
             row.revoked_at = self._now()
         return True
+
+    def revoke_all_api_tokens(self) -> int:
+        """Revoke every live API token; return how many there were (Req 16.18)."""
+        now = self._now()
+        live = list(self._session.scalars(select(ApiToken).where(ApiToken.revoked_at.is_(None))))
+        for row in live:
+            row.revoked_at = now
+        return len(live)
 
     def resolve_api_token(self, token: str) -> Principal | None:
         row = self._session.scalar(

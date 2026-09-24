@@ -76,7 +76,28 @@ def cors_origins() -> list[str]:
     the single-container deployment leaves this unset.
     """
     raw = os.environ.get("CVEDECK_CORS_ORIGINS", "")
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if "*" in origins:
+        # Starlette answers a wildcard with credentials allowed by echoing
+        # whatever Origin asked, which grants every site on the internet the
+        # user's session. There is no deployment that needs that (Req 16.16).
+        raise ValueError(
+            "CVEDECK_CORS_ORIGINS may not contain '*'. List the dashboard's "
+            "origins explicitly, e.g. https://cvedeck.example.lan"
+        )
+    return origins
+
+
+def allowed_hosts() -> list[str]:
+    """Host names this instance answers to, or empty to accept any (Req 16.17).
+
+    ``CVEDECK_ALLOWED_HOSTS`` is a comma-separated list of names, optionally
+    ``*.``-prefixed for subdomains. Loopback is always accepted. Unset, every
+    Host is accepted, which is what an install reached by an unlisted LAN name
+    needs -- and why start-up warns when login is also switched off.
+    """
+    raw = os.environ.get("CVEDECK_ALLOWED_HOSTS", "")
+    return [h.strip().lower() for h in raw.split(",") if h.strip()]
 
 
 def ssh_port() -> int:

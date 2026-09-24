@@ -566,8 +566,9 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
         <p className="demo-banner">
           <Icon name="monitor" />
           <span>
-            <strong>Demo instance.</strong> This fleet is fictional and scanning
-            is disabled. Everything else is the real application.
+            <strong>Demo instance.</strong> This fleet is fictional and read-only:
+            nothing here can be scanned or changed. Everything else is the real
+            application.
           </span>
           <a
             href="https://github.com/reprodev/cvedeck#quick-start"
@@ -635,7 +636,9 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           findings={findings ?? []}
           findingsLoaded={findings !== null}
           onBack={handleBack}
-          onSaveRemediation={handleSaveRemediation}
+          onSaveRemediation={
+            capabilities !== null && !capabilities.demoMode ? handleSaveRemediation : undefined
+          }
           lastScanStatus={selectedMachine?.lastScanStatus}
           hostKeyFingerprint={selectedMachine?.hostKeyFingerprint ?? null}
           hostKeyType={selectedMachine?.hostKeyType ?? null}
@@ -663,6 +666,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onForgetHostKey={(hostname, port) => api.forgetHostKey(hostname, port)}
           onCreateToken={(name) => api.createApiToken(name)}
           onRevokeToken={(tokenId) => api.revokeApiToken(tokenId)}
+          onRevokeAllTokens={() => api.revokeAllApiTokens()}
           onBack={() => handleNavigate("fleet")}
         />
       ) : activeNav === "discovery" ? (

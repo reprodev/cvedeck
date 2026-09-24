@@ -26,11 +26,15 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
+import logging
+
 from .. import config
 from ..api.dependencies import get_session
 from .service import AuthService, Principal
 
 SESSION_COOKIE = "cvedeck_session"
+
+logger = logging.getLogger("app.security")
 
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -38,15 +42,14 @@ _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 def login_required() -> bool:
     """Whether this deployment asks for a login at all (Req 16.9, 16.11).
 
-    Demo mode is a public, read-mostly showcase, so it stays open.
+    Demo mode is a public, read-only showcase, so it stays open.
 
-    That rests entirely on every state-changing route being refused by
-    ``_demo_guard``. Check there before adding one, and do not reason about it
-    the other way round: through 0.8.8 this docstring asserted the dangerous
-    routes were "already refused" while ``POST /api/feeds/refresh`` was not one
-    of them, so an anonymous visitor could rewrite the seeded fleet and make the
-    instance re-download both feeds on every click. The sentence was the reason
-    nobody looked.
+    That rests on ``actions.refuse_writes_in_demo_mode``, attached to the
+    routers in ``create_app`` and pinned by a test that walks every route
+    (Req 15.9). Do not reason about it from this docstring: through 0.8.8 it
+    asserted the dangerous routes were "already refused" while one was not, and
+    through 0.8.12 the per-route guards it then pointed at still left three
+    write routes open. The sentence was the reason nobody looked.
     """
     return config.auth_enabled() and not config.demo_mode()
 
@@ -92,6 +95,13 @@ def resolve_principal(request: Request) -> Principal | None:
             service.resolve_api_token(token) if token else service.resolve_session(cookie)
         )
         session.commit()
+    if principal is None and token:
+        # Req 16.19. An expired cookie is routine; a bearer token that does not
+        # resolve is either revoked or guessed, and either is worth a line.
+        logger.warning(
+            "Refused an unknown or revoked API token on %s %s from %s.",
+            request.method, request.url.path, _client(request),
+        )
     return principal
 
 
@@ -117,6 +127,23 @@ def _same_origin(request: Request) -> bool:
     return f"{parts.scheme}://{parts.netloc}".lower() in allowed
 
 
+def _cross_site(request: Request) -> bool:
+    """Whether the request says it came from another site.
+
+    For a caller that has not signed in -- login switched off -- absence is not
+    evidence: ``curl`` and every other script send no ``Origin``, and they are
+    the reason an operator runs without login behind a proxy. But a browser
+    always sends ``Origin`` on a cross-site POST, and ``Sec-Fetch-Site`` when it
+    supports it, so a request carrying either that names another site is one a
+    page elsewhere made the user's browser send.
+    """
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        return True
+    if request.headers.get("origin") or request.headers.get("referer"):
+        return not _same_origin(request)
+    return False
+
+
 def require_principal(request: Request) -> Principal:
     """Refuse the request unless it is signed in (Req 16.1, 16.10)."""
     principal = resolve_principal(request)
@@ -126,11 +153,15 @@ def require_principal(request: Request) -> Principal:
             detail="Sign in to use CveDeck.",
             headers={"WWW-Authenticate": 'Bearer realm="CveDeck"'},
         )
-    if (
-        principal.kind == "session"
-        and request.method.upper() not in _SAFE_METHODS
-        and not _same_origin(request)
-    ):
+    # Kept so an action route can say who asked for it in the audit log.
+    request.state.principal = principal
+    if request.method.upper() in _SAFE_METHODS:
+        return principal
+    if principal.kind == "session" and not _same_origin(request):
+        logger.warning(
+            "Refused a cross-origin %s %s from %s.",
+            request.method, request.url.path, _client(request),
+        )
         raise HTTPException(
             status_code=403,
             detail=(
@@ -138,4 +169,19 @@ def require_principal(request: Request) -> Principal:
                 "refused. Scripts should use an API token instead of a browser cookie."
             ),
         )
+    if principal.kind == "open" and _cross_site(request):
+        # Login is off, so the browser sends no credential at all -- any page
+        # the user visits could otherwise POST here (Req 16.16).
+        logger.warning(
+            "Refused a cross-site %s %s from %s while login is off.",
+            request.method, request.url.path, _client(request),
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="This request came from another site, so it was refused.",
+        )
     return principal
+
+
+def _client(request: Request) -> str:
+    return request.client.host if request.client else "unknown"

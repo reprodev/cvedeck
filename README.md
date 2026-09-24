@@ -198,10 +198,11 @@ This seeds a fictional thirteen-host fleet, including a host that has never been
 scanned, one whose credentials failed, one scanned while an advisory source was
 down, and findings whose exploitation status was never checked. It arrives
 ranked exactly as the screenshots above, carrying its own fictional KEV and EPSS
-data, so it needs no network at all. Scanning, discovery, connection tests and
-the intel refresh are all **disabled** — a demo that fetched the real catalogue
-would overwrite its own fixture, including the unchecked findings that are the
-point of it. Demo mode needs no login.
+data, so it needs no network at all. Demo mode needs no login, so it is
+**read-only**: scanning, discovery, connection tests, the intel refresh and
+every edit are refused — anything one visitor could change, every visitor after
+them would see, and a demo that fetched the real catalogue would overwrite the
+unchecked findings that are the point of it.
 
 Leave demo mode off on any instance you actually scan with. A public instance
 with scanning enabled is an SSH/WinRM client and port scanner that any visitor

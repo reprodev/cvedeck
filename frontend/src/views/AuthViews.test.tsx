@@ -170,6 +170,31 @@ describe("SettingsView", () => {
     await waitFor(() => expect(props.onRevokeToken).toHaveBeenCalledWith("t1"));
   });
 
+  it("revokes every token at once, only after confirming (Req 16.18)", async () => {
+    const user = userEvent.setup();
+    const second: ApiToken = { ...existing, tokenId: "t2", name: "backup", prefix: "cvd_QqQqQq" };
+    const props = renderSettings({
+      onListTokens: vi.fn().mockResolvedValue([existing, second]),
+      onRevokeAllTokens: vi.fn().mockResolvedValue(2),
+    });
+    await screen.findByRole("table");
+
+    await user.click(screen.getByRole("button", { name: /Revoke all tokens/ }));
+    expect(props.onRevokeAllTokens).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Revoke all 2 tokens" }));
+
+    await waitFor(() => expect(props.onRevokeAllTokens).toHaveBeenCalledTimes(1));
+    expect(props.onRevokeToken).not.toHaveBeenCalled();
+  });
+
+  it("offers no revoke-all for a single token", async () => {
+    renderSettings({ onRevokeAllTokens: vi.fn() });
+    await screen.findByRole("table");
+
+    expect(screen.queryByRole("button", { name: /Revoke all/ })).not.toBeInTheDocument();
+  });
+
   it("does not send a password change whose new passwords differ", async () => {
     const user = userEvent.setup();
     const props = renderSettings();

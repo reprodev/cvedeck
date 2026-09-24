@@ -14,6 +14,8 @@ or modify anything on the target.
 
 from __future__ import annotations
 
+import io
+
 import socket
 
 import paramiko
@@ -34,12 +36,8 @@ from app.scanner.exceptions import AuthError, InventoryUnavailableError
 # ---------------------------------------------------------------------------
 
 
-class _FakeChannelFile:
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def read(self) -> bytes:
-        return self._data
+class _FakeChannelFile(io.BytesIO):
+    """stdout/stderr as paramiko returns them: a stream read to EOF."""
 
 
 class FakeSSHClient:
@@ -515,3 +513,103 @@ def test_output_that_parses_to_no_packages_is_also_refused():
 
     with pytest.raises(InventoryUnavailableError):
         collector.collect(LINUX_TARGET, CREDS)
+
+
+# ---------------------------------------------------------------------------
+# A scanned host is not trusted: its output is bounded in size and time
+# (Req 1.11)
+# ---------------------------------------------------------------------------
+
+
+class _EndlessClient(FakeSSHClient):
+    """A host whose package command returns ``stdout`` and ``channel``."""
+
+    def __init__(self, stdout) -> None:
+        super().__init__({})
+        self._stdout = stdout
+
+    def exec_command(self, command, timeout=None):
+        self.commands.append(command)
+        if command == _linux_cmd("packages"):
+            return None, self._stdout, _FakeChannelFile(b"")
+        return None, _FakeChannelFile(b'NAME="Debian GNU/Linux"\n'), _FakeChannelFile(b"")
+
+
+def test_a_host_that_floods_output_fails_the_scan(monkeypatch):
+    """Too much output is a failed scan, never a truncated inventory.
+
+    Truncating would parse as a smaller host, and every finding on a package
+    past the cut would be reported resolved -- the Req 1.7 failure by another
+    road. The output here is well-formed package lines, so a reader that
+    silently kept the first ``limit`` bytes would return a plausible answer.
+    """
+    from app.scanner import collectors
+
+    monkeypatch.setattr(collectors, "_OUTPUT_LIMIT_BYTES", 1024)
+    flood = b"".join(b"pkg%d\t1.0\n" % i for i in range(1000))
+    collector = LinuxCollector(ssh_client_factory=lambda: _EndlessClient(_FakeChannelFile(flood)))
+
+    with pytest.raises(InventoryUnavailableError) as excinfo:
+        collector.collect(LINUX_TARGET, CREDS)
+
+    assert "more than 1,024 bytes" in str(excinfo.value)
+
+
+def test_output_just_under_the_limit_is_read_in_full(monkeypatch):
+    """The bound is a ceiling, not a truncation: everything below it counts."""
+    from app.scanner import collectors
+
+    body = b"".join(b"pkg%d\t1.0\n" % i for i in range(50))
+    monkeypatch.setattr(collectors, "_OUTPUT_LIMIT_BYTES", len(body))
+    collector = LinuxCollector(ssh_client_factory=lambda: _EndlessClient(_FakeChannelFile(body)))
+
+    inventory = collector.collect(LINUX_TARGET, CREDS)
+
+    assert len(inventory.packages) == 50
+
+
+class _TricklingStdout:
+    """Sends a byte, then never another -- until the channel is closed.
+
+    paramiko's ``read`` behaves the same way: it blocks for more data and
+    returns EOF once the channel closes, so the only way to stop it is to
+    close the channel, which is what the deadline has to do.
+    """
+
+    def __init__(self) -> None:
+        import threading
+
+        self._closed = threading.Event()
+        self._sent = False
+        outer = self
+
+        class _Channel:
+            def close(self) -> None:
+                outer._closed.set()
+
+            def recv_exit_status(self) -> int:
+                return -1
+
+        self.channel = _Channel()
+
+    def read(self, size=-1) -> bytes:
+        if not self._sent:
+            self._sent = True
+            return b"p"
+        # A real trickler never stops; a test must, so cap the wait.
+        if not self._closed.wait(timeout=10):
+            raise AssertionError("the deadline never closed the channel")
+        return b""
+
+
+def test_a_host_that_trickles_output_fails_at_the_deadline(monkeypatch):
+    """The per-read timeout never trips for a host sending one byte at a time."""
+    from app.scanner import collectors
+
+    monkeypatch.setattr(collectors, "_COMMAND_DEADLINE", 0.2)
+    collector = LinuxCollector(ssh_client_factory=lambda: _EndlessClient(_TricklingStdout()))
+
+    with pytest.raises(InventoryUnavailableError) as excinfo:
+        collector.collect(LINUX_TARGET, CREDS)
+
+    assert "did not finish within" in str(excinfo.value)
