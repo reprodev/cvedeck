@@ -13,6 +13,8 @@ the pooling configuration and the surrounding code stay covered.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import httpx
 import pytest
 
@@ -48,6 +50,12 @@ class _RecordingClient:
         return httpx.Response(
             200, json={}, request=httpx.Request("GET", url)
         )
+
+    @contextmanager
+    def stream(self, method, url, **kwargs):
+        # Since 0.8.14 every request goes through http_bounds.request_limited,
+        # which streams so it can stop at the size limit.
+        yield self.post(url, **kwargs) if method == "POST" else self.get(url, **kwargs)
 
     def close(self):
         self.closed = True

@@ -138,6 +138,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 10. WHERE an export carries findings or fleet counts, THE Web_Dashboard SHALL include the exploitation signals and the completeness signals shown in the view it came from — whether a CVE is known to be exploited, when each host was scanned, and whether its counts are complete — and SHALL write a value the system did not assess as unassessed rather than as a number or a negative, since an exported file carries none of the dashboard's own treatment of an unknown.
 11. WHERE this deployment cannot send an ICMP echo request — no ping binary, or no permission to use one — THE CVE_Scanner_System SHALL report each swept host's ping reachability as unchecked rather than as no response, and SHALL say that hosts answering only ICMP were not visible to the sweep, since neither is a fact about the hosts.
 12. IF probing an address during a discovery sweep fails outright, THEN THE CVE_Scanner_System SHALL continue the sweep, SHALL count that address as unprobed, and SHALL report the count with the results, so that a sweep which could not cover part of its range is not presented as a complete answer.
+13. WHEN a discovery sweep looks up a responding address's name by reverse DNS, THE CVE_Scanner_System SHALL bound the lookup in time and SHALL report a lookup that does not answer in time as no name, so that an unresponsive resolver cannot hold the sweep.
 
 ### Requirement 9: SSH Key-Based and Secretless Remote Authentication
 
@@ -249,6 +250,13 @@ incomplete, so that I do not mistake a partial scan for a clean host.
    whatever the catalogue contains, an emptied catalogue would report itself
    usable and every finding would be recorded as not exploited on the authority
    of no catalogue at all (extends the enrichment invariant).
+18. THE CVE_Scanner_System SHALL bound the size of every response it reads
+   from a data source -- as transferred and, where it decompresses one, as
+   decompressed -- SHALL follow a redirect only to the host it asked and not
+   from HTTPS to HTTP, and IF a response exceeds its bound or redirects
+   elsewhere THEN SHALL treat it as a failed fetch, keeping a cached feed and
+   reporting an advisory lookup as unanswered, never as an empty answer
+   (extends Req 10.1).
 
 ### Requirement 11: SSH key-based authentication
 
@@ -476,6 +484,10 @@ scripting against the API, I want a token that does not depend on a browser.
     usernames as well as per account, with a looser limit, AND SHALL bound how
     many password verifications run at once, so that sign-in attempts with
     made-up usernames cannot consume memory and processor time without limit.
+21. THE system SHALL serve nothing that makes a browser fetch code, styles or
+    other resources from a third party, since each such fetch tells that party
+    the address of an instance and that it runs CveDeck; its API schema SHALL
+    remain available, behind sign-in, for tools a user runs themselves.
 
 ### Requirement 17: Pinned SSH host keys
 
@@ -524,6 +536,10 @@ credentials I scan with or feed the scanner a false inventory.
     machine's address on a port other than the one whose key it shows, with its
     port, type and fingerprint, and SHALL let a signed-in user forget any of them
     there (extends Req 17.8, 17.10).
+12. WHERE a connection is made with nowhere to record a pinned key THEN the
+    system SHALL refuse any host whose key is not already known, before
+    sending a credential, whatever the host key policy -- no code path SHALL
+    accept an unknown key without recording it (extends Req 17.5).
 
 ### Requirement 18: Scan history and what changed
 

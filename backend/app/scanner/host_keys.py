@@ -99,17 +99,21 @@ class PinningPolicy(paramiko.MissingHostKeyPolicy):
     handshake.
     """
 
-    def __init__(self, policy: str, port: int) -> None:
+    def __init__(self, policy: str, port: int, *, reason: str | None = None) -> None:
         if policy not in POLICIES:
             raise ValueError(f"unknown host key policy: {policy!r}")
         self._policy = policy
         self._port = port
+        self._reason = reason
         self.presented: paramiko.PKey | None = None
 
     def missing_host_key(self, client, hostname, key) -> None:
         if self._policy == POLICY_STRICT:
             raise HostKeyUnknownError(
-                _bare_hostname(hostname), self._port, presented=fingerprint(key)
+                _bare_hostname(hostname),
+                self._port,
+                presented=fingerprint(key),
+                reason=self._reason,
             )
         self.presented = key
 
@@ -135,7 +139,19 @@ def connect_pinned(
     classify authentication and network failures as they did before.
     """
     if store is None:
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # Nowhere to keep a pin means nothing can be checked, so nothing is
+        # trusted (Req 17.12). This used to be paramiko's AutoAddPolicy, which
+        # accepts any key from anyone: every production path passes a store,
+        # but ScannerEngine's default collector factory, get_collector(),
+        # builds a collector with none -- so an engine wired any other way
+        # would have sent credentials to whatever answered.
+        client.set_missing_host_key_policy(
+            PinningPolicy(
+                POLICY_STRICT,
+                port,
+                reason="this collector has no host key store to check it against",
+            )
+        )
         client.connect(hostname=hostname, port=port, **connect_kwargs)
         return
 

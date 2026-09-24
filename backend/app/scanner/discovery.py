@@ -51,6 +51,15 @@ _PING_TIMEOUT_S = 1  # seconds per ICMP echo
 # Banner read buffer size.
 _BANNER_MAX_BYTES = 1024
 
+#: How long one reverse-DNS answer may take. getfqdn and gethostbyaddr take no
+#: timeout of their own, so a resolver that never answers held a sweep worker
+#: for as long as the operating system's resolver cared to wait (Req 8.13).
+_DNS_TIMEOUT_S = 2.0
+
+#: Lookups run here, not on the sweep's own workers, so a hung resolver ties up
+#: at most this many threads and the sweep carries on without the names.
+_DNS_POOL = ThreadPoolExecutor(max_workers=16, thread_name_prefix="cvedeck-rdns")
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -382,6 +391,27 @@ def _guess_os(services: list[ServiceInfo], responds_to_ping: bool | None) -> str
 # Single-host scanner
 # ---------------------------------------------------------------------------
 
+def _lookup_name(ip: str) -> str:
+    hostname = socket.getfqdn(ip)
+    if hostname == ip:
+        hostname = socket.gethostbyaddr(ip)[0]
+    return hostname
+
+
+def _reverse_dns(ip: str) -> str:
+    """The address's reverse-DNS name, or ``""`` when there is none in time.
+
+    A missing name is the ordinary case on a home network, so a timeout is
+    reported exactly like "no PTR record": the host is still discovered, it
+    just has no name.
+    """
+    future = _DNS_POOL.submit(_lookup_name, ip)
+    try:
+        return future.result(timeout=_DNS_TIMEOUT_S)
+    except (OSError, TimeoutError):
+        return ""
+
+
 def _scan_host(
     ip: str,
     ports: Sequence[int],
@@ -401,14 +431,8 @@ def _scan_host(
     if responds is not True and not open_ports:
         return None  # Nothing answered; whether it is down is not known here.
 
-    # Reverse-DNS lookup (best effort).
-    hostname = ""
-    try:
-        hostname = socket.getfqdn(ip)
-        if hostname == ip:
-            hostname = socket.gethostbyaddr(ip)[0]
-    except OSError:
-        pass
+    # Reverse-DNS lookup (best effort, and bounded in time -- Req 8.13).
+    hostname = _reverse_dns(ip)
 
     # Banner grabbing on open ports.
     services: list[ServiceInfo] = []

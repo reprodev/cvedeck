@@ -61,6 +61,11 @@ updates:
           - "@types/react-dom"
         update-types: [major, minor, patch]
 
+  # The workflows pin every action to a full commit SHA with its release in a
+  # trailing comment (`uses: owner/action@<sha> # v1.2.3`). Dependabot updates
+  # that form as a unit -- new SHA, new comment -- so the pins stay current
+  # without anyone resolving a SHA by hand. Review these like any dependency:
+  # the release job that runs them can publish the image.
   - package-ecosystem: github-actions
     directory: /
     schedule:

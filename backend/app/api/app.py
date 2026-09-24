@@ -25,7 +25,6 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -36,7 +35,7 @@ from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.8.13"
+_VERSION = "0.8.14"
 
 
 async def _validation_error_without_input(
@@ -149,13 +148,13 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
     app.include_router(routes.router, dependencies=protected)
     app.include_router(actions.router, dependencies=protected)
 
+    # The machine-readable schema, for scripts and for any API tool you run
+    # yourself. There is deliberately no interactive page: FastAPI's Swagger UI
+    # loads its code from a CDN, so every visit told a third party that this
+    # address runs CveDeck -- and nothing in the product used it (Req 16.21).
     @app.get("/api/openapi.json", include_in_schema=False, dependencies=protected)
     def openapi_schema() -> JSONResponse:
         return JSONResponse(app.openapi())
-
-    @app.get("/api/docs", include_in_schema=False, dependencies=protected)
-    def api_docs():
-        return get_swagger_ui_html(openapi_url="/api/openapi.json", title="CveDeck API")
 
     if wire_production:
         # Imported here so the bare application never pulls in deployment-only

@@ -24,9 +24,11 @@ from .. import config
 
 logger = logging.getLogger("app.security")
 
-#: The dashboard's policy. It loads nothing from anywhere but itself -- no CDN,
-#: no inline script, no inline style (the built index has none; React's style
-#: props go through the CSSOM, which ``style-src`` does not govern).
+#: The one policy, for every response. Nothing is loaded from anywhere but this
+#: origin -- no CDN, no inline script, no inline style. The built index has none,
+#: and React's style props go through the CSSOM, which ``style-src`` does not
+#: govern. Until 0.8.14 the Swagger page needed an exception for jsDelivr and
+#: inline script; the page was removed rather than excepted (Req 16.21).
 DASHBOARD_CSP = (
     "default-src 'self'; "
     "img-src 'self' data:; "
@@ -35,19 +37,7 @@ DASHBOARD_CSP = (
     "form-action 'self'; "
     "frame-ancestors 'none'"
 )
-
-#: FastAPI's Swagger page loads its bundle from jsDelivr and bootstraps it with
-#: an inline script. It sits behind sign-in, and is the one page that needs
-#: either. Vendoring the bundle would remove the exception.
-DOCS_CSP = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-    "style-src 'self' https://cdn.jsdelivr.net; "
-    "img-src 'self' data: https://fastapi.tiangolo.com; "
-    "object-src 'none'; "
-    "base-uri 'none'; "
-    "frame-ancestors 'none'"
-)
+_CSP_HEADER = DASHBOARD_CSP.encode("latin-1")
 
 _COMMON_HEADERS = [
     (b"x-content-type-options", b"nosniff"),
@@ -60,8 +50,6 @@ _COMMON_HEADERS = [
         b"interest-cohort=()",
     ),
 ]
-
-_DOCS_PATHS = ("/api/docs", "/api/openapi.json")
 
 #: Always accepted by the Host check, so the container's own health check and a
 #: shell on the host keep working however the allowlist is written.
@@ -78,8 +66,6 @@ class SecurityHeadersMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        csp = DOCS_CSP if scope.get("path", "").startswith(_DOCS_PATHS) else DASHBOARD_CSP
-
         async def send_with_headers(message) -> None:
             if message["type"] == "http.response.start":
                 headers = [
@@ -87,7 +73,7 @@ class SecurityHeadersMiddleware:
                     for name, value in message.get("headers", [])
                     if name.lower() != b"content-security-policy"
                 ]
-                headers.append((b"content-security-policy", csp.encode("latin-1")))
+                headers.append((b"content-security-policy", _CSP_HEADER))
                 present = {name.lower() for name, _ in headers}
                 headers.extend(h for h in _COMMON_HEADERS if h[0] not in present)
                 message = {**message, "headers": headers}

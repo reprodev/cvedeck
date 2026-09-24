@@ -2381,3 +2381,73 @@ the release that makes Windows scanning real. What was fixed is `SECURITY.md`,
 which told readers that a Windows connection test "does connect". It was the
 same shape of claim as every other one this project has found out of date: a
 confident sentence that nobody had re-derived from the code.
+
+## Chapter 24 — What comes in from outside (v0.8.14)
+
+0.8.13 was about the doors around the lock. It left a list of things it had
+found and deliberately not touched, and this release is most of that list: the
+pipeline that builds the image, the feeds the scanner trusts, and a page that
+spoke to a third party on every visit.
+
+### Measure before you bound
+
+The plan for the feeds had numbers in it, and every one of them was a guess. The
+first thing the work did was replace them with measurements, and two of the
+guesses would have broken the product.
+
+The OSV limit was going to be 16 MiB. One query -- the kernel on Ubuntu 22.04 --
+returns 61 MB. At 16 MiB every Ubuntu host's kernel would have been reported as
+unanswered, the scan marked partial, and the fleet made to look worse for a
+reason that had nothing to do with the fleet. The limits that shipped are
+ceilings far above anything real, because their job is to turn "unbounded" into
+"bounded", not to guess what honest data looks like.
+
+The plan also said to stop EPSS following redirects, on the reasonable-sounding
+grounds that a feed URL should not send you anywhere else. EPSS's "current" URL
+answers with a 302 to the dated file on the same host. Switching redirects off
+would have failed every EPSS refresh, on every install, from the moment the
+release shipped. Redirects stayed on, bounded in number and required to stay on
+the host that was asked.
+
+Both of those were one `curl` away. The lesson is not new -- 0.8.5's ping binary
+and 0.8.9's EPSS timestamps were the same shape -- but it is worth keeping in its
+plainest form: a limit is a claim about the world, so look at the world first.
+
+### A pin is a claim too
+
+The release job holds the token that publishes the image, and it ran eight
+actions by tag. Pinning them to commits is routine; what is worth recording is
+how the SHAs were found. `@v7` names no release, so each pin is the newest
+release in its major, resolved with `git ls-remote` and peeled -- an annotated
+tag's own SHA is not the commit it points at -- then confirmed against the API
+as a real commit. A pin taken from memory, or from the tag object instead of the
+commit, would have been a confident-looking string that pointed at nothing.
+
+And a pin is exactly the kind of thing a well-meaning edit undoes, so a test
+reads the workflows and fails on any `uses:` that is not forty hex digits.
+
+### Is it needed?
+
+The Swagger page was going to be vendored: the CDN load was the problem, and
+serving the files locally is the textbook fix. The package that ships them,
+`swagger-ui-dist`, depends on `@scarf/scarf`, which reports installs from a
+postinstall script. Removing a third-party request by adding a telemetry
+dependency is not a fix.
+
+The better question came from outside the plan: why is the page there at all?
+Nothing used it. The dashboard never linked to it, no script called it, and the
+documentation mentioned it only to say it was behind sign-in. FastAPI adds it by
+default, and 0.7 had moved it behind the login rather than asking whether it
+should exist. It is gone, the schema it rendered is still served, and every
+response now carries one content policy with no exception in it.
+
+### Two broken copies that were not broken
+
+The discipline of running every guard's test against a broken copy caught its
+own mistakes twice. The first check of the redirect guard "removed" the check
+with a text replacement that silently matched nothing, because the file is CRLF
+-- the test passed, and it looked for a moment as if the test were vacuous.
+Removing the line properly made it fail as it should. And a test for the
+workflow cache first matched the words `cache-from` in the build step's own
+comment explaining that there was no cache. A broken copy only proves something
+if you have checked that it is broken.

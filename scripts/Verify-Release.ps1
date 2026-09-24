@@ -188,10 +188,25 @@ else {
                     # refresh is here because it downloads several megabytes on
                     # every press, without a login, and overwrites the seeded
                     # fixture on the way through.
-                    foreach ($route in @('/api/scans', '/api/discovery/sweep', '/api/scans/test-connection', '/api/feeds/refresh')) {
+                    #
+                    # Since 0.8.13 the demo is read-only as a whole (Req 15.9):
+                    # the last four writes below were open to anonymous visitors
+                    # through 0.8.12, and enroll could rewrite the seeded fleet.
+                    $writes = @(
+                        @('POST', '/api/scans'),
+                        @('POST', '/api/discovery/sweep'),
+                        @('POST', '/api/scans/test-connection'),
+                        @('POST', '/api/feeds/refresh'),
+                        @('POST', '/api/discovery/enroll'),
+                        @('POST', '/api/sync'),
+                        @('POST', '/api/machines/x/cves/CVE-2024-0001/remediation'),
+                        @('PUT', '/api/remediation/x')
+                    )
+                    foreach ($write in $writes) {
+                        $method = $write[0]; $route = $write[1]
                         $code = 0
                         try {
-                            $resp = Invoke-WebRequest -Uri "http://localhost:8099$route" -Method POST `
+                            $resp = Invoke-WebRequest -Uri "http://localhost:8099$route" -Method $method `
                                 -Body '{}' -ContentType 'application/json' -TimeoutSec 5 `
                                 -UseBasicParsing -ErrorAction Stop
                             $code = $resp.StatusCode
@@ -199,8 +214,29 @@ else {
                         catch {
                             if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
                         }
-                        Record "POST $route refused with 403 (got $code)" ($code -eq 403)
+                        Record "$method $route refused with 403 (got $code)" ($code -eq 403)
                     }
+
+                    # Every response carries the content policy, and there is
+                    # no page that loads code from elsewhere (Req 16.15, 16.21).
+                    $root = Invoke-WebRequest -Uri 'http://localhost:8099/' -TimeoutSec 5 -UseBasicParsing
+                    $csp = [string]$root.Headers['Content-Security-Policy']
+                    Record 'content security policy sent, with no third-party source' `
+                        ($csp -match "default-src 'self'" -and $csp -notmatch 'https?:')
+                    $docsCode = 0
+                    try {
+                        $null = Invoke-WebRequest -Uri 'http://localhost:8099/api/docs' -TimeoutSec 5 `
+                            -UseBasicParsing -ErrorAction Stop
+                        $docsCode = 200
+                    }
+                    catch {
+                        if ($_.Exception.Response) { $docsCode = [int]$_.Exception.Response.StatusCode }
+                    }
+                    Record "no Swagger page at /api/docs (got $docsCode)" ($docsCode -eq 404)
+
+                    # curl left the image in 0.8.13; the health check is Python.
+                    $null = docker exec cvedeck-verify sh -c 'command -v curl' 2>&1
+                    Record 'image carries no curl' ($LASTEXITCODE -ne 0)
 
                     # The route is not the only way in. `cvedeck-admin
                     # refresh-feeds` runs against the database inside the

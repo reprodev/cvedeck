@@ -37,6 +37,7 @@ import httpx
 
 from app.models import OsInfo
 from app.scanner.cvss import cvss_v3_base_score, cvss_v4_base_score
+from app.scanner.http_bounds import MIB, request_limited
 from app.scanner.matcher import RawCve
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,6 +61,10 @@ _MAX_FINDINGS = 250
 # HTTP statuses that mean "you are being throttled or blocked", as distinct
 # from a malformed request. These become an outage, not a defect.
 _THROTTLE_STATUSES = frozenset({403, 429, 503})
+
+#: One page of up to 2000 CVE records; a ceiling, see app/scanner/http_bounds.py
+#: (Req 10.18).
+_MAX_NVD_PAGE = 128 * MIB
 
 
 class _RateLimiter:
@@ -306,7 +311,9 @@ class NvdHttpClient:
 
         try:
             self._limiter.acquire()
-            response = client.get(self._base_url, params=params, headers=headers)
+            response = request_limited(
+                client, "GET", self._base_url, limit=_MAX_NVD_PAGE, params=params, headers=headers
+            )
             if response.status_code in _THROTTLE_STATUSES:
                 raise ConnectionError(
                     f"NVD returned {response.status_code} "

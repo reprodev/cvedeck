@@ -30,6 +30,7 @@ from app.scanner.releases import (
     parse_release,
     release_query_ecosystems,
 )
+from app.scanner.http_bounds import MIB, request_limited
 
 _DEFAULT_OSV_API_URL = "https://api.osv.dev/v1"
 _DEFAULT_TIMEOUT = 15.0
@@ -38,6 +39,11 @@ _BATCH_CHUNK_SIZE = 500
 # HTTP connection pool sizing for the live client (AGENTS.md matcher invariant:
 # 50 keepalive / 100 max connections), sized to sustain _DEFAULT_MAX_WORKERS.
 _DEFAULT_POOL_SIZE = 50
+
+#: One OSV answer. The largest measured was 61 MB -- the kernel on Ubuntu 22.04
+#: -- so this is a ceiling against an unbounded body, not a budget for honest
+#: ones; see app/scanner/http_bounds.py (Req 10.18).
+_MAX_OSV_RESPONSE = 256 * MIB
 
 
 #: Qualitative severity words, longest-distinguishing substring first, mapped
@@ -594,7 +600,9 @@ class OsvHttpClient:
                 ]
             }
             try:
-                resp = client.post(batch_url, json=payload)
+                resp = request_limited(
+                    client, "POST", batch_url, limit=_MAX_OSV_RESPONSE, json=payload
+                )
                 resp.raise_for_status()
                 data = resp.json()
                 results = data.get("results", [])
@@ -643,7 +651,11 @@ class OsvHttpClient:
                 "version": pkg.version,
             }
             try:
-                resp = client.post(query_url, json=payload)
+                # ResponseTooLargeError is a ValueError, so an oversized answer
+                # is reported as unanswered below, never as no vulnerabilities.
+                resp = request_limited(
+                    client, "POST", query_url, limit=_MAX_OSV_RESPONSE, json=payload
+                )
                 resp.raise_for_status()
                 data = resp.json()
                 return item, data.get("vulns", [])

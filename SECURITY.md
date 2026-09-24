@@ -54,6 +54,11 @@ image, the deployment scripts under `deploy/`, and anything that could:
 - **carry an attack out of the product in an export.** A CSV is opened in a
   spreadsheet that evaluates formulas, and much of what CveDeck exports came off
   a scanned host rather than from the operator.
+- **make the product contact a third party.** The only outbound traffic
+  CveDeck intends is the intel feeds (OSV, CISA KEV, FIRST EPSS, and NVD if you
+  enable it) and the hosts you scan. It ships no telemetry, and the dashboard
+  loads nothing from a CDN. Anything else reaching out -- from the server or
+  from a user's browser -- is a bug.
 - **cause the scanner to under-report vulnerabilities.** A bug that makes a
   vulnerable host read as clean is a security issue here, not merely a
   correctness one, because users act on that answer.
@@ -149,7 +154,9 @@ account on each target — not root.
 - Keep the database volume off shared storage — the container now writes it
   readable by its own user and group only, but it holds your fleet's
   full software inventory, which is a useful document for an attacker.
-- Keep the image current. Watch releases for security fixes.
+- Keep the image current. Watch releases for security fixes, and verify each
+  new one with `gh attestation verify` (see DEPLOYMENT.md, "Verifying the
+  image"); pin it by digest if you want exactly what you verified.
 
 ## Supported versions
 

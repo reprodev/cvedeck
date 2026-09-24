@@ -46,6 +46,32 @@ To build from source instead -- for an architecture that is not published, or
 when developing -- run `docker build -t cvedeck:latest .` from a checkout and
 use `cvedeck:latest` in place of the `ghcr.io` reference above.
 
+### Verifying the image
+
+Every release image carries a signed build-provenance attestation, made by the
+release workflow in `github.com/reprodev/cvedeck` from the tagged commit.
+Check it before you run a new version:
+
+```bash
+gh attestation verify oci://ghcr.io/reprodev/cvedeck:0.8.14 --owner reprodev
+```
+
+A pass means the image was built by this repository's release workflow and
+has not changed since. The image also carries an SBOM and BuildKit provenance,
+readable with `docker buildx imagetools inspect ghcr.io/reprodev/cvedeck:0.8.14
+--format '{{ json .SBOM }}'`. The release is refused if the image has a critical
+vulnerability that has a published fix.
+
+To run exactly the image you verified, pin it by digest rather than by tag -- a
+tag can be moved, a digest cannot:
+
+```bash
+docker buildx imagetools inspect ghcr.io/reprodev/cvedeck:0.8.14   # prints the digest
+# then use ghcr.io/reprodev/cvedeck@sha256:<digest> in `docker run` or compose
+```
+
+Images from 0.8.13 and earlier carry no attestation.
+
 ## Quick start (Docker Compose)
 
 ```bash
@@ -524,8 +550,11 @@ refresh has.
 
 Login is required by default (see [Authentication](#authentication)). Every API
 route except the health check and the sign-in routes refuses a request without a
-session or an API token, and the API documentation at `/api/docs` is behind
-sign-in too. `GET /api/health` stays public for container health checks and
+session or an API token, and the OpenAPI schema at `/api/openapi.json` is
+behind sign-in too. There is no interactive API page: FastAPI's Swagger UI loads
+its code from a CDN, which would tell a third party that your address runs
+CveDeck, so it was removed in 0.8.14. Load the schema into an API tool you run
+locally instead. `GET /api/health` stays public for container health checks and
 proxies, and reports only status, version, demo mode and whether login is
 required until you sign in.
 

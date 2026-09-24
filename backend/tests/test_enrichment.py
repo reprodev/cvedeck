@@ -903,3 +903,36 @@ def test_one_unchanged_feed_still_reapplies(repo, monkeypatch):
     assert by_feed[KEV_FEED].unchanged
     assert not by_feed[EPSS_FEED].unchanged
     assert called == [True], "a rewritten feed must reach the stored findings"
+
+
+def test_an_oversized_download_is_a_failed_refresh_and_the_cache_stands(repo):
+    """Req 10.18: a feed over its size limit is an outage, not an empty catalogue.
+
+    Driven through the real KEV client and a transport that sends too much, so
+    the breach is raised by the code that enforces the limit.
+    """
+    import httpx
+
+    from app.scanner.kev_client import KevHttpClient
+
+    _seed_kev(repo, "CVE-2021-44228")
+    too_big = b"[" + b"{}," * 20_000 + b"{}]"
+    source = KevHttpClient(
+        "https://feed.test/kev.json",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, content=too_big))
+        ),
+    )
+    import app.scanner.kev_client as kev_module
+
+    original = kev_module._MAX_CATALOGUE
+    kev_module._MAX_CATALOGUE = 1024
+    try:
+        outcome = FeedRefreshService(repo, kev_source=source).refresh_kev()
+    finally:
+        kev_module._MAX_CATALOGUE = original
+
+    assert outcome.status is FeedStatus.FAILED
+    assert "MiB" in (outcome.error_detail or "")
+    [result] = FindingEnricher(repo).enrich([_finding("CVE-2021-44228")])
+    assert result.kev_listed is True

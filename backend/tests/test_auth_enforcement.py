@@ -91,9 +91,18 @@ def test_every_allowlisted_route_still_exists():
     assert PUBLIC <= set(_api_routes(create_app()))
 
 
-@pytest.mark.parametrize("path", ["/api/openapi.json", "/api/docs"])
-def test_api_documentation_requires_sign_in(path):
-    assert TestClient(create_app()).get(path).status_code == 401
+def test_the_api_schema_requires_sign_in():
+    assert TestClient(create_app()).get("/api/openapi.json").status_code == 401
+
+
+def test_there_is_no_interactive_api_page():
+    """Req 16.21: Swagger UI loaded from a CDN; the page is gone, not moved."""
+    from tests.auth_helpers import override_auth
+
+    signed_in = TestClient(override_auth(create_app()))
+
+    assert signed_in.get("/api/docs").status_code == 404
+    assert signed_in.get("/api/openapi.json").status_code == 200
 
 
 @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])

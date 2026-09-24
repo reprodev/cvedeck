@@ -8,6 +8,75 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.14] - 2026-09-24
+
+0.8.13 hardened what a scanned host, a browser and an anonymous visitor could
+reach. This release turns the same question on everything else that comes in
+from outside: the actions that build and publish the image, the intel feeds,
+and the one page that called a third party.
+
+### Security
+
+- **The release pipeline trusts nothing that can be moved under it.** The
+  release job holds the token that publishes the image every user installs, and
+  it ran eight third-party actions by movable tag. Every action in both
+  workflows is now pinned to a full commit SHA, with the release in a comment
+  that Dependabot updates alongside it. The release builds cold -- it no longer
+  reads the cache CI writes from every pull request -- and a dispatch tag
+  reaches the shell only through the environment, validated as `vX.Y.Z`, never
+  expanded into the script. Checkouts no longer keep the job's token.
+  `tests/test_workflow_pins.py` holds all of it.
+
+- **The image is scanned before it is published, and signed after.** Trivy
+  scans the built image; a critical vulnerability with a published fix stops the
+  release. The pushed image carries BuildKit provenance, an SBOM, and a
+  Sigstore-signed build-provenance attestation. Verify it with
+  `gh attestation verify oci://ghcr.io/reprodev/cvedeck:0.8.14 --owner reprodev`
+  -- see DEPLOYMENT.md, "Verifying the image". CI runs the same scan over
+  critical and high findings, as advice.
+
+- **The intel feeds are bounded.** Every client read its whole response into
+  memory, and EPSS gunzipped it with no limit, so a compromised mirror or a
+  misconfigured feed URL could send a small file that expanded until the process
+  died. Responses are now read up to a ceiling counted after decoding, and the
+  gunzip stops at its own. The ceilings were set from measurement and sit far
+  above real data -- the largest OSV answer found was 61 MB, for the kernel on
+  Ubuntu 22.04. EPSS redirects stay on, because its "current" URL redirects to a
+  dated file, but only to the host that was asked. A breach is a failed refresh
+  that keeps yesterday's cache, or an OSV lookup reported as unanswered -- never
+  an empty answer (Req 10.18).
+
+- **A collector with no host-key store refuses instead of trusting.** The
+  fallback was paramiko's `AutoAddPolicy`, which accepts any key from anyone.
+  Every production path passes a store, but the scanner engine's default
+  collector did not. It now refuses any unknown host before sending a
+  credential, and nothing in the application may construct `AutoAddPolicy`
+  (Req 17.12).
+
+### Removed
+
+- **The Swagger page at `/api/docs`.** It loaded its code from jsDelivr, so every
+  visit told a third party the address of the instance and that it runs
+  CveDeck. Nothing in the product used it. `/api/openapi.json` remains, behind
+  sign-in, for scripts and for any API tool you run yourself; every response now
+  carries one strict content policy with no exception (Req 16.21).
+
+### Fixed
+
+- **A slow resolver can no longer hold a discovery sweep.** Reverse-DNS lookups
+  had no timeout; they now give up after two seconds and the host is listed
+  without a name (Req 8.13).
+- **A manual release dispatch built images with no version tags.** On a
+  `workflow_dispatch` the ref is a branch, so the semver tags came out empty; the
+  validated tag is now passed explicitly.
+
+### Changed
+
+- `Verify-Release.ps1` now sends every demo write and requires a refusal, and
+  checks the image's content policy, the absent Swagger page and the absent curl.
+
+---
+
 ## [0.8.13] - 2026-09-24
 
 A release with no features in it. The lock -- sign-in, sessions, tokens, pinned

@@ -20,12 +20,24 @@ separated from fetching so it can be tested against fixtures without HTTP.
 from __future__ import annotations
 
 import csv
-import gzip
 import io
 import logging
 from dataclasses import dataclass
 
 import httpx
+
+from .http_bounds import (
+    MAX_REDIRECTS,
+    MIB,
+    gunzip_limited,
+    request_limited,
+    require_same_host,
+)
+
+#: The file as sent (2.7 MB gzipped when measured) and as decompressed
+#: (11.5 MB). Ceilings, not estimates: see app/scanner/http_bounds.py.
+_MAX_DOWNLOAD = 64 * MIB
+_MAX_DECOMPRESSED = 256 * MIB
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -149,12 +161,18 @@ class EpssHttpClient:
         if self._http_client is not None:
             client = self._http_client
         else:
-            client = httpx.Client(timeout=self._timeout, follow_redirects=True)
+            # The "current" URL answers with a redirect to the dated file on
+            # the same host, so redirects stay on -- bounded in number, and
+            # checked to have stayed on that host (Req 10.18).
+            client = httpx.Client(
+                timeout=self._timeout, follow_redirects=True, max_redirects=MAX_REDIRECTS
+            )
             should_close = True
 
         try:
-            response = client.get(self._url)
+            response = request_limited(client, "GET", self._url, limit=_MAX_DOWNLOAD)
             response.raise_for_status()
+            require_same_host(self._url, response)
             text = _decompress(response.content)
         finally:
             if should_close:
@@ -175,5 +193,8 @@ def _decompress(payload: bytes) -> str:
     depending on which one the CDN in front of the feed chooses today.
     """
     if payload[:2] == b"\x1f\x8b":
-        return gzip.decompress(payload).decode("utf-8", errors="replace")
+        # Bounded: gzip.decompress is not, which is what a gzip bomb needs.
+        return gunzip_limited(payload, limit=_MAX_DECOMPRESSED).decode(
+            "utf-8", errors="replace"
+        )
     return payload.decode("utf-8", errors="replace")

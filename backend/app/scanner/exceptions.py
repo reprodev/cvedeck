@@ -100,12 +100,14 @@ class HostKeyUnknownError(HostKeyError):
     Maps to ``HOST_KEY_UNKNOWN``.
     """
 
-    def __init__(self, hostname: str, port: int, *, presented: str) -> None:
+    def __init__(
+        self, hostname: str, port: int, *, presented: str, reason: str | None = None
+    ) -> None:
+        why = reason or "CVEDECK_SSH_HOST_KEY_POLICY is strict"
         super().__init__(
             hostname,
             port,
-            f"No SSH host key is pinned for {hostname}:{port} and "
-            "CVEDECK_SSH_HOST_KEY_POLICY is strict. The host presented "
-            f"{presented}. Refused before any credentials were sent.",
+            f"No SSH host key is pinned for {hostname}:{port} and {why}. The host "
+            f"presented {presented}. Refused before any credentials were sent.",
         )
         self.presented = presented

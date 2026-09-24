@@ -4,6 +4,22 @@
 # release. arm64 is not optional for this audience: a large share of homelab
 # fleets run on a Raspberry Pi or an ARM mini-PC, and an amd64-only image simply
 # does not run for them.
+#
+# This job holds the one credential that can change what every user installs,
+# so since 0.8.14 it trusts as little as it can:
+#
+# - Every action is pinned to a full commit SHA, with the release it came from
+#   in a comment. A tag like `@v7` can be moved by whoever controls the action's
+#   repository; a SHA cannot. Dependabot's github-actions updates rewrite the
+#   SHA and the comment together, so pinning costs no maintenance.
+# - It builds cold. CI writes the shared GitHub Actions cache from every push
+#   and pull request; a release that read it would be publishing layers this job
+#   never built.
+# - The image is scanned before anything is pushed, and a critical
+#   vulnerability with a published fix stops the release.
+# - The pushed image carries a signed build-provenance attestation, so anyone
+#   can check it was built here from this repository:
+#     gh attestation verify oci://ghcr.io/reprodev/cvedeck:<version> --owner reprodev
 
 name: Release
 
@@ -18,17 +34,38 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   publish:
     name: Build and publish image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # For the signed provenance attestation, and nothing else.
+      id-token: write
+      attestations: write
 
     steps:
-      - uses: actions/checkout@v7
+      - name: Validate the tag
+        id: tag
+        # Read through the environment, never pasted into the script: a
+        # dispatch input is free text, and `${{ }}` inside `run:` is expanded
+        # before the shell sees it, so a crafted tag would be shell code.
+        env:
+          TAG_INPUT: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if ! printf '%s' "$TAG_INPUT" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Not a release tag: expected vX.Y.Z."
+            exit 1
+          fi
+          echo "tag=$TAG_INPUT" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG_INPUT#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          persist-credentials: false
 
       - name: Verify the tag matches the application version
         # A tag that disagrees with what /api/health reports produces a release
@@ -40,27 +77,50 @@ jobs:
         # The dashboard's own version badge is deliberately NOT a fourth string:
         # it renders whatever /api/health reports, so it cannot disagree with the
         # backend by construction.
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
-          tag_version="${tag#v}"
           app_version=$(sed -n 's/^_VERSION = "\(.*\)"$/\1/p' backend/app/api/app.py)
           pyproject_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' backend/pyproject.toml)
           frontend_version=$(node -p "require('./frontend/package.json').version")
 
-          echo "tag=$tag_version app=$app_version pyproject=$pyproject_version frontend=$frontend_version"
+          echo "tag=$TAG_VERSION app=$app_version pyproject=$pyproject_version frontend=$frontend_version"
 
-          if [ "$tag_version" != "$app_version" ] \
-            || [ "$tag_version" != "$pyproject_version" ] \
-            || [ "$tag_version" != "$frontend_version" ]; then
+          if [ "$TAG_VERSION" != "$app_version" ] \
+            || [ "$TAG_VERSION" != "$pyproject_version" ] \
+            || [ "$TAG_VERSION" != "$frontend_version" ]; then
             echo "::error::Version mismatch. Tag, app.py, pyproject.toml, and frontend/package.json must agree."
             exit 1
           fi
 
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the amd64 image for scanning
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: cvedeck:scan
+
+      - name: Scan the image
+        # A vulnerability scanner that ships a fixable critical vulnerability in
+        # its own image is the one release this project cannot afford. Unfixed
+        # criticals are reported but do not block: there is nothing to upgrade
+        # to, and blocking would only stop every other fix shipping.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          image-ref: cvedeck:scan
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -68,21 +128,32 @@ jobs:
 
       - name: Derive image tags
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
+          # The version comes from the validated tag, not the triggering ref: on
+          # a manual dispatch the ref is a branch and holds no version at all.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ steps.tag.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.tag.outputs.tag }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Deliberately no cache-from / cache-to: see the header.
+          provenance: mode=max
+          sbom: true
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

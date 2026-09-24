@@ -24,6 +24,11 @@ from typing import Any
 
 import httpx
 
+from .http_bounds import MIB, request_limited
+
+#: The catalogue was 1.75 MB when measured; see app/scanner/http_bounds.py.
+_MAX_CATALOGUE = 32 * MIB
+
 _LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_KEV_URL = (
@@ -145,7 +150,9 @@ class KevHttpClient:
             should_close = True
 
         try:
-            response = client.get(self._url)
+            # Bounded, and no redirects: the catalogue is served directly
+            # (Req 10.18).
+            response = request_limited(client, "GET", self._url, limit=_MAX_CATALOGUE)
             response.raise_for_status()
             records = parse_kev_catalog(response.json())
         finally:

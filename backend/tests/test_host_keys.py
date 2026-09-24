@@ -643,3 +643,46 @@ def test_the_machine_summary_names_the_port_its_pin_is_on(session):
 
     listed = {(p["machine_id"], p["port"]) for p in client.get("/api/host-keys").json()}
     assert listed == {("m1", 22), ("m1", 2222), ("m2", 2222)}
+
+
+# --- Req 17.12: nothing trusts a key it cannot record ------------------------
+
+
+def test_with_no_store_an_unknown_host_is_refused_before_authenticating():
+    """Under the default tofu policy too: with nowhere to pin, nothing is trusted."""
+    key = _ed25519()
+    with ssh_server(key) as server:
+        with pytest.raises(HostKeyUnknownError) as caught:
+            _connect(server["port"], None, policy="tofu")
+        assert server["auth_attempts"] == 0
+
+    assert "no host key store" in str(caught.value)
+
+
+def test_the_default_collector_refuses_rather_than_trusting():
+    """ScannerEngine's default factory builds this collector; it must fail closed."""
+    from app.scanner.collectors import get_collector
+
+    key = _ed25519()
+    with ssh_server(key) as server:
+        collector = get_collector(Platform.LINUX)
+        collector._port = server["port"]
+        target = TargetMachine(id="m1", hostname=HOST, platform=Platform.LINUX)
+        with pytest.raises(HostKeyUnknownError):
+            collector.collect(target, Credentials(username="scanner", password=PASSWORD))
+        assert server["auth_attempts"] == 0
+
+
+def test_nothing_in_the_application_trusts_any_key():
+    """AutoAddPolicy accepts every key from anyone; no code may construct it."""
+    import ast
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    offenders = []
+    for path in app_dir.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            name = getattr(node, "attr", None) or getattr(node, "id", None)
+            if name in ("AutoAddPolicy", "WarningPolicy"):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, offenders
