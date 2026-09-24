@@ -11,4 +11,4 @@ httpx==0.28.1
 
 # PostgreSQL driver, used when CVEDECK_DB_URL points at postgresql+psycopg://.
 # Harmless when the deployment stays on the default SQLite database.
-psycopg[binary]==3.3.5
+psycopg[binary]==3.3.6
