@@ -15,7 +15,7 @@
 # amd64 and arm64 -- so there is nothing to gain from building it under qemu,
 # and a lot to lose: the v0.7.0 release hung for over an hour when `npm ci`
 # crashed with "Illegal instruction" under arm64 emulation and never exited.
-FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:25-alpine AS frontend
 
 WORKDIR /build
 
