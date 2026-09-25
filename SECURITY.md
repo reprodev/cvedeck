@@ -124,6 +124,13 @@ Windows matching, and until then `CVEDECK_WINRM_SCHEME` and
 `https` and `5986` outside a lab: on the default `http` transport the NTLM
 exchange crosses the network unencrypted.
 
+**The kernel is not checked yet.** Packages are matched against the advisories
+published for their source package, but not the kernel's: the kernel source has
+thousands of advisories per release, OSV pages the answer, and which of the
+installed kernels is running decides which of them matter. Until that is built,
+each host's page says how many kernel packages went unchecked. A kernel with no
+findings is not a clean kernel -- keep it updated through your distribution.
+
 **Credentials are held in memory during a scan.** They arrive in the request
 body, are wrapped in `SecretStr` so they are not logged or serialized, and are
 never written to disk — but they are in process memory for the duration of the

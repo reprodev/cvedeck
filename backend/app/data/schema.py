@@ -148,6 +148,10 @@ class Package(Base):
     version: Mapped[str] = mapped_column(String, nullable=False)
     ecosystem: Mapped[str | None] = mapped_column(String, nullable=True)
     dependencies: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The source package and its version, which is what advisories are
+    # published under (Req 1.12). Null for inventories collected before 0.8.15.
+    source_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_version: Mapped[str | None] = mapped_column(String, nullable=True)
 
     inventory: Mapped[Inventory] = relationship(back_populates="packages")
 

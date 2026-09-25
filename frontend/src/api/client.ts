@@ -165,6 +165,7 @@ interface MachineSummaryWire {
   last_scan_new?: number | null;
   last_scan_resolved?: number | null;
   last_scan_baseline?: boolean;
+  kernel_packages_unchecked?: number | null;
 }
 
 /** Wire shape of a CVE finding as serialized by the backend. */
@@ -184,6 +185,7 @@ interface CveFindingWire {
   remediation_note: string | null;
   dependencies?: string[];
   depended_on_by?: string[];
+  affected_packages?: string[];
   blast_radius?: "low" | "medium" | "high" | null;
   // Threat-intel enrichment. Null means unenriched, not safe -- see types.ts.
   kev_listed?: boolean | null;
@@ -355,6 +357,7 @@ function toMachineSummary(wire: MachineSummaryWire): MachineSummary {
     lastScanNew: wire.last_scan_new ?? null,
     lastScanResolved: wire.last_scan_resolved ?? null,
     lastScanBaseline: wire.last_scan_baseline ?? false,
+    kernelPackagesUnchecked: wire.kernel_packages_unchecked ?? null,
   };
 }
 
@@ -377,6 +380,7 @@ function toCveFinding(wire: CveFindingWire): CveFinding {
     remediationNote: wire.remediation_note ?? null,
     dependencies: wire.dependencies ?? [],
     dependedOnBy: wire.depended_on_by ?? [],
+    affectedPackages: wire.affected_packages ?? [],
     // `?? null`, never `?? "low"`: absent means the route did not build the
     // dependency graph, which is not a claim that nothing depends on this
     // package (Req 10.10).

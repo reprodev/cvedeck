@@ -98,6 +98,11 @@ class MachineSummary(BaseModel):
     last_scan_resolved: int | None = None
     #: Whether the latest successful scan was this machine's baseline.
     last_scan_baseline: bool = False
+    #: Installed kernel packages that were not checked against advisories,
+    #: because kernel matching is not built yet (Req 12.5). ``None`` when no
+    #: inventory has been collected. Not zero, and not "no kernel findings":
+    #: a question that was not asked.
+    kernel_packages_unchecked: int | None = None
 
 
 class CveFindingOut(BaseModel):
@@ -152,6 +157,13 @@ class CveFindingOut(BaseModel):
     remediation_note: str | None = None
     dependencies: list[str] = Field(default_factory=list)
     depended_on_by: list[str] = Field(default_factory=list)
+    #: Every installed binary built from the same source package as
+    #: ``package_name``, including it (Req 2.8). A finding is reported once per
+    #: source, against one representative binary; upgrading only that binary
+    #: would leave the others vulnerable, so a fix command must name them all.
+    #: Just ``[package_name]`` for an inventory collected before 0.8.15, and
+    #: empty where no inventory was loaded.
+    affected_packages: list[str] = Field(default_factory=list)
     #: How much of the host depends on this package: "low", "medium", "high",
     #: or ``None`` when the dependency graph was not built for this response
     #: (Req 10.10). ``None`` is not "low": the fleet-wide list omits the graph

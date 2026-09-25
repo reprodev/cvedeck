@@ -195,3 +195,16 @@ describe("the generated commands (Req 14.10)", () => {
     );
   });
 });
+
+describe("several names in one command (Req 2.8, 14.10)", () => {
+  it("passes every name to the package manager as its own word", () => {
+    fc.assert(
+      fc.property(fc.array(names, { minLength: 1, maxLength: 4 }), (list) => {
+        const tooling = getDistroTooling("linux", "Debian GNU/Linux 12", null);
+        const words = posixWords(tooling.purgeCmd(list));
+        expect(words.slice(0, 4)).toEqual(["sudo", "apt", "remove", "--purge"]);
+        expect(words.slice(4)).toEqual(list.map(printable));
+      }),
+    );
+  });
+});

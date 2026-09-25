@@ -502,6 +502,14 @@ This is the impact-assessment counterpart of Property 15. Before 0.8.7 the parse
 
 **Validates: Requirements 1.9, 10.13**
 
+### Property 17: A CVE is one finding per source package, found under any name
+
+*For any* host inventory and any set of advisories, each advisory published under a package's source name, under any of its binary names, or under several of them, SHALL be reported exactly once per source package, against one installed binary of that source -- the binary named like the source when installed, otherwise the first by name. No advisory published under a name the host has installed, as a binary or as a source, is lost.
+
+Before 0.8.15 only binary names were asked about, and the distributions publish under different names: Debian, Ubuntu, Alpine, Rocky and SUSE under the source, AlmaLinux sometimes under the binary. Asking under one kind alone loses the other's advisories; asking under both without collapsing them would report glibc's CVEs once for every binary glibc ships as.
+
+**Validates: Requirements 1.12, 2.8**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).

@@ -66,10 +66,20 @@ def _get_repository(session: Session = Depends(get_session)) -> Repository:
     return Repository(session)
 
 
+def _union(lists) -> list[str]:
+    """Concatenate, keeping the first occurrence of each name, in order."""
+    seen: dict[str, None] = {}
+    for names in lists:
+        for name in names:
+            seen.setdefault(name, None)
+    return list(seen)
+
+
 def _to_machine_summary(
     entry: MachineListEntry,
     host_key_pins: dict[str, "SshHostKey"],
     latest_run: ScanRun | None = None,
+    kernel_unchecked: int | None = None,
 ) -> MachineSummary:
     """Map a repository machine-list entry to the API summary model.
 
@@ -104,6 +114,7 @@ def _to_machine_summary(
             latest_run.resolved_count if latest_run is not None else None
         ),
         last_scan_baseline=latest_run.baseline if latest_run is not None else False,
+        kernel_packages_unchecked=kernel_unchecked,
     )
 
 
@@ -129,6 +140,23 @@ def _build_dependency_maps(
         for dep in pkg.dependencies:
             depended_on_by.setdefault(dep, []).append(pkg.name)
     return direct_deps, depended_on_by
+
+
+def _source_siblings(packages: list[DomainPackage]) -> dict[str, list[str]]:
+    """Each installed binary's name -> every installed binary of its source.
+
+    A binary whose source was not reported is its own only sibling, which is
+    exactly how an inventory from before 0.8.15 is shown (Req 2.8).
+    """
+    by_source: dict[str, list[str]] = {}
+    for pkg in packages:
+        if pkg.source_name:
+            by_source.setdefault(pkg.source_name, []).append(pkg.name)
+    siblings: dict[str, list[str]] = {}
+    for pkg in packages:
+        group = by_source.get(pkg.source_name or "", [pkg.name]) if pkg.source_name else [pkg.name]
+        siblings[pkg.name] = sorted(set(group))
+    return siblings
 
 
 def _blast_radius(
@@ -172,6 +200,7 @@ def _to_finding_out(
     direct_deps: dict[str, list[str]] | None = None,
     depended_on_by: dict[str, list[str]] | None = None,
     new_keys: set[FindingKey] | None = None,
+    siblings: dict[str, list[str]] | None = None,
 ) -> CveFindingOut:
     """Map a stored finding to the API finding model.
 
@@ -189,8 +218,18 @@ def _to_finding_out(
         if fixed_version is None:
             fix_status = "none"
 
-    deps = (direct_deps or {}).get(pkg_name, []) if pkg_name else []
-    dependents = (depended_on_by or {}).get(pkg_name, []) if pkg_name else []
+    # Every binary of the finding's source is affected, so dependencies and
+    # dependents are those of all of them -- what breaks if glibc goes is what
+    # depends on libc6, libc-bin or any other part of it.
+    if pkg_name and siblings is not None:
+        affected = siblings.get(pkg_name, [pkg_name])
+    else:
+        affected = [pkg_name] if pkg_name else []
+    deps = _union((direct_deps or {}).get(name, []) for name in affected)
+    dependents = [
+        d for d in _union((depended_on_by or {}).get(name, []) for name in affected)
+        if d not in affected
+    ]
     blast_radius = _blast_radius(pkg_name, direct_deps, depended_on_by, dependents)
 
     return CveFindingOut(
@@ -212,6 +251,7 @@ def _to_finding_out(
         in (new_keys or set()),
         dependencies=deps,
         depended_on_by=dependents,
+        affected_packages=affected,
         blast_radius=blast_radius,
         kev_listed=finding.kev_listed,
         kev_due_date=finding.kev_due_date,
@@ -267,8 +307,11 @@ def list_machines(
     """List scanned machines with severity-grouped CVE counts (Req 6.1, 3.2)."""
     pins = repo.host_key_pins(config.ssh_port())
     latest = repo.latest_successful_runs()
+    kernels = repo.unchecked_kernel_package_counts()
     return [
-        _to_machine_summary(entry, pins, latest.get(entry.machine.id))
+        _to_machine_summary(
+            entry, pins, latest.get(entry.machine.id), kernels.get(entry.machine.id)
+        )
         for entry in repo.list_machines()
     ]
 
@@ -291,6 +334,7 @@ def get_machine(
         ),
         repo.host_key_pins(config.ssh_port()),
         repo.latest_successful_run(machine_id),
+        repo.unchecked_kernel_package_counts([machine_id]).get(machine_id),
     )
 
 
@@ -406,9 +450,12 @@ def get_machine_cves(
         if inventory is not None
         else (None, None)
     )
+    siblings = _source_siblings(inventory.packages) if inventory is not None else None
     new_keys = repo.new_finding_keys(repo.latest_successful_run(machine_id))
     return [
-        _to_finding_out(f, remediation_by_cve, direct_deps, depended_on_by, new_keys)
+        _to_finding_out(
+            f, remediation_by_cve, direct_deps, depended_on_by, new_keys, siblings
+        )
         for f in findings
     ]
 

@@ -74,3 +74,36 @@ def parse_fix(
     if m := _UPSTREAM.search(text):
         return "upstream", m.group("label"), m.group("version")
     return "none", None, None
+
+
+# Binary and source names of the kernel, across the package managers CveDeck
+# reads. Anything built from the kernel's source counts -- on Debian that
+# includes ``linux-libc-dev``, whose advisories are the kernel's -- and nothing
+# else: ``linux-base`` is its own small source, matched like any other package.
+_KERNEL_BINARY_PREFIXES = (
+    "linux-image-",
+    "linux-headers-",
+    "linux-modules-",
+    "linux-kbuild-",
+    "kernel-core",
+    "kernel-modules",
+)
+_KERNEL_BINARIES = frozenset({"kernel", "kernel-default", "linux-lts", "linux-virt", "linux"})
+_KERNEL_SOURCES = frozenset({"linux", "kernel", "kernel-default", "linux-lts", "linux-virt"})
+
+
+def is_kernel_package(name: str, source_name: str | None = None) -> bool:
+    """Whether a package is the kernel itself (Req 12.5).
+
+    Kernel packages are not yet looked up by source: the ``linux`` source has
+    thousands of advisories per release, OSV pages its answer, and which of the
+    installed kernels is running decides which of them matter. Until that is
+    built they are matched by binary name, as every package was before 0.8.15
+    -- which finds nothing -- and the dashboard says so rather than showing a
+    kernel that reads as clean.
+    """
+    lowered = name.lower()
+    source = (source_name or "").lower()
+    if lowered in _KERNEL_BINARIES or lowered.startswith(_KERNEL_BINARY_PREFIXES):
+        return True
+    return source in _KERNEL_SOURCES or source.startswith(("linux-signed", "linux-rpi"))

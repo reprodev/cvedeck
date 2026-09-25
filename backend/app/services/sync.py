@@ -248,6 +248,12 @@ class SyncService:
                     name=pkg.name,
                     version=pkg.version,
                     ecosystem=pkg.ecosystem,
+                    # Listed field by field, so a new column has to be added
+                    # here by hand: dependencies were missed when they were
+                    # added, and never reached the online store until 0.8.15.
+                    dependencies=pkg.dependencies,
+                    source_name=pkg.source_name,
+                    source_version=pkg.source_version,
                 )
             )
         online.flush()

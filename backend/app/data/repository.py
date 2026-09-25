@@ -315,6 +315,8 @@ class Repository:
                     version=pkg.version,
                     ecosystem=pkg.ecosystem,
                     dependencies=",".join(pkg.dependencies) if pkg.dependencies else None,
+                    source_name=pkg.source_name,
+                    source_version=pkg.source_version,
                 )
             )
         self._session.add(row)
@@ -331,6 +333,55 @@ class Repository:
         if row is None:
             return None
         return self._to_domain_inventory(row)
+
+    def unchecked_kernel_package_counts(
+        self, machine_ids: list[str] | None = None
+    ) -> dict[str, int]:
+        """Installed kernel packages per machine, from each latest inventory (Req 12.5).
+
+        Kernel packages are not yet matched against advisories, so the
+        dashboard has to say how many went unchecked rather than let a kernel
+        with no findings read as a clean one. A machine with an inventory and
+        no kernel package maps to 0; one with no inventory is absent.
+
+        One query for the fleet: SQL narrows the rows to names that could be a
+        kernel, and :func:`is_kernel_package` decides.
+        """
+        from ..package_identifier import is_kernel_package
+
+        latest = (
+            select(Inventory.machine_id, func.max(Inventory.collected_at).label("at"))
+            .group_by(Inventory.machine_id)
+        )
+        if machine_ids is not None:
+            latest = latest.where(Inventory.machine_id.in_(machine_ids))
+        latest = latest.subquery()
+        inventories = (
+            select(Inventory.id, Inventory.machine_id)
+            .join(
+                latest,
+                (Inventory.machine_id == latest.c.machine_id)
+                & (Inventory.collected_at == latest.c.at),
+            )
+        ).subquery()
+        counts: dict[str, int] = {
+            machine_id: 0
+            for machine_id in self._session.execute(
+                select(inventories.c.machine_id)
+            ).scalars()
+        }
+        candidates = select(inventories.c.machine_id, Package.name, Package.source_name).join(
+            inventories, Package.inventory_id == inventories.c.id
+        ).where(
+            Package.name.like("linux%")
+            | Package.name.like("kernel%")
+            | Package.source_name.like("linux%")
+            | Package.source_name.like("kernel%")
+        )
+        for machine_id, name, source_name in self._session.execute(candidates):
+            if is_kernel_package(name, source_name):
+                counts[machine_id] = counts.get(machine_id, 0) + 1
+        return counts
 
     def get_latest_inventory_for_machine(
         self, machine_id: str
@@ -367,6 +418,8 @@ class Repository:
                         if pkg.dependencies
                         else []
                     ),
+                    source_name=pkg.source_name,
+                    source_version=pkg.source_version,
                 )
                 for pkg in row.packages
             ],

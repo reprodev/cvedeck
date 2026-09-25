@@ -38,6 +38,7 @@ export function makeMachine(
     hostKeyPort: null,
     lastScanNew: null,
     lastScanResolved: null,
+    kernelPackagesUnchecked: null,
     lastScanBaseline: false,
     ...overrides,
   };

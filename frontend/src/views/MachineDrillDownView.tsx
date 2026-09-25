@@ -31,6 +31,7 @@ import {
   fixElsewhereLabel,
   getDistroTooling,
   hasFix as findingHasFix,
+  upgradeTargets,
 } from "../lib/remediation";
 import { useClipboard } from "../lib/useClipboard";
 import { isHostKeyStatus, relativeTime, remediationStatusLabel, severityLabel, statusLabel } from "../lib/labels";
@@ -105,6 +106,11 @@ export interface MachineDrillDownViewProps {
   lastScanNew?: number | null;
   lastScanResolved?: number | null;
   lastScanBaseline?: boolean;
+  /**
+   * Installed kernel packages that were not checked against advisories
+   * (Req 12.5). Null when no inventory was collected.
+   */
+  kernelPackagesUnchecked?: number | null;
   /** Load the host's scan runs. Omitted, the scan history panel is not shown. */
   onLoadScanRuns?: (limit: number) => Promise<ScanRun[]>;
   /** Load one run's new and resolved findings. */
@@ -175,6 +181,7 @@ export function MachineDrillDownView({
   lastScanNew = null,
   lastScanResolved = null,
   lastScanBaseline = false,
+  kernelPackagesUnchecked = null,
   onLoadScanRuns,
   onLoadScanChanges,
 }: MachineDrillDownViewProps) {
@@ -606,6 +613,22 @@ export function MachineDrillDownView({
                 This server only scans hosts whose key is already pinned.
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {kernelPackagesUnchecked !== null && kernelPackagesUnchecked > 0 && (
+        // A question not asked must not look answered: a kernel with no
+        // findings below would otherwise read as a clean one (Req 12.5).
+        <div className="release-fix-notice" role="note" data-testid="kernel-unchecked">
+          <Icon name="alert" />
+          <div>
+            <strong>
+              {kernelPackagesUnchecked} kernel package{kernelPackagesUnchecked === 1 ? " is" : "s are"}{" "}
+              not checked against advisories yet.
+            </strong>{" "}
+            CveDeck does not match the kernel yet, so the findings below say nothing
+            about it. Keep the kernel updated through your distribution until it does.
           </div>
         </div>
       )}
@@ -1196,18 +1219,18 @@ export function MachineDrillDownView({
                             type="button"
                             className="copy-fix-btn"
                             style={{ width: "100%", justifyContent: "center" }}
-                            onClick={() => copyPkg(tooling.updateCmd(pkgName), pkgName)}
+                            onClick={() => copyPkg(tooling.updateCmd(upgradeTargets(group.findings)), pkgName)}
                           >
-                            {isCopied ? <><Icon name="check" /> Upgrade Command Copied!</> : <><Icon name="copy" /> Copy: {tooling.updateCmd(pkgName)}</>}
+                            {isCopied ? <><Icon name="check" /> Upgrade Command Copied!</> : <><Icon name="copy" /> Copy: {tooling.updateCmd(upgradeTargets(group.findings))}</>}
                           </button>
                         ) : isLeaf ? (
                           <button
                             type="button"
                             className="copy-purge-btn"
                             style={{ width: "100%", justifyContent: "center" }}
-                            onClick={() => copyPkg(tooling.purgeCmd(pkgName), pkgName)}
+                            onClick={() => copyPkg(tooling.purgeCmd(upgradeTargets(group.findings)), pkgName)}
                           >
-                            {isCopied ? <><Icon name="check" /> Purge Command Copied!</> : <><Icon name="trash" /> Copy Purge: {tooling.purgeCmd(pkgName)}</>}
+                            {isCopied ? <><Icon name="check" /> Purge Command Copied!</> : <><Icon name="trash" /> Copy Purge: {tooling.purgeCmd(upgradeTargets(group.findings))}</>}
                           </button>
                         ) : (
                           <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", textAlign: "center", padding: "0.35rem" }}>
@@ -1362,8 +1385,8 @@ export function MachineDrillDownView({
                                 <button
                                   type="button"
                                   className="copy-fix-btn"
-                                  onClick={() => copyPkg(tooling.updateCmd(pkgName), pkgName)}
-                                  title={`Copy fix command: sudo apt install --only-upgrade ${pkgName}`}
+                                  onClick={() => copyPkg(tooling.updateCmd(upgradeTargets(group.findings)), pkgName)}
+                                  title={`Copy fix command: ${tooling.updateCmd(upgradeTargets(group.findings))}`}
                                 >
                                   {isCopied ? <><Icon name="check" /> Command Copied!</> : <><Icon name="copy" /> Copy apt upgrade command</>}
                                 </button>
@@ -1373,7 +1396,7 @@ export function MachineDrillDownView({
                                   <button
                                     type="button"
                                     className="copy-purge-btn"
-                                    onClick={() => copyAction(tooling.purgeCmd(pkgName), `purge-${pkgName}`)}
+                                    onClick={() => copyAction(tooling.purgeCmd(upgradeTargets(group.findings)), `purge-${pkgName}`)}
                                     title={`Unused leaf package: remove completely to eliminate CVEs`}
                                   >
                                     {copiedAction === `purge-${pkgName}` ? <><Icon name="check" /> Copied!</> : <><Icon name="trash" /> Purge: sudo apt purge {pkgName}</>}
@@ -1579,8 +1602,8 @@ export function MachineDrillDownView({
                                   <button
                                     type="button"
                                     className="copy-fix-btn"
-                                    onClick={() => copyPkg(rowTooling.updateCmd(pkgName), pkgName)}
-                                    title={`Copy: sudo apt install --only-upgrade ${pkgName}`}
+                                    onClick={() => copyPkg(rowTooling.updateCmd(upgradeTargets([finding])), pkgName)}
+                                    title={`Copy: ${rowTooling.updateCmd(upgradeTargets([finding]))}`}
                                   >
                                     {isCopied ? <><Icon name="check" /> Copied</> : <><Icon name="copy" /> Copy fix</>}
                                   </button>

@@ -8,6 +8,66 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.8.15] - 2026-09-25
+
+**Upgrading: the first scan after this release will report many more
+findings. They were always there.** CveDeck had only ever asked about packages
+by their binary name, and the distributions publish advisories under the
+source package. On out-of-date test hosts scanned end to end, the same hosts
+went from 38 findings to 204 (Debian 12.0), 36 to 235 (Ubuntu 22.04), and 6 to
+22 (Alpine 3.18.0) -- and not one finding the previous release reported was
+lost. Scan history marks the new ones as new, which is true: nothing on the
+host changed, the question did.
+
+### Security
+
+- **Packages are looked up under the name the distribution publishes them
+  under.** OSV has 46 advisories for Debian 12's `glibc` at 2.36-9 and none for
+  `libc6`, the binary actually installed; 51 for `openssl` and none for
+  `libssl3`. A library was checked only when some binary happened to share its
+  source's name, and glibc never was -- so CVE-2023-4911, the glibc root
+  escalation known as Looney Tunables, was never reported on any Debian or
+  Ubuntu host. The collector now records each package's source package and
+  source version (dpkg, rpm, apk and pacman all report them), and every package
+  is asked about under its source *and* its own name: Debian, Ubuntu, Alpine,
+  Rocky and SUSE publish under the source, AlmaLinux sometimes under the binary,
+  and asking under only one kind loses the other's (Req 1.12, 2.8).
+
+- **A CVE is one finding per source package, however many binaries it ships
+  as.** It is reported against one representative installed binary -- the one
+  named like the source when there is one, so a finding already matched through
+  it keeps its history -- and the finding lists every installed binary of that
+  source. The fix commands, the host's fix plan and the CSV export name them
+  all: upgrading `libc-bin` alone leaves `libc6` vulnerable. The blast radius is
+  what depends on any part of the source (Property 17). Checked end to end:
+  running the generated command on a test host upgraded both glibc binaries and
+  the rescan resolved every glibc finding.
+
+- **RPM versions carry their epoch.** The rpm query dropped it, so every fix
+  published as `1:3.0.7-...` compared as newer than any installed version. On
+  a Rocky 9 host 21 CVEs were reported against packages already past their fix,
+  each checked version by version; an AlmaLinux 9 image reported 89 advisories
+  where 18 are real. All are gone.
+
+### Documented
+
+- **The kernel is not checked yet, and each host now says so.** The kernel's
+  source has thousands of advisories per release and OSV pages the answer, so
+  it gets its own release. Until then each host's page states how many kernel
+  packages were not checked, and `GET /api/machines` reports
+  `kernel_packages_unchecked` -- a kernel with no findings no longer reads as a
+  clean one (Req 12.5).
+
+### Changed
+
+- React 19.3, and psycopg 3.3.6 (Dependabot #24, #23). React 19 was trialled in
+  a scratch copy first: the type check, every frontend test and the build pass
+  unchanged, and the lockfile gains no install script.
+- The sync to an online database now carries each package's dependencies, which
+  it had silently dropped since they were added, and its source.
+
+---
+
 ## [0.8.14] - 2026-09-24
 
 0.8.13 hardened what a scanned host, a browser and an anonymous visitor could

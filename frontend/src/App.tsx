@@ -654,6 +654,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           lastScanNew={selectedMachine?.lastScanNew ?? null}
           lastScanResolved={selectedMachine?.lastScanResolved ?? null}
           lastScanBaseline={selectedMachine?.lastScanBaseline ?? false}
+          kernelPackagesUnchecked={selectedMachine?.kernelPackagesUnchecked ?? null}
           onLoadScanRuns={(limit) => api.listScanRuns(selectedMachineId, limit)}
           onLoadScanChanges={(runId) => api.listScanChanges(selectedMachineId, runId)}
         />

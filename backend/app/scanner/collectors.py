@@ -137,25 +137,42 @@ _LINUX_CONTEXT_CMD = (
 # The final sentinel distinguishes "no supported package manager" from "the
 # command failed", so neither is inferred from an empty inventory.
 _NO_PKG_MANAGER = "CVEDECK_NO_PKG_MANAGER"
+#
+# Since 0.8.15 every arm also carries the package's *source* package -- a
+# fourth field, and for dpkg a fifth with the source version -- because the
+# distributions publish advisories under the source, not the binary: OSV has
+# 51 advisories for Debian 12's `openssl` at 3.0.9-1 and none for `libssl3`, 46
+# for `glibc` and none for `libc6`. Collecting only binary names meant a library
+# was checked only if some binary happened to share its source's name, and
+# glibc never was (Req 1.12). rpm gives the source RPM's file name, which the
+# parser takes apart; apk its origin (`o:`); pacman its `%BASE%`.
 _LINUX_PACKAGES_CMD = (
     "if command -v dpkg-query >/dev/null 2>&1; then "
-    "dpkg-query -W -f='${Package}\\t${Version}\\t${Depends}\\n'; "
+    "dpkg-query -W -f='${Package}\\t${Version}\\t${Depends}\\t"
+    "${source:Package}\\t${source:Version}\\n'; "
     "elif command -v rpm >/dev/null 2>&1; then "
-    "rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t[%{REQUIRENAME},]\\n'; "
+    # The epoch leads the version when there is one (`2:8.2.2637-26.el9`), as
+    # dpkg's ${Version} already does. Without it every fix published with an
+    # epoch compares as newer than any installed version: AlmaLinux's vim
+    # advisories read as open on a host that had applied all of them.
+    "rpm -qa --qf '%{NAME}\\t%|EPOCH?{%{EPOCH}:}:{}|%{VERSION}-%{RELEASE}"
+    "\\t[%{REQUIRENAME},]\\t%{SOURCERPM}\\n'; "
     "elif [ -f /lib/apk/db/installed ]; then "
-    "awk '/^P:/{p=substr($0,3)} /^V:/{v=substr($0,3)} "
+    "awk '/^P:/{p=substr($0,3)} /^V:/{v=substr($0,3)} /^o:/{o=substr($0,3)} "
     '/^D:/{d=substr($0,3); gsub(/ +/,",",d)} '
-    '/^$/{if(p!="")print p"\\t"v"\\t"d; p="";v="";d=""} '
-    'END{if(p!="")print p"\\t"v"\\t"d}\' /lib/apk/db/installed; '
+    '/^$/{if(p!="")print p"\\t"v"\\t"d"\\t"o"\\t"v; p="";v="";d="";o=""} '
+    'END{if(p!="")print p"\\t"v"\\t"d"\\t"o"\\t"v}\' /lib/apk/db/installed; '
     "elif [ -d /var/lib/pacman/local ]; then "
     # NR!=1 rather than NR>1: equivalent here, and it keeps a '>' out of the
     # command so the read-only guard in the test suite does not have to tell a
     # comparison apart from a redirect.
-    "awk 'FNR==1&&NR!=1{if(n!=\"\")print n\"\\t\"v\"\\t\"d; n=\"\";v=\"\";d=\"\";s=\"\"} "
+    "awk 'FNR==1&&NR!=1{if(n!=\"\")print n\"\\t\"v\"\\t\"d\"\\t\"b\"\\t\"v; "
+    "n=\"\";v=\"\";d=\"\";b=\"\";s=\"\"} "
     '/^%NAME%$/{s="n";next} /^%VERSION%$/{s="v";next} /^%DEPENDS%$/{s="d";next} '
+    '/^%BASE%$/{s="b";next} '
     '/^%/{s="";next} /^$/{next} '
-    's=="n"{n=$0} s=="v"{v=$0} s=="d"{d=d (d==""?"":",") $0} '
-    'END{if(n!="")print n"\\t"v"\\t"d}\' /var/lib/pacman/local/*/desc; '
+    's=="n"{n=$0} s=="v"{v=$0} s=="b"{b=$0} s=="d"{d=d (d==""?"":",") $0} '
+    'END{if(n!="")print n"\\t"v"\\t"d"\\t"b"\\t"v}\' /var/lib/pacman/local/*/desc; '
     f"else echo {_NO_PKG_MANAGER}; fi"
 )
 
@@ -702,16 +719,27 @@ def _parse_dependencies(depends_str: str) -> list[str]:
 def _parse_linux_packages(
     output: str, default_ecosystem: str = "deb"
 ) -> list[Package]:
-    """Parse tab-separated ``name<TAB>version<TAB>depends`` lines into ``Package`` records."""
+    """Parse ``name<TAB>version<TAB>depends[<TAB>source[<TAB>source version]]`` lines.
+
+    The source fields are optional so that output from before 0.8.15 -- and a
+    host whose package manager reports no source -- still parses; the package
+    is then its own source (Req 1.12).
+    """
     packages: list[Package] = []
     for line in output.splitlines():
         line = line.rstrip()
         if not line:
             continue
         parts = line.split("\t")
+        source_name = source_version = None
         if len(parts) >= 2:
             name, version = parts[0].strip(), parts[1].strip()
             deps_str = parts[2].strip() if len(parts) >= 3 else ""
+            if len(parts) >= 4:
+                source_name, source_version = _parse_source(
+                    parts[3].strip(), parts[4].strip() if len(parts) >= 5 else ""
+                )
+                source_version = _with_rpm_epoch(parts[3].strip(), version, source_version)
         else:
             # Fallback to whitespace-separated
             ws_parts = line.split()
@@ -737,9 +765,50 @@ def _parse_linux_packages(
                 version=version,
                 ecosystem=default_ecosystem,
                 dependencies=dependencies,
+                source_name=source_name,
+                source_version=source_version,
             )
         )
     return packages
+
+
+def _with_rpm_epoch(field: str, version: str, source_version: str | None) -> str | None:
+    """Give an RPM source version the epoch its binary carries.
+
+    A source RPM's file name has no epoch (``openssl-3.0.7-24.el9.src.rpm``),
+    but the epoch is set on the spec and so shared by every binary built from
+    it -- Rocky's ``openssl-libs`` is ``1:3.0.7-24.el9``. Asked without it, OSV
+    compares against fixes published as ``1:...`` and reports every one open.
+    """
+    if not source_version or ":" in source_version:
+        return source_version
+    if not field.endswith((".src.rpm", ".nosrc.rpm")):
+        return source_version
+    epoch, sep, _rest = version.partition(":")
+    if sep and epoch.isdigit():
+        return f"{epoch}:{source_version}"
+    return source_version
+
+
+def _parse_source(field: str, version_field: str) -> tuple[str | None, str | None]:
+    """The source package's name and version from the collector's extra fields.
+
+    dpkg, apk and pacman give the name and version directly. rpm gives the
+    source RPM's file name, ``openssl-3.0.7-24.el9.src.rpm``, whose last two
+    ``-`` separated parts are the version and release -- package names may
+    contain ``-`` themselves (``openssl-1_1`` on SUSE), versions may not. rpm
+    reports ``(none)`` for packages built from no source, such as the
+    ``gpg-pubkey`` entries that hold imported signing keys.
+    """
+    if not field or field == "(none)":
+        return None, None
+    if field.endswith(".src.rpm") or field.endswith(".nosrc.rpm"):
+        stem = field.rsplit(".", 2)[0]
+        pieces = stem.rsplit("-", 2)
+        if len(pieces) != 3 or not all(pieces):
+            return None, None
+        return pieces[0], f"{pieces[1]}-{pieces[2]}"
+    return field, (version_field or None)
 
 
 # ---------------------------------------------------------------------------

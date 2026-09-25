@@ -35,7 +35,7 @@ from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.8.14"
+_VERSION = "0.8.15"
 
 
 async def _validation_error_without_input(

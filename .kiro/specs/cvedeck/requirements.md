@@ -47,6 +47,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 9. WHEN the Scanner_Engine collects a Linux Inventory from any supported package manager, THE Scanner_Engine SHALL collect each package's declared dependencies alongside its name and version, so that impact assessment has the same evidence on every supported distribution.
 10. IF a Target_Machine authenticates but has none of the supported package managers, THEN THE Scanner_Engine SHALL record that as the reason, distinctly from a package manager whose command failed.
 11. THE Scanner_Engine SHALL bound the output it reads from a Target_Machine in size and in total time, and IF either bound is exceeded THEN THE Scanner_Engine SHALL record the scan as unable to read an inventory, with the reason, and SHALL NOT record a truncated inventory, since a truncated inventory would report every finding past the cut as resolved (extends Req 1.7).
+12. WHEN the Scanner_Engine collects a Linux Inventory, THE Scanner_Engine SHALL record for each package the source package it was built from and that source's version, where the package manager reports them, since distributions publish advisories under the source package and version rather than under each binary built from it; a package whose source is not reported SHALL be treated as its own source.
 
 ### Requirement 2: CVE Matching from Public Data Sources
 
@@ -61,6 +62,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 5. IF a public data source is unreachable during a Scan, THEN THE Scanner_Engine SHALL record a data-source-unavailable status and complete matching against any reachable data source.
 6. WHERE an advisory names a qualitative severity but publishes no CVSS_Score that can be parsed under its own version of the CVSS specification, THE Scanner_Engine SHALL record that Severity_Level and SHALL record no CVSS_Score, rather than substituting a number from within the band.
 7. IF a CVE has neither a CVSS_Score that can be parsed nor a qualitative severity, THEN THE Scanner_Engine SHALL record its Severity_Level as Unscored and its CVSS_Score as absent, and SHALL NOT substitute a default score, so that an unmeasured finding is never presentable as a measured one.
+8. WHEN THE Scanner_Engine looks up a package's advisories, THE Scanner_Engine SHALL ask under the package's source name and source version as well as under the binary's own, since distributions publish advisories under either, and SHALL report each advisory once per source package however many of its binaries are installed and however many of the names asked found it.
 
 ### Requirement 3: Machine List and Severity Filtering
 
@@ -298,6 +300,11 @@ as clean.
    read.
 4. THE collection commands SHALL remain read-only, containing no filesystem
    write redirect.
+5. UNTIL the system matches kernel packages against the advisories published
+   for their source, THE system SHALL NOT present a host's kernel packages as
+   checked: it SHALL state, for each host, how many installed kernel packages
+   were not checked against advisories, since a kernel with no findings would
+   otherwise read as a clean one.
 
 ### Requirement 13: Fleet-scale operation
 

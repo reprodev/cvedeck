@@ -226,6 +226,8 @@ export function exportFindingsCsv(
     "EPSS Percentile (0-1)",
     "Fix Status",
     "Fixed Version",
+    // Every installed binary of the finding's source; a fix upgrades them all.
+    "Affected Packages",
     "Blast Radius",
     "Dependencies",
     "Depended On By (Reverse Deps)",
@@ -248,6 +250,7 @@ export function exportFindingsCsv(
     f.epssPercentile ?? NOT_CHECKED,
     f.fixStatus ?? "unknown",
     f.fixedVersion ?? "",
+    (f.affectedPackages ?? []).join("; "),
     f.blastRadius ?? NOT_ASSESSED,
     (f.dependencies ?? []).join("; "),
     (f.dependedOnBy ?? []).join("; "),

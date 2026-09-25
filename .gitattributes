@@ -12,3 +12,5 @@ Dockerfile text eol=lf
 # naming explicitly.
 .githooks/pre-commit text eol=lf
 .githooks/pre-push text eol=lf
+# Package-manager output captured from real containers; tabs and LF are the data.
+*.tsv text eol=lf

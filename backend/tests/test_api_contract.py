@@ -177,6 +177,9 @@ _MACHINE_SUMMARY_KEYS = {
     "last_scan_new": (int, type(None)),
     "last_scan_resolved": (int, type(None)),
     "last_scan_baseline": bool,
+    # Kernel packages not checked against advisories (Req 12.5). Null when no
+    # inventory was collected; a number, including 0, when one was.
+    "kernel_packages_unchecked": (int, type(None)),
 }
 _SEVERITY_COUNT_KEYS = {"critical", "unscored", "high", "medium", "low"}
 _FINDING_KEYS = {
@@ -203,6 +206,9 @@ _FINDING_KEYS = {
     "remediation_note": (str, type(None)),
     "dependencies": list,
     "depended_on_by": list,
+    # Every installed binary of the finding's source package; a fix upgrades
+    # them all (Req 2.8).
+    "affected_packages": list,
     # Nullable like the enrichment fields below, and for the same reason: the
     # fleet-wide list does not build the dependency graph, so it omits this
     # rather than reporting an impact nobody measured (Req 10.10).

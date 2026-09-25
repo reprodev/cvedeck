@@ -622,6 +622,10 @@ very large one.
 
 ## Known limitations
 
+- **Kernel packages are not matched against advisories yet.** Every other
+  package is looked up under its source package and its own name (since
+  0.8.15); the kernel is not, and each host's page says how many kernel packages
+  went unchecked. Its findings are not "none" -- they were not asked for.
 - **NVD matching is opt-in and off by default.** Package-level matching via
   OSV.dev is fully operational and always on. OS-level matching against NIST NVD
   is implemented but gated behind `CVEDECK_NVD_ENABLED` because NVD's rate

@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from app.models import Package
-from app.package_identifier import parse_package_name
+from app.package_identifier import is_kernel_package, parse_package_name
 from app.enums import SEVERITY_RANK, Severity
 from app.scanner.cvss import (
     cvss_v3_base_score,
@@ -181,6 +181,57 @@ def _resolve_cve_id(vuln: dict[str, Any]) -> str:
         return match.group(0)
 
     return vid
+
+
+def _query_package(pkg: Package) -> Package:
+    """The package to ask OSV about: the binary's source, at the source's version.
+
+    The binary itself when no source was reported (an inventory from before
+    0.8.15), and for the kernel, which is not yet looked up by source (Req 12.5).
+    """
+    if not pkg.source_name or is_kernel_package(pkg.name, pkg.source_name):
+        return pkg
+    return pkg.model_copy(
+        update={"name": pkg.source_name, "version": pkg.source_version or pkg.version}
+    )
+
+
+def _representative(source: str, binaries: list[Package]) -> Package:
+    """The binary a source's findings are reported against.
+
+    The one named like the source, when installed -- so a finding that was
+    already matched through it (the ``openssl`` CLI) keeps its identity, its
+    first-seen date and its history. Otherwise the first by name, so the choice
+    is the same on every scan.
+    """
+    for binary in binaries:
+        if binary.name == source:
+            return binary
+    return min(binaries, key=lambda b: b.name)
+
+
+def _name_at_version(pkg: Package) -> str:
+    return f"{pkg.name}@{pkg.version}"
+
+
+def _reattribute(advisory: RawAdvisory, remap: dict[str, str]) -> RawAdvisory:
+    """Move an advisory from the source it was asked under to its binary.
+
+    Rewrites only the ``name@version`` after the ecosystem -- which is itself
+    ``Debian:12`` or ``Ubuntu:22.04:LTS``, colons and all -- and keeps the fix
+    note after it untouched.
+    """
+    identifier = advisory.package_identifier
+    if not identifier:
+        return advisory
+    note = identifier.find(" (")
+    base, suffix = (identifier, "") if note == -1 else (identifier[:note], identifier[note:])
+    at = base.rfind("@")
+    colon = base.rfind(":", 0, at) if at != -1 else -1
+    prefix, tail = base[: colon + 1], base[colon + 1 :]
+    if tail not in remap:
+        return advisory
+    return advisory.model_copy(update={"package_identifier": prefix + remap[tail] + suffix})
 
 
 def _fixed_from_ranges(ranges: list[Any]) -> str | None:
@@ -420,7 +471,55 @@ class OsvHttpClient:
         self._advisory_cache: dict[str, list[RawAdvisory]] = {}
 
     def match_packages(self, packages: list[Package]) -> list[RawAdvisory]:
-        """Query OSV for vulnerabilities affecting the supplied packages."""
+        """Query OSV for vulnerabilities affecting the supplied packages.
+
+        Asked under the *source* package as well as the binary, because the
+        distributions disagree about which one they publish under (Req 2.8).
+        Debian, Ubuntu, Alpine, Rocky and SUSE key their advisories by source:
+        Debian 12's ``glibc`` has dozens and the installed ``libc6`` none.
+        AlmaLinux keys some by binary: its ``vim-minimal`` advisories are not
+        found by asking about ``vim``. Asking under both means neither kind is
+        missed, and the extra names ride in the same batch requests.
+
+        Every answer is then reported against one representative binary per
+        source and de-duplicated, so a CVE in glibc is one finding however many
+        binaries glibc ships as, and however many of the names asked found it
+        (Property 17).
+
+        Everything below this method works on the query packages as named, so
+        an advisory's ``affected`` entries are compared with the name OSV was
+        actually asked about; comparing them with a different name would
+        silently discard every entry, and with them the release filter and the
+        fix.
+        """
+        queries: dict[tuple[str, str, str], Package] = {}
+        remap: dict[str, str] = {}
+        groups: dict[tuple[str, str, str], tuple[Package, list[Package]]] = {}
+        for pkg in packages:
+            if not (pkg.name and pkg.version):
+                continue
+            source = _query_package(pkg)
+            key = (source.ecosystem or "", source.name, source.version)
+            groups.setdefault(key, (source, []))[1].append(pkg)
+
+        for source, binaries in groups.values():
+            reported = _name_at_version(_representative(source.name, binaries))
+            for query in [source, *binaries]:
+                key = (query.ecosystem or "", query.name, query.version)
+                if key in queries:
+                    continue
+                queries[key] = query
+                asked = _name_at_version(query)
+                if asked != reported:
+                    remap.setdefault(asked, reported)
+
+        advisories = self._match_query_packages(list(queries.values()))
+        if not remap:
+            return advisories
+        return self._deduplicate_findings([_reattribute(a, remap) for a in advisories])
+
+    def _match_query_packages(self, packages: list[Package]) -> list[RawAdvisory]:
+        """Query OSV for the given packages, exactly as named."""
         valid_packages = [p for p in packages if p.name and p.version]
         if not valid_packages:
             return []

@@ -46,6 +46,14 @@ class Package(BaseModel):
     version: str
     ecosystem: str | None = None
     dependencies: list[str] = Field(default_factory=list)
+    #: The source package this binary was built from, and its version (Req
+    #: 1.12). Distribution advisories are published per source -- Debian's
+    #: ``glibc``, not ``libc6`` -- so this is the name advisories are looked up
+    #: under. ``None`` when the host did not report one, which is read as "the
+    #: binary is its own source", exactly how every inventory before 0.8.15
+    #: was matched.
+    source_name: str | None = None
+    source_version: str | None = None
 
 
 class Inventory(BaseModel):

@@ -102,6 +102,11 @@ export interface MachineSummary {
   lastScanResolved: number | null;
   /** Whether the latest successful scan was this host's baseline. */
   lastScanBaseline: boolean;
+  /**
+   * Installed kernel packages not checked against advisories (Req 12.5).
+   * `null` when no inventory was collected -- not zero, and not "no findings".
+   */
+  kernelPackagesUnchecked: number | null;
 }
 
 /** How a finding can be fixed on the host it was found on. */
@@ -147,6 +152,11 @@ export interface CveFinding {
   dependencies?: string[];
   /** List of installed application and library packages that depend on this component (reverse dependencies). */
   dependedOnBy?: string[];
+  /**
+   * Every installed binary built from the same source package, including this
+   * one (Req 2.8). A fix must upgrade them all. Absent from older responses.
+   */
+  affectedPackages?: string[];
   /**
    * How much of the host depends on this package: low, medium or high.
    *

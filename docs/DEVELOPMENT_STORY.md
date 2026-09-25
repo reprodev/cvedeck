@@ -2451,3 +2451,74 @@ Removing the line properly made it fail as it should. And a test for the
 workflow cache first matched the words `cache-from` in the build step's own
 comment explaining that there was no cache. A broken copy only proves something
 if you have checked that it is broken.
+
+## Chapter 25 — The packages nobody asked about (v0.8.15)
+
+0.8.14 closed with a curiosity written into the handover: a live OSV query for
+the Ubuntu kernel returned a 61 MB answer and the client turned it into zero
+advisories -- the same with and without that release's bounds, so not caused by
+them. The honest note said "probably release filtering; unverified". Verifying
+it found the largest under-report in the project's history.
+
+### Asking the right name
+
+CveDeck collected packages the way the package manager lists them: `libssl3`,
+`libc6`, `openssl-libs`. The distributions publish their advisories under the
+*source* package those binaries are built from: `openssl`, `glibc`. Asked about
+the same vulnerable version, OSV had 51 Debian advisories for `openssl` and none
+for `libssl3`; 46 for `glibc` and none for `libc6`. A library was checked only
+if some binary happened to be named like its source -- Debian ships an `openssl`
+command, so OpenSSL was covered by accident. Nothing ships a binary called
+`glibc`, so glibc never was.
+
+That is the failure SECURITY.md puts in scope in so many words: a bug that makes
+a vulnerable host read as clean. It had been there since the first scan. Nobody
+noticed because nothing was *wrong* with any finding it produced -- the
+findings it did not produce left no trace. The tests passed because the fixtures
+used names like `openssl` and `curl`, which are their own sources.
+
+### Measuring changed the design twice
+
+The plan was to ask by source instead of by binary. The first measurement, on
+the package lists of real containers, showed Debian 27 → 104, Ubuntu 8 → 55,
+SUSE 103 → 170 -- and AlmaLinux *losing* sixteen advisories. Fifteen of them
+turned out to be false positives the old code had always reported, of which
+more below. The sixteenth was real: AlmaLinux publishes some advisories under the
+binary, `vim-minimal`, and asking about `vim` finds nothing. So every package is
+asked about under both names, in the same batch requests, and the answers are
+folded into one finding per source.
+
+The fifteen were a second, older bug. The rpm query dropped the epoch: AlmaLinux's
+vim is `2:8.2.2637-26.el9_8.13`, collected as `8.2.2637-26...`, and every fix
+published as `2:...` compared as newer than anything installed. The end-to-end
+scan of a Rocky host found the same thing from the other side: 21 CVEs reported
+by 0.8.14 and not by the new build, every one against a package already past its
+fix. A lost finding is exactly what this release could not afford, so each was
+checked, version by version, before it was called a false positive.
+
+### One CVE, many binaries
+
+Asking by source answers the question once per source; the dashboard has to say
+it once, too. Forty-six glibc CVEs reported against each of libc6, libc-bin and
+locales would be a hundred and thirty-eight rows describing one fact. Each CVE
+is one finding, reported against a representative binary -- the one named like
+the source when there is one, which is also what keeps every existing OpenSSL
+finding's history intact -- and the finding lists every binary of its source.
+That list is what the fix command upgrades: the plan's first draft would have
+offered `apt install --only-upgrade libc-bin` and left libc6 vulnerable.
+
+The end-to-end check ran that command on a Debian 12.0 host. CVE-2023-4911 --
+Looney Tunables, a local root in glibc's loader -- was one of the findings the
+host had always had and had never been told about. The command upgraded both
+binaries and the rescan resolved all twenty glibc findings.
+
+### What was left, and said
+
+The kernel is deferred, on purpose and in public. Its source has thousands of
+advisories per release, OSV pages the answer -- which the client does not follow
+yet -- and which of several installed kernels is running decides which of them
+matter. Shipping that half-built would have been worse than shipping it later.
+What could not wait was the silence: a kernel with no findings reads as a clean
+one, so each host now says how many kernel packages went unchecked. It is the
+enrichment invariant again, in a new place: a question that was not asked must
+not look answered.

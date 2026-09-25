@@ -40,12 +40,16 @@ export interface DistroTooling {
   manager: string;
   /** Display label for the distribution family. */
   label: string;
-  /** Command to upgrade a single package to its fixed version. */
-  updateCmd: (pkg: string) => string;
-  /** Command to remove a package outright, when no fix is available. */
-  purgeCmd: (pkg: string) => string;
-  /** Command to check what updates are pending for a package. */
-  checkUpdateCmd: (pkg: string) => string;
+  /**
+   * Command to upgrade packages to their fixed versions. A list when a finding
+   * covers several binaries of one source (Req 2.8): upgrading libc-bin alone
+   * leaves libc6 vulnerable.
+   */
+  updateCmd: (pkg: Pkgs) => string;
+  /** Command to remove packages outright, when no fix is available. */
+  purgeCmd: (pkg: Pkgs) => string;
+  /** Command to check what updates are pending for packages. */
+  checkUpdateCmd: (pkg: Pkgs) => string;
   /** Whether Ubuntu-specific advice (Ubuntu Pro / ESM) applies. */
   isUbuntu: boolean;
 }
@@ -57,6 +61,18 @@ export interface DistroTooling {
 // ordinary command reads exactly as it always has, and anything else is
 // single-quoted, which a POSIX shell takes literally.
 const SHELL_SAFE = /^[A-Za-z0-9@%+=:,./_-]+$/;
+
+/** One package name, or every binary a finding covers. */
+export type Pkgs = string | readonly string[];
+
+function asList(pkgs: Pkgs): string[] {
+  return typeof pkgs === "string" ? [pkgs] : [...pkgs];
+}
+
+/** Each name as its own quoted shell word, space-separated. */
+function shellWords(pkgs: Pkgs): string {
+  return asList(pkgs).map(shellQuote).join(" ");
+}
 
 // No package manager accepts a name containing a control character, so such a
 // name is not a package -- it is an attempt. Quoted, a newline is still one
@@ -100,39 +116,40 @@ const TOOLING: Record<Exclude<DistroFamily, "unknown">, DistroTooling> = {
     family: "debian",
     manager: "apt",
     label: "Debian / Ubuntu",
-    updateCmd: (p) => `sudo apt update && sudo apt install --only-upgrade ${shellQuote(p)}`,
-    purgeCmd: (p) => `sudo apt remove --purge ${shellQuote(p)}`,
+    updateCmd: (p) => `sudo apt update && sudo apt install --only-upgrade ${shellWords(p)}`,
+    purgeCmd: (p) => `sudo apt remove --purge ${shellWords(p)}`,
     // apt filters the listing by name itself, which leaves no grep pattern to
     // splice a name into.
-    checkUpdateCmd: (p) => `apt list --upgradable ${shellQuote(p)} 2>/dev/null`,
+    checkUpdateCmd: (p) => `apt list --upgradable ${shellWords(p)} 2>/dev/null`,
     isUbuntu: false,
   },
   rhel: {
     family: "rhel",
     manager: "dnf",
     label: "RHEL / Fedora / Rocky / Alma",
-    updateCmd: (p) => `sudo dnf upgrade -y ${shellQuote(p)}`,
-    purgeCmd: (p) => `sudo dnf remove -y ${shellQuote(p)}`,
-    checkUpdateCmd: (p) => `dnf check-update ${shellQuote(p)}`,
+    updateCmd: (p) => `sudo dnf upgrade -y ${shellWords(p)}`,
+    purgeCmd: (p) => `sudo dnf remove -y ${shellWords(p)}`,
+    checkUpdateCmd: (p) => `dnf check-update ${shellWords(p)}`,
     isUbuntu: false,
   },
   suse: {
     family: "suse",
     manager: "zypper",
     label: "openSUSE / SLES",
-    updateCmd: (p) => `sudo zypper update -y ${shellQuote(p)}`,
-    purgeCmd: (p) => `sudo zypper remove -y ${shellQuote(p)}`,
-    // -F: the name is a literal, never a pattern.
-    checkUpdateCmd: (p) => `zypper list-updates | grep -F -- ${shellQuote(` ${p} `)}`,
+    updateCmd: (p) => `sudo zypper update -y ${shellWords(p)}`,
+    purgeCmd: (p) => `sudo zypper remove -y ${shellWords(p)}`,
+    // -F: each name is a literal, never a pattern.
+    checkUpdateCmd: (p) =>
+      `zypper list-updates | grep -F ${asList(p).map((n) => `-e ${shellQuote(` ${n} `)}`).join(" ")}`,
     isUbuntu: false,
   },
   alpine: {
     family: "alpine",
     manager: "apk",
     label: "Alpine",
-    updateCmd: (p) => `sudo apk update && sudo apk upgrade ${shellQuote(p)}`,
-    purgeCmd: (p) => `sudo apk del ${shellQuote(p)}`,
-    checkUpdateCmd: (p) => `apk version ${shellQuote(p)}`,
+    updateCmd: (p) => `sudo apk update && sudo apk upgrade ${shellWords(p)}`,
+    purgeCmd: (p) => `sudo apk del ${shellWords(p)}`,
+    checkUpdateCmd: (p) => `apk version ${shellWords(p)}`,
     isUbuntu: false,
   },
   arch: {
@@ -143,16 +160,17 @@ const TOOLING: Record<Exclude<DistroFamily, "unknown">, DistroTooling> = {
     // explicitly unsupported upstream and routinely break the system, so the
     // correct advice is a full system upgrade.
     updateCmd: () => `sudo pacman -Syu`,
-    purgeCmd: (p) => `sudo pacman -Rns ${shellQuote(p)}`,
-    checkUpdateCmd: (p) => `pacman -Qu ${shellQuote(p)}`,
+    purgeCmd: (p) => `sudo pacman -Rns ${shellWords(p)}`,
+    checkUpdateCmd: (p) => `pacman -Qu ${shellWords(p)}`,
     isUbuntu: false,
   },
   windows: {
     family: "windows",
     manager: "winget",
     label: "Windows",
-    updateCmd: (p) => `winget upgrade --id ${powershellQuote(p)} --accept-source-agreements`,
-    purgeCmd: (p) => `winget uninstall --id ${powershellQuote(p)}`,
+    // winget takes one id; Windows packages have no source grouping anyway.
+    updateCmd: (p) => `winget upgrade --id ${powershellQuote(asList(p)[0] ?? "")} --accept-source-agreements`,
+    purgeCmd: (p) => `winget uninstall --id ${powershellQuote(asList(p)[0] ?? "")}`,
     checkUpdateCmd: () => `Get-HotFix | Sort-Object -Property InstalledOn -Descending`,
     isUbuntu: false,
   },
@@ -164,9 +182,9 @@ const UNKNOWN_TOOLING: DistroTooling = {
   label: "Unknown distribution",
   // Deliberately not a guess. Handing a user a confidently wrong command is
   // worse than telling them we do not know which one applies.
-  updateCmd: (p) => `# Unknown distribution -- upgrade ${commentSafe(shellQuote(p))} with your package manager`,
-  purgeCmd: (p) => `# Unknown distribution -- remove ${commentSafe(shellQuote(p))} with your package manager`,
-  checkUpdateCmd: (p) => `# Unknown distribution -- check updates for ${commentSafe(shellQuote(p))}`,
+  updateCmd: (p) => `# Unknown distribution -- upgrade ${commentSafe(shellWords(p))} with your package manager`,
+  purgeCmd: (p) => `# Unknown distribution -- remove ${commentSafe(shellWords(p))} with your package manager`,
+  checkUpdateCmd: (p) => `# Unknown distribution -- check updates for ${commentSafe(shellWords(p))}`,
   isUbuntu: false,
 };
 
@@ -276,6 +294,27 @@ export function findingPackageName(finding: CveFinding): string | null {
   return finding.packageName ?? parsePackageName(finding.packageIdentifier);
 }
 
+/**
+ * Every installed package a fix for these findings must upgrade (Req 2.8).
+ *
+ * A finding is reported once per source package, against one representative
+ * binary; the server lists every installed binary of that source. Falls back
+ * to the representative alone for a response from before 0.8.15.
+ */
+export function upgradeTargets(findings: readonly CveFinding[]): string[] {
+  const names = new Set<string>();
+  for (const finding of findings) {
+    const affected = finding.affectedPackages ?? [];
+    if (affected.length > 0) {
+      affected.forEach((name) => names.add(name));
+    } else {
+      const name = findingPackageName(finding);
+      if (name) names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
 /** Where a finding's fix is, and which release has it (Req 14.7, 14.8). */
 export interface FixInfo {
   status: FixStatus;
@@ -373,13 +412,8 @@ export function buildBulkFixScript(
   osName: string | undefined,
 ): string {
   const fixable = findings.filter(hasFix);
-  const packages = [
-    ...new Set(
-      fixable
-        .map((finding) => findingPackageName(finding))
-        .filter((name): name is string => Boolean(name)),
-    ),
-  ].sort();
+  // Every binary of every fixable source, not just each representative.
+  const packages = upgradeTargets(fixable);
 
   const tooling = getDistroTooling(platform, osName, fixable[0]?.packageIdentifier);
   const header = [

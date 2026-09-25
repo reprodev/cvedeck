@@ -19,6 +19,7 @@ import {
   fixElsewhereLabel,
   getDistroTooling,
   hasFix as findingHasFix,
+  upgradeTargets,
 } from "../lib/remediation";
 import { severityLabel } from "../lib/labels";
 import {
@@ -67,6 +68,10 @@ export function CveDetailModal({
 
   const cveId = finding.cveId;
   const pkgName = findingPackageName(finding) ?? "OS / Component";
+  // Every installed binary of the finding's source: the fix upgrades them all.
+  const targets = upgradeTargets([finding]);
+  const commandTargets = targets.length > 0 ? targets : pkgName;
+  const alsoInstalled = targets.filter((name) => name !== pkgName);
   const hasFix = findingHasFix(finding);
   const fix = findingFix(finding);
   const elsewhereLabel = fixElsewhereLabel(fix);
@@ -99,7 +104,7 @@ export function CveDetailModal({
             key: "purge-cmd",
             title: "Purge if unused",
             detail: "Remove the package if this host does not need it",
-            command: tooling.purgeCmd(pkgName),
+            command: tooling.purgeCmd(commandTargets),
             buttonClass: "copy-purge-btn",
             buttonLabel: "Copy purge",
             icon: "trash" as IconName,
@@ -123,7 +128,7 @@ export function CveDetailModal({
       key: "dist-cmd",
       title: tooling.isUbuntu ? "OS distribution upgrade" : "Check distro updates",
       detail: "Check for upstream distribution updates",
-      command: tooling.checkUpdateCmd(pkgName),
+      command: tooling.checkUpdateCmd(commandTargets),
       buttonClass: "copy-cmd-btn",
       buttonLabel: "Copy check command",
       icon: "copy" as IconName,
@@ -267,6 +272,15 @@ export function CveDetailModal({
               <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
                 Installed on: <strong>{hostname}</strong> • Distribution: <strong>{tooling.label}</strong>
               </div>
+              {alsoInstalled.length > 0 && (
+                <div
+                  data-testid="also-installed"
+                  style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.25rem" }}
+                >
+                  Also installed from the same source, and upgraded with it:{" "}
+                  <strong>{alsoInstalled.join(", ")}</strong>
+                </div>
+              )}
             </div>
           </div>
 
@@ -348,9 +362,9 @@ export function CveDetailModal({
                   <button
                     type="button"
                     className="copy-fix-btn"
-                    onClick={() => copyAction(tooling.updateCmd(pkgName), "fix-cmd")}
+                    onClick={() => copyAction(tooling.updateCmd(commandTargets), "fix-cmd")}
                   >
-                    {copiedAction === "fix-cmd" ? <><Icon name="check" /> Command Copied!</> : <><Icon name="copy" /> Copy: {tooling.updateCmd(pkgName)}</>}
+                    {copiedAction === "fix-cmd" ? <><Icon name="check" /> Command Copied!</> : <><Icon name="copy" /> Copy: {tooling.updateCmd(commandTargets)}</>}
                   </button>
                 </div>
               ) : (
