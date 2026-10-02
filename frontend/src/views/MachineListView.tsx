@@ -19,7 +19,7 @@ import {
   statusTone,
   isHostKeyStatus,
 } from "../lib/labels";
-import { enrichmentWarning, feedLabel, formatFeedAge } from "../lib/intel";
+import { enrichmentWarning, feedLabel, formatFeedAge, isIntelFeed } from "../lib/intel";
 import { scanDelta } from "../lib/scanDelta";
 import { sortIndicator, useSort } from "../lib/useSort";
 import { EmptyState } from "../components/EmptyState";
@@ -188,11 +188,14 @@ export function MachineListView({
     () => machines.reduce((total, m) => total + m.kevCount, 0),
     [machines],
   );
+  // Only KEV and EPSS decide whether exploitation can be shown; a kernel
+  // advisory feed says nothing about it (Req 12.11).
+  const intelFeeds = useMemo(() => feeds.filter(isIntelFeed), [feeds]);
   const intelWarning = useMemo(
-    () => enrichmentWarning(feeds, Boolean(onRefreshFeeds)),
-    [feeds, onRefreshFeeds],
+    () => enrichmentWarning(intelFeeds, Boolean(onRefreshFeeds)),
+    [intelFeeds, onRefreshFeeds],
   );
-  const intelUsable = useMemo(() => feeds.some((feed) => feed.usable), [feeds]);
+  const intelUsable = useMemo(() => intelFeeds.some((feed) => feed.usable), [intelFeeds]);
 
   // A host needs attention when its findings cannot be trusted as current:
   // never scanned, last scan failed, or the data is over a week old. Grouped

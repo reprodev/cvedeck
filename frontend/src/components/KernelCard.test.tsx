@@ -26,6 +26,8 @@ const UPGRADED_NOT_REBOOTED: KernelInfo = {
     { package: OLD, version: "6.1.180-1", running: true, newest: false, noFix: null, fixedElsewhere: null },
   ],
   upgradePackages: ["linux-image-amd64"],
+  uncheckedReason: null,
+  runningOnly: false,
 };
 
 function onKernel(cve: string, pkg: string, running: boolean | null, extra: Partial<CveFinding> = {}) {
@@ -104,6 +106,24 @@ describe("KernelCard", () => {
     const note = await screen.findByTestId("kernel-unchecked");
     expect(note).toHaveTextContent("This host's kernel was not checked against advisories (2 kernels installed).");
     expect(screen.queryByTestId("kernel-live")).toBeNull();
+  });
+
+  it.each([
+    ["ubuntu_feed_off", "The Ubuntu kernel feed is switched off on this server"],
+    ["ubuntu_feed_unavailable", "has not been fetched yet, or is out of date"],
+    ["ubuntu_release_end_of_life", "newer CVEs would be missing, not fixed"],
+    ["ubuntu_not_yet_scanned", "scan this host again to check its kernel"],
+    ["something_new", "The kernel was not checked against advisories."],
+  ])("says why an Ubuntu kernel was not checked: %s", async (reason, text) => {
+    renderCard({ ...UPGRADED_NOT_REBOOTED, checked: false, uncheckedReason: reason, runningOnly: true }, []);
+    expect(await screen.findByTestId("kernel-unchecked-reason")).toHaveTextContent(text);
+  });
+
+  it("says that on Ubuntu only the running kernel is checked", async () => {
+    renderCard({ ...UPGRADED_NOT_REBOOTED, runningOnly: true }, []);
+    expect(await screen.findByTestId("kernel-running-only")).toHaveTextContent(
+      "Only the running kernel is checked; kernels installed but not running are not assessed.",
+    );
   });
 
   it("says nothing about the running kernel in a container but that it was not checked", async () => {

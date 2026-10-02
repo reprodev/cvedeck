@@ -39,7 +39,7 @@ import hashlib
 import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from ..data.repository import FindingInput, Repository
 from ..data.schema import EpssScore, KevEntry
@@ -50,6 +50,12 @@ from ..scanner.kev_client import KevRecord
 _LOGGER = logging.getLogger(__name__)
 
 KEV_FEED = "kev"
+#: One feed row per Ubuntu release: ``ubuntu-kernel:jammy`` (Req 12.11).
+UBUNTU_KERNEL_FEED_PREFIX = "ubuntu-kernel:"
+
+
+def ubuntu_kernel_feed_name(codename: str) -> str:
+    return f"{UBUNTU_KERNEL_FEED_PREFIX}{codename}"
 EPSS_FEED = "epss"
 
 # Exceptions that mean "this code is broken", not "this feed is down". Mirrors
@@ -157,10 +163,12 @@ class FeedRefreshService:
         *,
         kev_source: _KevSource | None = None,
         epss_source: _EpssSource | None = None,
+        ubuntu_kernel_source: Any = None,
     ) -> None:
         self._repository = repository
         self._kev_source = kev_source
         self._epss_source = epss_source
+        self._ubuntu_kernel_source = ubuntu_kernel_source
 
     def refresh_all(self) -> list[FeedRefreshOutcome]:
         """Refresh every configured feed, returning one outcome per feed."""
@@ -169,7 +177,55 @@ class FeedRefreshService:
             outcomes.append(self.refresh_kev())
         if self._epss_source is not None:
             outcomes.append(self.refresh_epss())
+        if self._ubuntu_kernel_source is not None:
+            outcomes.extend(self.refresh_ubuntu_kernels())
         return outcomes
+
+    def refresh_ubuntu_kernels(self) -> list[FeedRefreshOutcome]:
+        """Refresh Canonical's kernel feed for each Ubuntu release the fleet runs (Req 12.11).
+
+        Each release on its own, like KEV and EPSS: one release's outage must
+        not cost another its data. A fleet with no Ubuntu host fetches nothing.
+        """
+        from ..scanner.ubuntu_kernel_feed import codename_for
+
+        codenames = sorted(
+            {c for c in map(codename_for, self._repository.fleet_ubuntu_ecosystems()) if c}
+        )
+        return [self.refresh_ubuntu_kernel(codename) for codename in codenames]
+
+    def refresh_ubuntu_kernel(self, codename: str) -> FeedRefreshOutcome:
+        """Download one release's kernel feed and replace the stored copy.
+
+        The server's ETag is kept as the digest: an unchanged file is neither
+        downloaded nor parsed again. Any failure keeps the previous table.
+        """
+        from ..scanner.ubuntu_kernel_feed import encode_flavours
+
+        feed = ubuntu_kernel_feed_name(codename)
+        row = self._repository.get_feed_refresh(feed)
+        cached = self._repository.count_ubuntu_kernel_entries(codename)
+        # Ask "has it changed?" only when there is a table to keep.
+        etag = row.payload_digest if row is not None and cached > 0 else None
+        try:
+            result = self._ubuntu_kernel_source.fetch(codename, etag=etag)
+        except _PROGRAMMING_ERRORS:
+            _LOGGER.exception("%s refresh failed due to a defect, not an outage", feed)
+            raise
+        except Exception as exc:
+            return self._record_failure(feed, exc)
+
+        if result.table is None:
+            self._repository.record_feed_refresh(
+                feed, status=FeedStatus.OK, record_count=cached, payload_digest=etag
+            )
+            return FeedRefreshOutcome(feed, FeedStatus.OK, record_count=cached, unchanged=True)
+
+        count = self._repository.replace_ubuntu_kernel_feed(codename, encode_flavours(result.table))
+        self._repository.record_feed_refresh(
+            feed, status=FeedStatus.OK, record_count=count, payload_digest=result.etag or ""
+        )
+        return FeedRefreshOutcome(feed, FeedStatus.OK, record_count=count)
 
     def refresh_kev(self) -> FeedRefreshOutcome:
         """Download the KEV catalogue and replace the cached copy."""
@@ -329,6 +385,8 @@ class FeedRefreshService:
             return self._repository.count_kev_entries()
         if feed == EPSS_FEED:
             return self._repository.count_epss_scores()
+        if feed.startswith(UBUNTU_KERNEL_FEED_PREFIX):
+            return self._repository.count_ubuntu_kernel_entries(feed[len(UBUNTU_KERNEL_FEED_PREFIX):])
         raise ValueError(f"unknown feed: {feed}")
 
     def _record_failure(self, feed: str, exc: Exception) -> FeedRefreshOutcome:
@@ -525,7 +583,18 @@ class FindingEnricher:
         so the dashboard can say "KEV has never been fetched" rather than
         omitting the row and implying the signal simply does not exist.
         """
-        return [self.feed_health(KEV_FEED), self.feed_health(EPSS_FEED)]
+        from ..config import ubuntu_kernel_feed_enabled
+        from ..scanner.ubuntu_kernel_feed import codename_for
+
+        health = [self.feed_health(KEV_FEED), self.feed_health(EPSS_FEED)]
+        # One row per Ubuntu release the fleet runs, including one never
+        # fetched, for the same reason as above (Req 12.11).
+        if ubuntu_kernel_feed_enabled():
+            codenames = sorted(
+                {c for c in map(codename_for, self._repository.fleet_ubuntu_ecosystems()) if c}
+            )
+            health.extend(self.feed_health(ubuntu_kernel_feed_name(c)) for c in codenames)
+        return health
 
     def _is_stale(self, last_refreshed_at: datetime | None) -> bool:
         """Whether a cache refreshed at ``last_refreshed_at`` is too old."""
@@ -549,15 +618,28 @@ def build_feed_refresh_service(repository: Repository) -> FeedRefreshService:
     been a third, and a fourth caller that forgot one source would silently
     refresh only half the intel (Req 10.14).
     """
-    from ..config import epss_feed_url, feed_timeout, kev_feed_url
+    from ..config import (
+        epss_feed_url,
+        feed_timeout,
+        kev_feed_url,
+        ubuntu_kernel_feed_enabled,
+        ubuntu_kernel_feed_url,
+    )
     from ..scanner.epss_client import EpssHttpClient
     from ..scanner.kev_client import KevHttpClient
+    from ..scanner.ubuntu_kernel_feed import UbuntuKernelFeedClient
 
     timeout = feed_timeout()
     return FeedRefreshService(
         repository,
         kev_source=KevHttpClient(kev_feed_url(), timeout=timeout),
         epss_source=EpssHttpClient(epss_feed_url(), timeout=timeout),
+        # Not built at all when switched off: nothing can fetch it (Req 12.11).
+        ubuntu_kernel_source=(
+            UbuntuKernelFeedClient(ubuntu_kernel_feed_url(), timeout=timeout)
+            if ubuntu_kernel_feed_enabled()
+            else None
+        ),
     )
 
 

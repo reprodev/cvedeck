@@ -55,8 +55,9 @@ image, the deployment scripts under `deploy/`, and anything that could:
   spreadsheet that evaluates formulas, and much of what CveDeck exports came off
   a scanned host rather than from the operator.
 - **make the product contact a third party.** The only outbound traffic
-  CveDeck intends is the intel feeds (OSV, CISA KEV, FIRST EPSS, and NVD if you
-  enable it) and the hosts you scan. It ships no telemetry, and the dashboard
+  CveDeck intends is the intel feeds (OSV, CISA KEV, FIRST EPSS, Canonical's
+  Ubuntu kernel feed when the fleet runs Ubuntu, and NVD if you enable it) and
+  the hosts you scan. It ships no telemetry, and the dashboard
   loads nothing from a CDN. Anything else reaching out -- from the server or
   from a user's browser -- is a bug.
 - **cause the scanner to under-report vulnerabilities.** A bug that makes a
@@ -124,14 +125,18 @@ Windows matching, and until then `CVEDECK_WINRM_SCHEME` and
 `https` and `5986` outside a lab: on the default `http` transport the NTLM
 exchange crosses the network unencrypted.
 
-**Ubuntu's kernel is not checked.** Since 0.9.0 the kernel is matched like any
-other package on Debian, RHEL, Rocky, AlmaLinux, SUSE, openSUSE and Alpine.
-Ubuntu's is not: each of its kernel advisories lists every Ubuntu kernel
-flavour, and the answer for one 22.04 kernel was still arriving at 3.5 GB. Nor
-is the kernel of a host matched against a tracker it was not built from (Arch,
-Fedora, Oracle Linux, Amazon Linux). Those hosts' pages say their kernel was not
-checked. A kernel with no findings there is not a clean kernel -- keep it
-updated through your distribution.
+**The Ubuntu kernel feed names your Ubuntu releases to Canonical.** Since
+0.10.0 an Ubuntu host's running kernel is checked against Canonical's OVAL CVE
+feed, downloaded once a day from `security-metadata.canonical.com` for each
+Ubuntu release the fleet runs. Nothing about a host is sent, but the file asked
+for is per release (`com.ubuntu.jammy.cve.oval.xml.bz2`), so Canonical can see
+that this address runs 22.04. `CVEDECK_UBUNTU_KERNEL_FEED=off` stops it; Ubuntu
+kernels then say they were not checked. Canonical states the feed is intended
+for third-party scanning tools; each installation downloads its own copy and
+none is redistributed. Only the running kernel is checked on Ubuntu, and hosts
+matched against a borrowed tracker (Arch, Fedora, Oracle Linux, Amazon Linux)
+still have their kernel unchecked. A kernel with no findings there is not a
+clean kernel.
 
 **Credentials are held in memory during a scan.** They arrive in the request
 body, are wrapped in `SecretStr` so they are not logged or serialized, and are

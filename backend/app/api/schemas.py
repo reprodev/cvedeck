@@ -257,6 +257,12 @@ class KernelOut(BaseModel):
     #: What to upgrade to get a newer kernel; on Debian and Ubuntu the
     #: metapackage, since a fixed kernel arrives under a new package name.
     upgrade_packages: list[str]
+    #: Why the kernel was not checked, when it was not: ``not_supported`` (a
+    #: distribution whose kernel is not looked up), or one of the
+    #: ``ubuntu_*`` reasons in app.services.ubuntu_kernel. ``None`` when checked.
+    unchecked_reason: str | None = None
+    #: True on Ubuntu, where only the running kernel is checked (Req 12.11).
+    running_only: bool = False
 
 
 class ScanRunOut(BaseModel):

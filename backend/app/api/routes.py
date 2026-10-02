@@ -516,7 +516,36 @@ def get_machine_kernel(
             for k in view.installed
         ],
         upgrade_packages=view.upgrade_packages,
+        unchecked_reason=None if view.checked or not view.installed else _unchecked_reason(view, inventory, repo),
+        running_only=view.running_only,
     )
+
+
+def _unchecked_reason(view: KernelView, inventory, repo: Repository) -> str:
+    """Why a host's kernel was not checked (Req 12.5, 12.11).
+
+    For Ubuntu, the scan's own check is run again, locally: whatever stops it
+    now is the reason, and if nothing does, the host simply has not been
+    scanned since the feed became available.
+    """
+    if not view.running_only:
+        return "not_supported"
+    from ..config import feed_max_age_hours, ubuntu_kernel_feed_enabled
+    from ..services.enrichment import FindingEnricher, ubuntu_kernel_feed_name
+    from ..services.ubuntu_kernel import NOT_YET_SCANNED, check_ubuntu_kernel
+
+    health = FindingEnricher(repo, max_age_hours=feed_max_age_hours())
+
+    def usable(codename: str) -> bool:
+        state = health.feed_health(ubuntu_kernel_feed_name(codename))
+        return state.usable and not state.stale and repo.count_ubuntu_kernel_entries(codename) > 0
+
+    check = check_ubuntu_kernel(
+        inventory, repo, enabled=ubuntu_kernel_feed_enabled(), feed_usable=usable
+    )
+    if check is None or check.reason is None:
+        return NOT_YET_SCANNED
+    return check.reason
 
 
 @router.get("/cves", response_model=list[CveFindingOut])

@@ -2597,3 +2597,51 @@ The lesson is the one chapter 25 ended on, turned round. A question not asked
 must not look answered; but an answer nobody can act on, repeated two thousand
 times, hides the ones they can. Saying everything is not the same as saying it
 well.
+
+## Chapter 27 — Asking the one who knows (v0.10.0)
+
+0.9.0 left one kernel unchecked and said why: OSV's answer for an Ubuntu kernel
+ran past 3.5 GB. This release checks it, by asking Canonical instead.
+
+### The question before the code
+
+Canonical publishes its tracker as OVAL, one file per release, every day. Using
+it meant a new outbound fetch, and this project does not add those lightly, so
+the work began as research, and the research began with the risks. Most were
+answered. The licence was not: the data says only "Copyright Canonical", the
+OVAL page says it is for third-party scanning tools, and the general site terms
+say "non-commercial". The owner of the project weighed that, with the fetch
+naming the fleet's Ubuntu releases to Canonical, and chose to build it, on by
+default, with an off switch. The decision was theirs because the trade-off was.
+
+### Three times the data was right and the obvious reading was not
+
+The first count of unfixed kernel CVEs was 12,436, and it was wrong. Canonical
+identifies a kernel flavour by a pattern on `uname -r`, and on 22.04 the
+generic kernel and the RISC-V kernel share one, so every 22.04 host matched
+both. CveDeck already knew better: since 0.8.15 it records which source package
+each binary came from, and the running image's source names the flavour
+exactly. The RISC-V kernel's CVEs, and its missing fixes, stay with RISC-V.
+
+The second was in OVAL's own arithmetic. It compares the version fragment in
+`uname -r` -- `5.15.0-101` -- with the fixed package version, `5.15.0-101.111`.
+The first sorts before the second, so a host running exactly the fixed kernel
+is reported vulnerable. The running image's package version is the thing the
+fix is stated in, so that is what is compared, by an implementation of dpkg's
+ordering checked pair by pair against dpkg itself.
+
+The third was quieter. The fleet view decided whether to show exploitation by
+asking whether any feed was usable. With a kernel feed in the list, a fresh
+Ubuntu feed beside a KEV catalogue that had never loaded would have answered
+"yes", and printed zero exploited as a fact. The decision is now taken on the
+two feeds that carry exploitation, and a test fails without it.
+
+### What it says when it cannot
+
+An Ubuntu kernel can go unchecked for eight reasons, from "the feed is off" to
+"this release is out of support, so its frozen feed would be missing CVEs, not
+fixing them". Each has a sentence on the card. Run end to end against the real
+feed, the card said "not fetched yet", then "scan again", then showed the
+kernel: 6,451 findings for an old 22.04 kernel, fourteen of them known
+exploited, and 4,253 more counted -- the research's numbers, to the one CVE
+that was listed only because it is being exploited.

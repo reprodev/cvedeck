@@ -103,8 +103,8 @@ Everything is manual for now: no scheduled scans, and no automated remediation.
   from; an unrecognised one queries every canonical ecosystem rather than
   guessing. The kernel is matched too, and each installed kernel is told apart as
   running or not: a host that installed the fixed kernel and never rebooted is
-  told to reboot, not to upgrade again (Ubuntu's kernel is the exception, and
-  says so).
+  told to reboot, not to upgrade again. Ubuntu's kernel is checked against
+  Canonical's own feed.
 
 - **Tells you what you can actually fix.** Findings are split into those with a
   vendor patch available in the host's repositories, those awaiting an upstream

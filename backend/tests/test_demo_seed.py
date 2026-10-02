@@ -488,7 +488,14 @@ def test_the_demo_shows_each_thing_the_kernel_card_can_say(session):
     by_host = {m.hostname: m.id for m in session.query(TargetMachine).all()}
 
     def view(host):
-        return kernel_view(repo.get_latest_inventory_for_machine(by_host[host]))
+        # As the API builds it: with the counts the scan recorded.
+        from app.services.kernel import decode_unfixed
+
+        machine = by_host[host]
+        return kernel_view(
+            repo.get_latest_inventory_for_machine(machine),
+            decode_unfixed(repo.latest_kernel_unfixed(machine)),
+        )
 
     def running(host, cve):
         kernel = view(host)
@@ -518,12 +525,18 @@ def test_the_demo_shows_each_thing_the_kernel_card_can_say(session):
         "Rocky Linux:9:kernel-core@5.14.0-362.8.1.el9_3": True
     }
 
+    # Ubuntu: checked against the demo's slice of Canonical's feed (Req 12.11).
     web = view("web-01.lan")
-    assert web.installed and not web.checked, "an Ubuntu kernel must read as not checked"
-    assert not session.query(CveFinding).filter(
-        CveFinding.machine_id == by_host["web-01.lan"],
-        CveFinding.package_identifier.like("%linux-image%"),
-    ).count()
+    assert web.checked and web.running_only
+    assert [(k.package, k.running) for k in web.installed] == [("linux-image-5.15.0-91-generic", True)]
+    listed = {
+        f.cve_id: f.package_identifier
+        for f in session.query(CveFinding).filter(
+            CveFinding.machine_id == by_host["web-01.lan"],
+            CveFinding.package_identifier.like("%linux-image%"),
+        )
+    }
+    assert listed["CVE-2024-1086"].endswith("(fixed in 5.15.0-101.111)")
 
 
 def test_the_demo_counts_what_it_does_not_list_and_only_where_assessed(session):
@@ -546,4 +559,5 @@ def test_the_demo_counts_what_it_does_not_list_and_only_where_assessed(session):
     db = installed("db-primary.lan")
     assert db[("linux-image-6.1.0-18-amd64", "6.1.76-1")].total == 653
     assert all(count is not None for count in installed("edge-proxy.lan").values())
-    assert all(count is None for count in installed("web-01.lan").values())
+    web = installed("web-01.lan")
+    assert web[("linux-image-5.15.0-91-generic", "5.15.0-91.101")].total == 1840

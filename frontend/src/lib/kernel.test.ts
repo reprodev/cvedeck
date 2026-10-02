@@ -27,6 +27,8 @@ const KERNEL: KernelInfo = {
     { package: OLD, version: "6.1.180-1", running: true, newest: false, noFix: null, fixedElsewhere: null },
   ],
   upgradePackages: ["linux-image-amd64"],
+  uncheckedReason: null,
+  runningOnly: false,
 };
 
 function onKernel(cve: string, pkg: string, running: boolean | null, extra: Partial<CveFinding> = {}) {
@@ -177,6 +179,8 @@ describe("kernelPlan on an RPM host", () => {
         { package: "kernel-core", version: "5.14.0-284.11.1.el9_2", running: true, newest: false, noFix: null, fixedElsewhere: null },
       ],
       upgradePackages: ["kernel-core"],
+      uncheckedReason: null,
+      runningOnly: false,
     };
     const on = (cve: string, version: string, running: boolean) =>
       makeFinding({
@@ -240,5 +244,20 @@ describe("ranking an unscored kernel finding (Req 12.10)", () => {
       "CVE-LOW",
       "CVE-KU",
     ]);
+  });
+});
+
+describe("the Ubuntu kernel feed is not threat intelligence (Req 12.11)", () => {
+  it("is labelled by release and never counts as usable intel", async () => {
+    const { feedLabel, isIntelFeed, enrichmentWarning } = await import("./intel");
+    const feed = (feedName: string, usable: boolean) => ({
+      feedName, status: "ok", lastRefreshedAt: usable ? "2026-10-03T00:00:00Z" : null,
+      lastAttemptedAt: null, recordCount: usable ? 1 : 0, errorDetail: null, stale: !usable, usable,
+    });
+    expect(feedLabel("ubuntu-kernel:jammy")).toBe("Ubuntu 22.04 kernel");
+    const feeds = [feed("kev", false), feed("epss", false), feed("ubuntu-kernel:jammy", true)];
+    // A healthy kernel feed must not make never-loaded intel look loaded.
+    expect(feeds.filter(isIntelFeed).some((f) => f.usable)).toBe(false);
+    expect(enrichmentWarning(feeds.filter(isIntelFeed) as never)).toContain("never been loaded");
   });
 });

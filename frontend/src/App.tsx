@@ -8,6 +8,7 @@
 //   3.5 / 4.4 - drill-down shows CVE id, severity, CVSS score, remediation
 //   4.1 / 4.3 - add or update a remediation record for a CVE
 
+import { feedLabel } from "./lib/intel";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CveScannerApiClient } from "./api/client";
 import type {
@@ -304,7 +305,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
       if (!outcome.ok) {
         const failed = outcome.results
           .filter((result) => result.status !== "ok")
-          .map((result) => `${result.feedName}: ${result.errorDetail ?? result.status}`)
+          .map((result) => `${feedLabel(result.feedName)}: ${result.errorDetail ?? result.status}`)
           .join("; ");
         setError(`Some intel feeds could not be refreshed (${failed}).`);
       } else {

@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Boolean
 from sqlalchemy import Enum as SqlEnum
-from sqlalchemy import Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Float, ForeignKey, Integer, LargeBinary, String, UniqueConstraint
 from sqlalchemy import false as sa_false
 from sqlalchemy import text as sa_text
 from sqlalchemy import true as sa_true
@@ -339,6 +339,27 @@ class ScanFindingChange(Base):
     )
 
     scan_run: Mapped[ScanRun] = relationship(back_populates="changes")
+
+
+class UbuntuKernelFeed(Base):
+    """One kernel flavour's advisories from one Ubuntu release's OVAL feed (Req 12.11).
+
+    Stored compressed, one row per (release, flavour), because a scan needs one
+    flavour of one release and 22.04's feed alone holds 837,049 entries over 60
+    flavours: as rows that is a large table rewritten daily; as 60 blobs it is
+    2.8 MB, and a scan decompresses the ~10,000 entries it uses.
+
+    ``payload`` is zlib-compressed JSON: ``[[cve_id, severity, fixed_or_null], ...]``.
+    Like the KEV cache, a public dataset each instance fetches for itself, so
+    no ``sync_status``.
+    """
+
+    __tablename__ = "ubuntu_kernel_feeds"
+
+    codename: Mapped[str] = mapped_column(String, primary_key=True)
+    flavour: Mapped[str] = mapped_column(String, primary_key=True)
+    entries: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
 class KevEntry(Base):

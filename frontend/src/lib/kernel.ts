@@ -118,6 +118,37 @@ export function kernelUpgradeCommand(
   return tooling.updateCmd(kernel.upgradePackages);
 }
 
+/**
+ * Why a kernel was not checked, as the card says it (Req 12.5, 12.11).
+ *
+ * Every reason the server gives has words here; one it does not know falls
+ * back to a plain "not checked", never to silence.
+ */
+export function uncheckedReasonText(reason: string | null): string {
+  switch (reason) {
+    case "ubuntu_feed_off":
+      return "The Ubuntu kernel feed is switched off on this server (CVEDECK_UBUNTU_KERNEL_FEED).";
+    case "ubuntu_feed_unavailable":
+      return "Canonical's kernel feed for this Ubuntu release has not been fetched yet, or is out of date. It refreshes with the other intel feeds.";
+    case "ubuntu_release_unknown":
+      return "CveDeck does not know this Ubuntu release, so it has no kernel feed to check it against.";
+    case "ubuntu_release_end_of_life":
+      return "This Ubuntu release is out of support. Canonical's feed for it no longer changes, so newer CVEs would be missing, not fixed.";
+    case "ubuntu_running_kernel_unknown":
+      return "This host did not report which kernel it is running, and on Ubuntu only the running kernel can be checked.";
+    case "ubuntu_running_kernel_not_installed":
+      return "The running kernel is not from an installed package (a container, or a kernel built by hand), and on Ubuntu only the running kernel can be checked.";
+    case "ubuntu_kernel_flavour_unknown":
+      return "Canonical's feed has no entries for this kernel's flavour.";
+    case "ubuntu_not_yet_scanned":
+      return "The Ubuntu kernel feed is now available; scan this host again to check its kernel.";
+    case "not_supported":
+      return "CveDeck does not look up the kernel on this distribution.";
+    default:
+      return "The kernel was not checked against advisories.";
+  }
+}
+
 export interface UnfixedSummary {
   total: number;
   noFix: number;

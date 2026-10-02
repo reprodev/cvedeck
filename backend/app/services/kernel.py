@@ -61,6 +61,8 @@ class KernelView:
     running_installed: bool | None
     reboot_required: bool | None
     installed: list[InstalledKernel] = field(default_factory=list)
+    #: True on Ubuntu, where only the running kernel is checked (Req 12.11).
+    running_only: bool = False
     #: What to upgrade to get a newer kernel. On Debian and Ubuntu that is the
     #: metapackage: a fixed kernel arrives as a new package
     #: (``linux-image-6.1.0-54-amd64``), so upgrading the old one does nothing.
@@ -100,6 +102,21 @@ def _version_key(version: str) -> tuple:
     )
 
 
+def _unfixed_for(p, unfixed: dict[str, UnfixedCount] | None) -> UnfixedCount | None:
+    """A kernel's counted CVEs; ``None`` when that kernel was not assessed.
+
+    A kernel matched through OSV with no entry had nothing counted -- scans
+    before 0.10.0 recorded only kernels with something to count. An Ubuntu
+    kernel with no entry was not checked: only the running one is.
+    """
+    if unfixed is None:
+        return None
+    found = unfixed.get(f"{p.name}@{p.version}")
+    if found is None and kernel_is_matched(p.ecosystem):
+        return UnfixedCount()
+    return found
+
+
 def kernel_view(
     inventory: Inventory, unfixed: dict[str, UnfixedCount] | None = None
 ) -> KernelView:
@@ -119,9 +136,7 @@ def kernel_view(
             version=p.version,
             running=None if release is None else kernel_image_release(p.name, p.version, release),
             newest=_version_key(p.version) == newest_key,
-            unfixed=(
-                None if unfixed is None else unfixed.get(f"{p.name}@{p.version}", UnfixedCount())
-            ),
+            unfixed=_unfixed_for(p, unfixed),
         )
         for p in sorted(images, key=lambda p: (_version_key(p.version), p.name), reverse=True)
     ]
@@ -133,9 +148,17 @@ def kernel_view(
     else:
         upgrade = sorted({p.name for p in images})
 
+    ubuntu = bool(images) and all((p.ecosystem or "").startswith("Ubuntu") for p in images)
+    checked = bool(images) and (
+        all(kernel_is_matched(p.ecosystem) for p in images)
+        # An Ubuntu kernel is checked when a scan checked it against
+        # Canonical's feed, which records it by name (Req 12.11).
+        or (ubuntu and any(k.unfixed is not None for k in installed))
+    )
     return KernelView(
         release=release,
-        checked=bool(images) and all(kernel_is_matched(p.ecosystem) for p in images),
+        checked=checked,
+        running_only=ubuntu,
         running_installed=(
             None if release is None or not installed else any(k.running for k in installed)
         ),

@@ -196,6 +196,26 @@ def epss_feed_url() -> str:
     )
 
 
+def ubuntu_kernel_feed_enabled() -> bool:
+    """Whether to fetch Canonical's OVAL feed for Ubuntu kernels (Req 12.11).
+
+    On unless ``CVEDECK_UBUNTU_KERNEL_FEED`` is ``off`` (or ``0``, ``false``,
+    ``no``). It is fetched only for Ubuntu releases the fleet runs, and the
+    request names the release -- the one thing it tells Canonical. Off, Ubuntu
+    kernels say they were not checked, as they did before 0.10.0.
+    """
+    raw = os.environ.get("CVEDECK_UBUNTU_KERNEL_FEED", "").strip().lower()
+    return raw not in ("off", "0", "false", "no")
+
+
+def ubuntu_kernel_feed_url() -> str:
+    """URL template of Canonical's per-release OVAL CVE feed; ``{codename}`` is filled in."""
+    return os.environ.get(
+        "CVEDECK_UBUNTU_KERNEL_FEED_URL",
+        "https://security-metadata.canonical.com/oval/com.ubuntu.{codename}.cve.oval.xml.bz2",
+    )
+
+
 def nvd_api_url() -> str:
     """Base URL for the NVD 2.0 CVE API."""
     return os.environ.get(

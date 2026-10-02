@@ -214,6 +214,8 @@ interface KernelWire {
     fixed_elsewhere?: Record<string, number> | null;
   }[];
   upgrade_packages: string[];
+  unchecked_reason?: string | null;
+  running_only?: boolean;
 }
 
 /** Wire shape of a per-target scan outcome as serialized by the backend. */
@@ -758,6 +760,8 @@ export class CveScannerApiClient {
         fixedElsewhere: k.fixed_elsewhere ?? null,
       })),
       upgradePackages: wire.upgrade_packages,
+      uncheckedReason: wire.unchecked_reason ?? null,
+      runningOnly: wire.running_only ?? false,
     };
   }
 

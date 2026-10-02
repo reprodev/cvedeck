@@ -8,6 +8,58 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.10.0] - 2026-10-03
+
+**Upgrading: Ubuntu hosts' kernels are checked from this release on.** A new
+feed is fetched, once a day, for each Ubuntu release the fleet runs:
+Canonical's OVAL CVE feed, from `security-metadata.canonical.com`. Nothing
+about a host is sent, but the request names the release.
+`CVEDECK_UBUNTU_KERNEL_FEED=off` turns it off. The first refresh after
+upgrading fetches it; the next scan of each Ubuntu host checks its kernel. The
+migration (`a7c2e9d4b1f6`) adds one table and runs on start-up.
+
+### Added
+
+- **Ubuntu's kernel is checked against Canonical's own feed** (Req 12.11).
+  OSV's answer for an Ubuntu kernel runs to gigabytes, so 0.9.0 left it
+  unchecked. Canonical's per-release feed is 11.9 MB for 22.04; it is
+  streamed (144 MB, 23 s) into one compressed table per kernel flavour, and a
+  scan checks the running kernel against its own flavour locally. Canonical
+  rates every kernel CVE, so they carry a severity. Measured on the real feed
+  for the generic 22.04 kernel: 5.15.0-25 has 10,704 applicable CVEs, 6,450 with
+  a fix, which are listed; the current 5.15.0-198 has 4,254 with no fix, which
+  are counted (Req 12.9).
+- **The machine page says why a kernel was not checked**: feed off, not
+  fetched yet or stale, release unknown or out of support, running kernel
+  unknown or not from a package, flavour not in the feed, or not scanned since
+  the feed arrived. On Ubuntu it also says only the running kernel is checked.
+- Each Ubuntu release's feed appears with the others, as "Ubuntu 22.04 kernel".
+
+### Security
+
+- **Better than reading the feed as written, in two places.** The kernel
+  flavour comes from the running image's package, not from `uname -r`: on 22.04
+  the generic and RISC-V kernels share a `uname` pattern, and every host would
+  otherwise carry the RISC-V kernel's CVEs. And the image's installed package
+  version is compared with each fix, not the fragment of `uname -r`: compared
+  that way, a host running exactly the fixed kernel reads as vulnerable.
+- **A feed that changes shape is refused, not believed.** Only the shapes found
+  in the real 22.04 and 24.04 feeds are accepted; anything else fails the
+  refresh and keeps the previous table, and the kernel reads as not checked.
+- **A healthy kernel feed cannot stand in for exploit data.** Whether the fleet
+  view shows exploitation is decided on the KEV and EPSS feeds alone; counting
+  any usable feed would have shown "0 exploited" with no catalogue behind it.
+
+### Changed
+
+- FastAPI 0.142.1, uvicorn 0.54.0, SQLAlchemy 2.1.1, hypothesis 6.168.3
+  (Dependabot #28), and vitest 5.0.2 (Dependabot #27), each trialled in a
+  scratch copy first.
+- The counted kernel CVEs now name every kernel that was assessed, so a kernel
+  with nothing counted and one that was not assessed read differently.
+
+---
+
 ## [0.9.1] - 2026-10-03
 
 ### Changed

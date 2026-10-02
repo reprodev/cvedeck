@@ -333,6 +333,16 @@ as clean.
     Web_Dashboard SHALL rank it after every scored finding of the host, while
     still ranking known-exploited findings first: a distribution that rates
     no kernel CVE would otherwise place thousands of them above every High.
+11. WHERE a host runs Ubuntu, THE system SHALL check its running kernel against
+    the advisories Canonical publishes for that release, fetched only for
+    releases the fleet runs, unless the operator switches the feed off; SHALL
+    choose the kernel flavour from the running kernel image's source package,
+    never from the release string alone; SHALL compare the image's installed
+    package version with each fix; and SHALL NOT present the kernel as checked
+    -- stating why instead -- when the feed is off, has not been fetched, is
+    older than the feed age limit, does not cover the release or the flavour,
+    or when the release has left Canonical's support, or the running kernel is
+    unknown or comes from no installed package.
 
 ### Requirement 13: Fleet-scale operation
 

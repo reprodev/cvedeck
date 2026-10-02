@@ -99,6 +99,8 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_HTTP_TIMEOUT` | `15.0` | Timeout in seconds for vulnerability source HTTP requests. |
 | `CVEDECK_KEV_FEED_URL` | CISA KEV catalogue JSON | Source for the Known Exploited Vulnerabilities catalogue. |
 | `CVEDECK_EPSS_FEED_URL` | FIRST EPSS current scores (`.csv.gz`) | Source for the EPSS exploitation-probability score set. |
+| `CVEDECK_UBUNTU_KERNEL_FEED` | `on` | Fetch Canonical's OVAL CVE feed for each Ubuntu release the fleet runs, to check Ubuntu kernels. `off` (or `0`, `false`, `no`) stops it; Ubuntu kernels then read as not checked. The request names the release. |
+| `CVEDECK_UBUNTU_KERNEL_FEED_URL` | Canonical's OVAL feed, `{codename}` filled in | Source of the Ubuntu kernel feed. |
 | `CVEDECK_FEED_TIMEOUT` | `120.0` | Timeout in seconds for a whole-feed download. Separate from `CVEDECK_HTTP_TIMEOUT` because the EPSS set is a multi-megabyte file, not a per-package query. |
 | `CVEDECK_FEED_REFRESH_HOURS` | `24.0` | How often the application refreshes the intel feeds itself, starting at startup. `0` switches the built-in refresh off, for a deployment that drives it from its own scheduler. Each refresh also reapplies the feeds to findings already stored. Demo mode forces this to `0`. Reported at `GET /api/health`, which reports the interval actually running. |
 | `CVEDECK_FEED_MAX_AGE_HOURS` | `48.0` | How old a cached feed may be before the dashboard reports it stale. Both feeds publish daily, so the default tolerates one missed publication. |
@@ -607,7 +609,9 @@ Therefore:
   `CVEDECK_WINRM_SCHEME=https` and `CVEDECK_WINRM_PORT=5986` outside a lab.
 
 Outbound access the scanner needs: TCP 22 to Linux targets, and the configured
-WinRM port to any Windows host you run a connection test against.
+WinRM port to any Windows host you run a connection test against. The feeds
+need HTTPS to `api.osv.dev`, `www.cisa.gov`, `epss.empiricalsecurity.com`, and
+-- when the fleet runs Ubuntu -- `security-metadata.canonical.com`.
 
 ## Scaling
 
@@ -622,12 +626,12 @@ very large one.
 
 ## Known limitations
 
-- **Ubuntu's kernel is not matched against advisories.** Since 0.9.0 the
-  kernel is matched on Debian, RHEL, Rocky, AlmaLinux, SUSE, openSUSE and
-  Alpine. Ubuntu's kernel answer from OSV runs to gigabytes, and Arch, Fedora,
-  Oracle and Amazon hosts are matched against trackers their kernel was not
-  built from, so on those the host's page says its kernel was not checked. Its
-  findings are not "none" -- they were not asked for.
+- **On Ubuntu only the running kernel is checked**, against Canonical's feed
+  (since 0.10.0); kernels installed but not running read as not assessed. An
+  out-of-support interim release is not checked: its feed is frozen, so newer
+  CVEs would be missing rather than fixed. Arch, Fedora, Oracle and Amazon
+  hosts are matched against trackers their kernel was not built from, so their
+  kernel reads as not checked.
 - **Matching the kernel takes time.** An old Debian kernel's answer is
   thousands of advisories across several pages. It is asked once per kernel
   version per scan and shared by every host running that kernel, but the first

@@ -9,7 +9,13 @@
 
 import { useEffect, useState } from "react";
 import type { CveFinding, KernelInfo, Platform } from "../types";
-import { kernelPlan, kernelUpgradeCommand, unfixedSummary, type UnfixedSummary } from "../lib/kernel";
+import {
+  kernelPlan,
+  kernelUpgradeCommand,
+  uncheckedReasonText,
+  unfixedSummary,
+  type UnfixedSummary,
+} from "../lib/kernel";
 import { Icon } from "./Icon";
 
 export interface KernelCardProps {
@@ -75,9 +81,8 @@ export function KernelCard({ findings, findingsLoaded, platform, osName, onLoad 
             This host's kernel was not checked against advisories ({plural(kernel.installed.length, "kernel")}{" "}
             installed).
           </strong>{" "}
-          CveDeck does not look up the kernel on this distribution: for some, Ubuntu among them, the
-          advisory data for one kernel runs to gigabytes. The findings below say nothing about it. Keep
-          the kernel updated through your distribution.
+          <span data-testid="kernel-unchecked-reason">{uncheckedReasonText(kernel.uncheckedReason)}</span>{" "}
+          The findings below say nothing about it. Keep the kernel updated through your distribution.
         </div>
       </section>
     );
@@ -100,6 +105,12 @@ export function KernelCard({ findings, findingsLoaded, platform, osName, onLoad 
         </span>
       </header>
 
+      {kernel.runningOnly && (
+        <p className="kernel-card-line kernel-card-idle" data-testid="kernel-running-only">
+          Checked against Canonical's Ubuntu kernel feed. Only the running kernel is checked; kernels
+          installed but not running are not assessed.
+        </p>
+      )}
       {kernel.release === null && (
         <p className="kernel-card-line">
           This host did not report which kernel it is running, so every kernel finding is treated as live.

@@ -754,12 +754,13 @@ Debian, `kernel` on the RPM distributions), with three differences.
 
 **Where.** Only where the answer can be fetched at a practical cost, measured
 against live OSV for an old kernel on each: Debian 12, 9,171 advisories in 5
-pages (56 MB); RHEL, Rocky, AlmaLinux, SUSE and Alpine, a page or two. Ubuntu is
-excluded: each of its kernel advisories lists every Ubuntu kernel flavour,
-about 470 KB apiece, and the answer for one 22.04 kernel was still arriving
-after 51 pages and 3.5 GB. Hosts resolved onto a borrowed tracker (Arch, Fedora,
-Oracle, Amazon) are excluded too. Every excluded host states that its kernel
-was not checked (Req 12.5).
+pages (56 MB); RHEL, Rocky, AlmaLinux, SUSE and Alpine, a page or two. Ubuntu's
+is not asked of OSV at all: each of its kernel advisories lists every Ubuntu
+kernel flavour, about 470 KB apiece, and the answer for one 22.04 kernel was
+still arriving after 51 pages and 3.5 GB. It is checked against Canonical's own
+feed instead (below). Hosts resolved onto a borrowed tracker (Arch, Fedora,
+Oracle, Amazon) are excluded. Every excluded host states that its kernel was
+not checked, and why (Req 12.5).
 
 **Listed or counted.** Measured with the real client, an up-to-date Debian 12
 kernel matches 2,319 kernel CVEs, none fixable in Debian 12 (2,187 fixed only in
@@ -789,6 +790,53 @@ A signed kernel image is asked under the source it wraps, at the image's own
 version: Debian's `linux-signed-amd64` 6.1.187+1 wraps `linux` 6.1.187-1 and has
 no advisories of its own.
 
+
+### The Ubuntu kernel: Canonical's feed (since 0.10.0)
+
+Canonical publishes its CVE tracker as OVAL, one file per release, regenerated
+daily (`com.ubuntu.<codename>.cve.oval.xml.bz2`, 11.9 MB for 22.04). CveDeck
+downloads it for each Ubuntu release the fleet runs -- and only those -- with
+the other feeds, and checks each Ubuntu host's running kernel against it
+locally at scan time (Req 12.11). OSV's bulk export was considered and
+rejected: 770 MB for all of Ubuntu, and its 22.04 file had not changed since
+October 2024.
+
+It is read differently from a generic OVAL evaluator in three ways, each found
+on the real data:
+
+- **The flavour comes from the package.** A flavour is identified in the feed
+  by a pattern on `uname -r`, and on 22.04 `linux` and `linux-riscv` share one.
+  Read that way, every 22.04 host carries the RISC-V kernel's CVEs -- and is
+  told to upgrade to fixes that do not exist for it. The running image's source
+  package names the flavour exactly.
+- **The installed package version is compared with the fix.** OVAL compares
+  the fragment of `uname -r` (`5.15.0-101`) with the fixed package version
+  (`5.15.0-101.111`), and the first sorts before the second, so a host running
+  exactly the fixed kernel reads as vulnerable. Versions are compared as dpkg
+  orders them; the implementation is checked pair by pair against dpkg.
+- **Only shapes seen in the real feeds are accepted.** Surveyed across every
+  flavour of 22.04 and 24.04: a flavour listed alone has no fix; a flavour
+  beside "was vulnerable but has been fixed (note: 'V')" is fixed in V. Any
+  other shape, an unknown priority, or a feed with no kernel advisories fails
+  the refresh and keeps the previous table.
+
+Parsing is streamed (whole, the 22.04 file took 2 GB; streamed, 144 MB and 23
+s) and stored as one compressed row per release and flavour, so a scan reads
+only its own kernel's ~10,000 entries. Canonical rates every kernel CVE
+(critical, high, medium, low, negligible -- the last shown as low), so Ubuntu
+kernel findings carry a severity and no score.
+
+Only the running kernel is checked; a kernel installed but not running reads
+as not assessed. A kernel is not checked, and the machine page says why, when
+the feed is switched off, has not been fetched or is past the feed age limit,
+the release is unknown or out of support (its feed is frozen, so newer CVEs
+would be absent rather than fixed), the host did not report its running kernel,
+the running kernel comes from no installed package, or the feed has no entries
+for the flavour.
+
+Measured on the real 22.04 feed for the generic kernel: 5.15.0-25 has 10,704
+applicable CVEs, 6,450 with a fix; the current 5.15.0-198 has 4,254, none
+fixable, which are counted rather than listed (Req 12.9).
 ---
 
 ## 14. Data Durability & Schema Provenance

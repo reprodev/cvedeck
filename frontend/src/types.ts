@@ -536,4 +536,8 @@ export interface KernelInfo {
   installed: InstalledKernel[];
   /** What to upgrade to get a newer kernel (the metapackage on Debian and Ubuntu). */
   upgradePackages: string[];
+  /** Why the kernel was not checked; `null` when it was (Req 12.5, 12.11). */
+  uncheckedReason: string | null;
+  /** True on Ubuntu, where only the running kernel is checked (Req 12.11). */
+  runningOnly: boolean;
 }

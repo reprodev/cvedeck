@@ -76,6 +76,21 @@ describe("MachineListView threat-intel surface", () => {
     expect(within(card).queryByText(/on CISA KEV/i)).not.toBeInTheDocument();
   });
 
+  it("does not count a healthy Ubuntu kernel feed as exploit data (Req 12.11)", () => {
+    // The kernel feed is fresh and the intel feeds were never loaded. Treated
+    // as "some feed is usable", the card would print 0 as an answer.
+    render(
+      <MachineListView
+        machines={[makeMachine({ kevCount: 0 })]}
+        feeds={[...UNLOADED_FEEDS, feed({ feedName: "ubuntu-kernel:jammy", recordCount: 837049 })]}
+      />,
+    );
+
+    const card = cardByTitle("Actively exploited");
+    expect(within(card).getByText(/no exploit data loaded/i)).toBeInTheDocument();
+    expect(within(card).getByText("—")).toBeInTheDocument();
+  });
+
   it("shows a dash, not a stale count, when intel is unusable", () => {
     // Findings can keep kev_listed from an earlier refresh after the feed stops
     // being usable. A number next to "no exploit data loaded" contradicts

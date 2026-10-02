@@ -66,6 +66,7 @@ from .schema import (
     ScanFindingChange,
     ScanRun,
     SshHostKey,
+    UbuntuKernelFeed,
     TargetMachine,
 )
 
@@ -197,8 +198,8 @@ _FINDINGS_LINUX: list[
 #     one is in both kernels and needs an upgrade as well.
 #   - edge-proxy runs its newest kernel and still has an old one installed,
 #     whose CVEs matter only if it is booted again.
-#   - web-01 runs Ubuntu, whose kernel is not looked up: its kernel must read
-#     as not checked, never as a clean one.
+#   - web-01 runs Ubuntu, whose kernel is checked against Canonical's feed
+#     (Req 12.11): the demo seeds a small fictional copy of that feed, below.
 #
 # The other hosts carry no kernel package, which is what a container looks
 # like, and show no kernel card.
@@ -242,9 +243,25 @@ _KERNELS: dict[
             ("linux-image-5.15.0-91-generic", "5.15.0-91.101", "Ubuntu:22.04:LTS"),
             ("linux-image-generic", "5.15.0.91.88", "Ubuntu:22.04:LTS"),
         ],
-        [],
+        [
+            # Canonical publishes a priority, never a score.
+            ("CVE-2024-1086",  None, Severity.HIGH,   "linux-image-5.15.0-91-generic@5.15.0-91.101", "5.15.0-101.111", True,  0.8851, 0.9952),
+            ("CVE-2024-26925", None, Severity.MEDIUM, "linux-image-5.15.0-91-generic@5.15.0-91.101", "5.15.0-105.115", False, 0.0005, 0.1702),
+        ],
     ),
 }
+
+# The source each Ubuntu kernel image is built from: the flavour Canonical's
+# feed is read for (Req 12.11).
+_KERNEL_SOURCES = {"linux-image-5.15.0-91-generic": "linux-signed"}
+
+# A fictional slice of Canonical's 22.04 kernel feed, for the one flavour the
+# demo runs: what web-01's kernel findings and counts were "checked" against.
+_DEMO_UBUNTU_FEED: list[tuple[str, Severity, str | None]] = [
+    ("CVE-2024-1086", Severity.HIGH, "5.15.0-101.111"),
+    ("CVE-2024-26925", Severity.MEDIUM, "5.15.0-105.115"),
+    ("CVE-2012-4542", Severity.LOW, None),
+]
 
 # Kernel CVEs each kernel has with no fix in its host's release, counted rather
 # than listed (Req 12.9), in the stored form. Fictional, but the shape the real
@@ -258,6 +275,10 @@ _KERNEL_UNFIXED: dict[str, dict[str, dict[str, object]]] = {
     "edge-proxy.lan": {
         "kernel-core@5.14.0-362.8.1.el9_3": {"no_fix": 3, "elsewhere": {}},
         "kernel-core@5.14.0-284.11.1.el9_2": {"no_fix": 5, "elsewhere": {}},
+    },
+    # Only the running kernel is checked on Ubuntu; it is the only key.
+    "web-01.lan": {
+        "linux-image-5.15.0-91-generic@5.15.0-91.101": {"no_fix": 1840, "elsewhere": {}},
     },
 }
 
@@ -597,7 +618,7 @@ def seed_demo_fleet(session: Session) -> int:
                     name=name,
                     version=version,
                     ecosystem=kernel_eco,
-                    source_name=None,
+                    source_name=_KERNEL_SOURCES.get(name),
                 )
             )
         kernel_eco = kernels[0][2] if kernels else ecosystem
@@ -740,6 +761,15 @@ def _seed_intel_cache(session: Session) -> None:
             )
         )
 
+    from ..scanner.ubuntu_kernel_feed import KernelAdvisory, UbuntuKernelTable, encode_flavours
+
+    table = UbuntuKernelTable(
+        codename="jammy",
+        by_flavour={"linux": [KernelAdvisory(c, sev, fixed) for c, sev, fixed in _DEMO_UBUNTU_FEED]},
+    )
+    for flavour, (entries, payload) in encode_flavours(table).items():
+        session.add(UbuntuKernelFeed(codename="jammy", flavour=flavour, entries=entries, payload=payload))
+
     _stamp_demo_feeds(session, kev_count=len(kev_cves), epss_count=len(scored))
 
 
@@ -753,7 +783,12 @@ def _stamp_demo_feeds(session: Session, *, kev_count: int, epss_count: int) -> N
     Re-stamping costs one row per feed and touches no finding.
     """
     now = _now()
-    for feed_name, count in (("kev", kev_count), ("epss", epss_count)):
+    feeds = [("kev", kev_count), ("epss", epss_count)]
+    # The demo's Ubuntu kernel feed too, when this database was seeded with one.
+    ubuntu = session.query(UbuntuKernelFeed).filter_by(codename="jammy").all()
+    if ubuntu:
+        feeds.append(("ubuntu-kernel:jammy", sum(row.entries for row in ubuntu)))
+    for feed_name, count in feeds:
         row = session.get(FeedRefresh, feed_name)
         if row is None:
             row = FeedRefresh(feed_name=feed_name)

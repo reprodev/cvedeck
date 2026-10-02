@@ -44,7 +44,7 @@ from typing import Callable, Protocol, Sequence
 from app.data.repository import FindingDiff, FindingInput
 from app.enums import ScanStatus, SourceStatus
 from app.models import Credentials, Inventory, TargetMachine
-from app.package_identifier import is_kernel_package, kernel_is_matched
+from app.package_identifier import is_kernel_image, kernel_is_matched
 from app.scanner.collectors import InventoryCollector, get_collector
 from app.scanner.exceptions import (
     AuthError,
@@ -52,7 +52,7 @@ from app.scanner.exceptions import (
     HostKeyUnknownError,
     InventoryUnavailableError,
 )
-from app.services.kernel import encode_unfixed, split_kernel_findings
+from app.services.kernel import UnfixedCount, encode_unfixed, split_kernel_findings
 from app.scanner.matcher import (
     Finding,
     Matcher,
@@ -301,31 +301,40 @@ class ScannerEngine:
         # Known before saving, because a partial scan must not resolve anything:
         # a source that did not answer is not a patch (Req 18.3).
         unavailable = self._unavailable_sources(match_result)
+        # An Ubuntu kernel is looked up in Canonical's feed, locally (Req 12.11);
+        # its findings join the others before enrichment, so a known-exploited
+        # one is marked like any other.
+        ubuntu = self._check_ubuntu_kernel(inventory)
+        inputs = [_finding_to_input(f) for f in match_result.findings]
+        if ubuntu is not None and ubuntu.reason is None:
+            inputs.extend(ubuntu.findings)
         # Kernel CVEs the host's release cannot fix are counted, not listed
         # (Req 12.9). After enrichment, because a known-exploited one is always
         # listed, and an unchecked one might be.
-        findings, unfixed = split_kernel_findings(
-            self._enrich([_finding_to_input(f) for f in match_result.findings])
-        )
+        findings, unfixed = split_kernel_findings(self._enrich(inputs))
         saved = self._repository.save_findings(
             target.id,
             findings,
             suppress_resolved=bool(unavailable),
         )
-        # Recorded only when the kernel was actually asked about and answered:
-        # otherwise the counts stay unset, which reads as not assessed, not 0.
+        # Recorded only for kernels actually asked about and answered, each by
+        # name: a kernel with no entry reads as not assessed, one with an empty
+        # entry as nothing counted. On Ubuntu only the running kernel is checked.
         record = getattr(self._repository, "record_kernel_unfixed", None)
-        if (
-            record is not None
-            and self._osv is not None
-            and match_result.osv_status is SourceStatus.OK
-            and any(
-                kernel_is_matched(p.ecosystem)
-                for p in inventory.packages
-                if is_kernel_package(p.name, p.source_name)
-            )
-        ):
-            record(target.id, encode_unfixed(unfixed))
+        if record is not None:
+            assessed: list[str] = []
+            if self._osv is not None and match_result.osv_status is SourceStatus.OK:
+                assessed.extend(
+                    f"{p.name}@{p.version}"
+                    for p in inventory.packages
+                    if is_kernel_image(p.name) and kernel_is_matched(p.ecosystem)
+                )
+            if ubuntu is not None and ubuntu.assessed:
+                assessed.append(ubuntu.assessed)
+            if assessed:
+                for key in assessed:
+                    unfixed.setdefault(key, UnfixedCount())
+                record(target.id, encode_unfixed(unfixed))
 
         return MachineScan(
             machine_id=target.id,
@@ -334,6 +343,35 @@ class ScannerEngine:
             match_result=match_result,
             unavailable_sources=unavailable,
             diff=saved if isinstance(saved, FindingDiff) else None,
+        )
+
+    def _check_ubuntu_kernel(self, inventory: Inventory):
+        """Check an Ubuntu host's running kernel against the stored feed (Req 12.11).
+
+        ``None`` when the repository cannot hold the feed (a test double), or
+        the host has no Ubuntu kernel. Fresh means within the configured feed
+        age: a stale table lacks every CVE published since, and would make the
+        kernel read cleaner than it is, so it is not used at all.
+        """
+        repository = self._repository
+        if not hasattr(repository, "ubuntu_kernel_feed"):
+            return None
+        from app.config import feed_max_age_hours, ubuntu_kernel_feed_enabled
+        from app.services.enrichment import FindingEnricher, ubuntu_kernel_feed_name
+        from app.services.ubuntu_kernel import check_ubuntu_kernel
+
+        health = FindingEnricher(repository, max_age_hours=feed_max_age_hours())
+
+        def usable(codename: str) -> bool:
+            state = health.feed_health(ubuntu_kernel_feed_name(codename))
+            return (
+                state.usable
+                and not state.stale
+                and repository.count_ubuntu_kernel_entries(codename) > 0
+            )
+
+        return check_ubuntu_kernel(
+            inventory, repository, enabled=ubuntu_kernel_feed_enabled(), feed_usable=usable
         )
 
     def _enrich(self, findings: list[FindingInput]) -> list[FindingInput]:

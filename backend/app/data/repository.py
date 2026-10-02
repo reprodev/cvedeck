@@ -58,6 +58,7 @@ from .schema import (
     ScanRun,
     SshHostKey,
     TargetMachine,
+    UbuntuKernelFeed,
 )
 
 
@@ -955,6 +956,64 @@ class Repository:
             row.error_detail = error_detail
         self._session.flush()
         return row
+
+    def replace_ubuntu_kernel_feed(self, codename: str, payloads: dict[str, tuple[int, bytes]]) -> int:
+        """Replace one release's stored kernel advisories wholesale (Req 12.11).
+
+        ``payloads`` maps flavour to (entry count, compressed payload). Returns
+        the total entry count. Wholesale, like the KEV catalogue: Canonical
+        removes entries too.
+        """
+        from sqlalchemy import delete
+
+        self._session.execute(
+            delete(UbuntuKernelFeed).where(UbuntuKernelFeed.codename == codename)
+        )
+        for flavour, (entries, payload) in payloads.items():
+            self._session.add(
+                UbuntuKernelFeed(codename=codename, flavour=flavour, entries=entries, payload=payload)
+            )
+        self._session.flush()
+        return sum(entries for entries, _payload in payloads.values())
+
+    def ubuntu_kernel_feed(self, codename: str, flavour: str) -> bytes | None:
+        """One flavour's stored payload, or ``None`` if the release has none for it."""
+        row = self._session.get(UbuntuKernelFeed, (codename, flavour))
+        return row.payload if row is not None else None
+
+    def count_ubuntu_kernel_entries(self, codename: str) -> int:
+        """Entries actually stored for a release, for the same reason as count_kev_entries."""
+        return int(
+            self._session.execute(
+                select(func.coalesce(func.sum(UbuntuKernelFeed.entries), 0)).where(
+                    UbuntuKernelFeed.codename == codename
+                )
+            ).scalar_one()
+        )
+
+    def fleet_ubuntu_ecosystems(self) -> set[str]:
+        """The Ubuntu ecosystems of every machine's latest inventory (Req 12.11).
+
+        What the Ubuntu kernel feed is fetched for: only releases the fleet
+        runs, so a fleet with no Ubuntu host fetches nothing.
+        """
+        latest = (
+            select(Inventory.machine_id, func.max(Inventory.collected_at).label("at"))
+            .group_by(Inventory.machine_id)
+            .subquery()
+        )
+        stmt = (
+            select(Package.ecosystem)
+            .join(Inventory, Package.inventory_id == Inventory.id)
+            .join(
+                latest,
+                (Inventory.machine_id == latest.c.machine_id)
+                & (Inventory.collected_at == latest.c.at),
+            )
+            .where(Package.ecosystem.like("Ubuntu:%"))
+            .distinct()
+        )
+        return {eco for eco in self._session.execute(stmt).scalars() if eco}
 
     def get_feed_refresh(self, feed_name: str) -> FeedRefresh | None:
         """Read one feed's refresh state, or ``None`` if it has never run."""

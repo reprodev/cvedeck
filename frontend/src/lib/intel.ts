@@ -167,7 +167,38 @@ export function sortByRisk(findings: CveFinding[]): CveFinding[] {
 export function feedLabel(feedName: string): string {
   if (feedName === "kev") return "CISA KEV";
   if (feedName === "epss") return "EPSS";
+  if (feedName.startsWith(UBUNTU_KERNEL_FEED_PREFIX)) {
+    const codename = feedName.slice(UBUNTU_KERNEL_FEED_PREFIX.length);
+    const version = UBUNTU_VERSIONS[codename];
+    return version ? `Ubuntu ${version} kernel` : `Ubuntu ${codename} kernel`;
+  }
   return feedName;
+}
+
+const UBUNTU_KERNEL_FEED_PREFIX = "ubuntu-kernel:";
+
+const UBUNTU_VERSIONS: Record<string, string> = {
+  xenial: "16.04",
+  bionic: "18.04",
+  focal: "20.04",
+  jammy: "22.04",
+  noble: "24.04",
+  oracular: "24.10",
+  plucky: "25.04",
+  questing: "25.10",
+  resolute: "26.04",
+};
+
+/**
+ * Whether a feed is threat intelligence -- KEV or EPSS -- as opposed to a
+ * kernel advisory feed (Req 12.11).
+ *
+ * Exploitation is shown only when intel can be trusted, and that decision must
+ * be taken on the intel feeds alone: counting a healthy Ubuntu kernel feed as
+ * "some intel is usable" would show "0 exploited" with no catalogue behind it.
+ */
+export function isIntelFeed(feed: Pick<FeedHealth, "feedName">): boolean {
+  return feed.feedName === "kev" || feed.feedName === "epss";
 }
 
 /**
