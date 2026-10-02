@@ -45,14 +45,23 @@ from ..data.schema import (
 )
 from ..enums import Severity
 from ..models import Package as DomainPackage
-from ..package_identifier import parse_fix, parse_package_name
+from ..package_identifier import (
+    advisory_source,
+    is_kernel_package,
+    parse_fix,
+    parse_package_name,
+    parse_package_version,
+)
 from ..services.enrichment import FindingEnricher
+from ..services.kernel import KernelView, decode_unfixed, kernel_view
 from .dependencies import get_session
 from .schemas import (
     CveFindingOut,
     FeedHealthOut,
     FindingChangeOut,
     HostKeyOut,
+    InstalledKernelOut,
+    KernelOut,
     MachineSummary,
     ScanRunOut,
     SeverityCounts,
@@ -145,16 +154,19 @@ def _build_dependency_maps(
 def _source_siblings(packages: list[DomainPackage]) -> dict[str, list[str]]:
     """Each installed binary's name -> every installed binary of its source.
 
-    A binary whose source was not reported is its own only sibling, which is
-    exactly how an inventory from before 0.8.15 is shown (Req 2.8).
+    Grouped by :func:`advisory_source`, the rule the matcher reports by, so a
+    finding lists exactly the binaries it was found for: two installed kernels
+    are two sources at two versions, not one (Req 12.6). A binary whose source
+    was not reported is its own only sibling, which is exactly how an
+    inventory from before 0.8.15 is shown (Req 2.8).
     """
-    by_source: dict[str, list[str]] = {}
+    by_source: dict[tuple[str, str], list[str]] = {}
     for pkg in packages:
         if pkg.source_name:
-            by_source.setdefault(pkg.source_name, []).append(pkg.name)
+            by_source.setdefault(advisory_source(pkg), []).append(pkg.name)
     siblings: dict[str, list[str]] = {}
     for pkg in packages:
-        group = by_source.get(pkg.source_name or "", [pkg.name]) if pkg.source_name else [pkg.name]
+        group = by_source[advisory_source(pkg)] if pkg.source_name else [pkg.name]
         siblings[pkg.name] = sorted(set(group))
     return siblings
 
@@ -201,6 +213,7 @@ def _to_finding_out(
     depended_on_by: dict[str, list[str]] | None = None,
     new_keys: set[FindingKey] | None = None,
     siblings: dict[str, list[str]] | None = None,
+    kernel: KernelView | None = None,
 ) -> CveFindingOut:
     """Map a stored finding to the API finding model.
 
@@ -231,6 +244,9 @@ def _to_finding_out(
         if d not in affected
     ]
     blast_radius = _blast_radius(pkg_name, direct_deps, depended_on_by, dependents)
+    # Kernel findings are reported against the image, so the name says which
+    # they are even where no inventory is loaded (GET /api/cves).
+    is_kernel = bool(pkg_name) and is_kernel_package(pkg_name)
 
     return CveFindingOut(
         cve_id=finding.cve_id,
@@ -253,6 +269,12 @@ def _to_finding_out(
         depended_on_by=dependents,
         affected_packages=affected,
         blast_radius=blast_radius,
+        is_kernel=is_kernel,
+        kernel_running=(
+            kernel.running_for(affected, parse_package_version(finding.package_identifier))
+            if is_kernel and kernel is not None
+            else None
+        ),
         kev_listed=finding.kev_listed,
         kev_due_date=finding.kev_due_date,
         epss_score=finding.epss_score,
@@ -451,13 +473,50 @@ def get_machine_cves(
         else (None, None)
     )
     siblings = _source_siblings(inventory.packages) if inventory is not None else None
+    kernel = kernel_view(inventory) if inventory is not None else None
     new_keys = repo.new_finding_keys(repo.latest_successful_run(machine_id))
     return [
         _to_finding_out(
-            f, remediation_by_cve, direct_deps, depended_on_by, new_keys, siblings
+            f, remediation_by_cve, direct_deps, depended_on_by, new_keys, siblings, kernel
         )
         for f in findings
     ]
+
+
+@router.get("/machines/{machine_id}/kernel", response_model=KernelOut | None)
+def get_machine_kernel(
+    machine_id: str,
+    repo: Repository = Depends(_get_repository),
+) -> KernelOut | None:
+    """A machine's installed kernels and which one is running (Req 12.6, 12.8).
+
+    ``null`` when nothing has been collected from the machine yet; 404 for an
+    unknown machine (Req 6.4).
+    """
+    if repo.get_machine(machine_id) is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    inventory = repo.get_latest_inventory_for_machine(machine_id)
+    if inventory is None:
+        return None
+    view = kernel_view(inventory, decode_unfixed(repo.latest_kernel_unfixed(machine_id)))
+    return KernelOut(
+        release=view.release,
+        checked=view.checked,
+        running_installed=view.running_installed,
+        reboot_required=view.reboot_required,
+        installed=[
+            InstalledKernelOut(
+                package=k.package,
+                version=k.version,
+                running=k.running,
+                newest=k.newest,
+                no_fix=k.unfixed.no_fix if k.unfixed is not None else None,
+                fixed_elsewhere=dict(k.unfixed.elsewhere) if k.unfixed is not None else None,
+            )
+            for k in view.installed
+        ],
+        upgrade_packages=view.upgrade_packages,
+    )
 
 
 @router.get("/cves", response_model=list[CveFindingOut])

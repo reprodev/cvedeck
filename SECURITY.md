@@ -124,12 +124,14 @@ Windows matching, and until then `CVEDECK_WINRM_SCHEME` and
 `https` and `5986` outside a lab: on the default `http` transport the NTLM
 exchange crosses the network unencrypted.
 
-**The kernel is not checked yet.** Packages are matched against the advisories
-published for their source package, but not the kernel's: the kernel source has
-thousands of advisories per release, OSV pages the answer, and which of the
-installed kernels is running decides which of them matter. Until that is built,
-each host's page says how many kernel packages went unchecked. A kernel with no
-findings is not a clean kernel -- keep it updated through your distribution.
+**Ubuntu's kernel is not checked.** Since 0.9.0 the kernel is matched like any
+other package on Debian, RHEL, Rocky, AlmaLinux, SUSE, openSUSE and Alpine.
+Ubuntu's is not: each of its kernel advisories lists every Ubuntu kernel
+flavour, and the answer for one 22.04 kernel was still arriving at 3.5 GB. Nor
+is the kernel of a host matched against a tracker it was not built from (Arch,
+Fedora, Oracle Linux, Amazon Linux). Those hosts' pages say their kernel was not
+checked. A kernel with no findings there is not a clean kernel -- keep it
+updated through your distribution.
 
 **Credentials are held in memory during a scan.** They arrive in the request
 body, are wrapped in `SecretStr` so they are not logged or serialized, and are

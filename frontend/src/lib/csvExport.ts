@@ -229,6 +229,10 @@ export function exportFindingsCsv(
     // Every installed binary of the finding's source; a fix upgrades them all.
     "Affected Packages",
     "Blast Radius",
+    // Kernel or userland, and for a kernel finding whether that kernel is the
+    // one running (Req 12.8, 12.6).
+    "Kernel",
+    "Running Kernel",
     "Dependencies",
     "Depended On By (Reverse Deps)",
     "Remediation Status",
@@ -252,6 +256,11 @@ export function exportFindingsCsv(
     f.fixedVersion ?? "",
     (f.affectedPackages ?? []).join("; "),
     f.blastRadius ?? NOT_ASSESSED,
+    f.isKernel ? "yes" : "no",
+    // Unknown is not "no": a kernel nobody said is idle may be running.
+    !f.isKernel ? "" : f.kernelRunning === null || f.kernelRunning === undefined
+      ? NOT_ASSESSED
+      : f.kernelRunning ? "yes" : "no",
     (f.dependencies ?? []).join("; "),
     (f.dependedOnBy ?? []).join("; "),
     // No record is the same state the view shows as open.

@@ -731,7 +731,7 @@ clean.
 The Linux collector therefore also gathers:
 
 - **Running kernel release** (`uname -r`), for comparison against the installed
-  kernel package.
+  kernel packages: see "Matching the kernel" below.
 - **Pending reboot state**, via `/var/run/reboot-required` (Debian/Ubuntu) or
   `needs-restarting -r` (RHEL family). Recorded as indeterminate where the
   distribution offers no read-only way to ask, rather than guessed.
@@ -746,6 +746,48 @@ than redirecting to `/dev/null`. Writing to `/dev/null` is obviously harmless an
 widening the guard to permit it would have been the faster fix -- but a guard with
 exceptions accumulates exceptions, and this one protects the property that makes
 the tool safe to point at production.
+
+### Matching the kernel (since 0.9.0)
+
+The kernel is looked up like any other package, under its source (`linux` on
+Debian, `kernel` on the RPM distributions), with three differences.
+
+**Where.** Only where the answer can be fetched at a practical cost, measured
+against live OSV for an old kernel on each: Debian 12, 9,171 advisories in 5
+pages (56 MB); RHEL, Rocky, AlmaLinux, SUSE and Alpine, a page or two. Ubuntu is
+excluded: each of its kernel advisories lists every Ubuntu kernel flavour,
+about 470 KB apiece, and the answer for one 22.04 kernel was still arriving
+after 51 pages and 3.5 GB. Hosts resolved onto a borrowed tracker (Arch, Fedora,
+Oracle, Amazon) are excluded too. Every excluded host states that its kernel
+was not checked (Req 12.5).
+
+**Listed or counted.** Measured with the real client, an up-to-date Debian 12
+kernel matches 2,319 kernel CVEs, none fixable in Debian 12 (2,187 fixed only in
+Debian 13, 132 nowhere), and Debian publishes no severity for kernel CVEs. A
+kernel CVE therefore becomes a finding only where the host's release has a fix,
+where it is known exploited, or where its exploitation was not checked; the
+rest are counted per installed kernel, by where their fix is, and the machine
+page states the counts (Req 12.9). Unscored kernel findings rank after scored
+ones (Req 12.10).
+
+**Apart.** The kernel is asked separately from the userland packages. If its
+answer fails, the userland findings stand, the scan is partial, and nothing is
+resolved on its strength (Req 12.7).
+
+**Which kernel.** A host keeps several kernels installed and runs one. Each
+installed kernel image is compared with `uname -r`, per package manager,
+against real package lists: dpkg's `linux-image-6.1.0-53-amd64` reports
+`6.1.0-53-amd64`; rpm's `kernel-core` 5.14.0-687.53.1.el9_8 reports
+`5.14.0-687.53.1.el9_8.x86_64`; SUSE drops the build counter and appends the
+flavour; apk's `linux-lts` 6.1.27-r0 reports `6.1.27-0-lts`. Every kernel finding
+is in the running kernel, in one installed but not running, or -- when the host
+did not say -- in one that may be running, which is treated as live (Req 12.6).
+RPM and SUSE give every installed kernel the same name, so a kernel finding is
+identified by version as well as name.
+
+A signed kernel image is asked under the source it wraps, at the image's own
+version: Debian's `linux-signed-amd64` 6.1.187+1 wraps `linux` 6.1.187-1 and has
+no advisories of its own.
 
 ---
 

@@ -471,3 +471,79 @@ def test_the_partially_checked_host_is_never_half_enriched(session):
             assert f.kev_due_date is None
             assert f.epss_score is None
             assert f.epss_percentile is None
+
+
+def test_the_demo_shows_each_thing_the_kernel_card_can_say(session):
+    """A reboot that fixes, an old kernel left installed, and a kernel not checked (Req 12.5, 12.6, 12.8).
+
+    Read back through the same derivation the API uses, so the demo cannot show
+    a state real scans would not produce.
+    """
+    from app.data.repository import Repository
+    from app.package_identifier import parse_package_version
+    from app.services.kernel import kernel_view
+
+    seed_demo_fleet(session)
+    repo = Repository(session)
+    by_host = {m.hostname: m.id for m in session.query(TargetMachine).all()}
+
+    def view(host):
+        return kernel_view(repo.get_latest_inventory_for_machine(by_host[host]))
+
+    def running(host, cve):
+        kernel = view(host)
+        return {
+            f.package_identifier.split(" (")[0]: kernel.running_for(
+                [f.package_identifier.split(":")[-1].split("@")[0]],
+                parse_package_version(f.package_identifier),
+            )
+            for f in session.query(CveFinding).filter_by(machine_id=by_host[host], cve_id=cve)
+        }
+
+    db = view("db-primary.lan")
+    assert db.checked and db.reboot_required
+    assert [(k.package, k.running, k.newest) for k in db.installed] == [
+        ("linux-image-6.1.0-21-amd64", False, True),
+        ("linux-image-6.1.0-18-amd64", True, False),
+    ]
+    assert db.upgrade_packages == ["linux-image-amd64"]
+    assert set(running("db-primary.lan", "CVE-2024-26925").values()) == {True, False}
+
+    edge = view("edge-proxy.lan")
+    assert edge.checked and edge.running_installed
+    assert running("edge-proxy.lan", "CVE-2023-4623") == {
+        "Rocky Linux:9:kernel-core@5.14.0-284.11.1.el9_2": False
+    }
+    assert running("edge-proxy.lan", "CVE-2024-1086") == {
+        "Rocky Linux:9:kernel-core@5.14.0-362.8.1.el9_3": True
+    }
+
+    web = view("web-01.lan")
+    assert web.installed and not web.checked, "an Ubuntu kernel must read as not checked"
+    assert not session.query(CveFinding).filter(
+        CveFinding.machine_id == by_host["web-01.lan"],
+        CveFinding.package_identifier.like("%linux-image%"),
+    ).count()
+
+
+def test_the_demo_counts_what_it_does_not_list_and_only_where_assessed(session):
+    """The checked kernels carry counts; the Ubuntu one is not assessed, not zero (Req 12.9)."""
+    from app.data.repository import Repository
+    from app.services.kernel import decode_unfixed, kernel_view
+
+    seed_demo_fleet(session)
+    repo = Repository(session)
+    by_host = {m.hostname: m.id for m in session.query(TargetMachine).all()}
+
+    def installed(host):
+        machine = by_host[host]
+        view = kernel_view(
+            repo.get_latest_inventory_for_machine(machine),
+            decode_unfixed(repo.latest_kernel_unfixed(machine)),
+        )
+        return {(k.package, k.version): k.unfixed for k in view.installed}
+
+    db = installed("db-primary.lan")
+    assert db[("linux-image-6.1.0-18-amd64", "6.1.76-1")].total == 653
+    assert all(count is not None for count in installed("edge-proxy.lan").values())
+    assert all(count is None for count in installed("web-01.lan").values())

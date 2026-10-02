@@ -16,13 +16,20 @@ from typing import Any
 import httpx
 
 from app.models import Package
-from app.package_identifier import is_kernel_package, parse_package_name
+from app.package_identifier import (
+    advisory_source,
+    finding_package,
+    is_kernel_image,
+    is_kernel_package,
+    kernel_is_matched,
+    parse_package_name,
+)
 from app.enums import SEVERITY_RANK, Severity
 from app.scanner.cvss import (
     cvss_v3_base_score,
     cvss_v4_base_score,
 )
-from app.scanner.matcher import RawAdvisory, derive_severity
+from app.scanner.matcher import PartialMatchError, RawAdvisory, derive_severity
 from app.scanner.releases import (
     Release,
     host_releases,
@@ -44,6 +51,10 @@ _DEFAULT_POOL_SIZE = 50
 #: -- so this is a ceiling against an unbounded body, not a budget for honest
 #: ones; see app/scanner/http_bounds.py (Req 10.18).
 _MAX_OSV_RESPONSE = 256 * MIB
+
+#: Pages followed for one answer before it is reported unanswered (Req 2.9).
+#: A ceiling, not a budget: see the measurement in the test that names it.
+_MAX_OSV_PAGES = 50
 
 
 #: Qualitative severity words, longest-distinguishing substring first, mapped
@@ -184,26 +195,26 @@ def _resolve_cve_id(vuln: dict[str, Any]) -> str:
 
 
 def _query_package(pkg: Package) -> Package:
-    """The package to ask OSV about: the binary's source, at the source's version.
-
-    The binary itself when no source was reported (an inventory from before
-    0.8.15), and for the kernel, which is not yet looked up by source (Req 12.5).
-    """
-    if not pkg.source_name or is_kernel_package(pkg.name, pkg.source_name):
+    """The package to ask OSV about: see :func:`advisory_source` (Req 2.8, 12.5)."""
+    if not pkg.source_name:
         return pkg
-    return pkg.model_copy(
-        update={"name": pkg.source_name, "version": pkg.source_version or pkg.version}
-    )
+    name, version = advisory_source(pkg)
+    return pkg.model_copy(update={"name": name, "version": version})
 
 
 def _representative(source: str, binaries: list[Package]) -> Package:
     """The binary a source's findings are reported against.
 
-    The one named like the source, when installed -- so a finding that was
+    For the kernel, its image, so a finding names the kernel that can be
+    running rather than its headers or the compiler it was built with. Else
+    the one named like the source, when installed -- so a finding that was
     already matched through it (the ``openssl`` CLI) keeps its identity, its
     first-seen date and its history. Otherwise the first by name, so the choice
     is the same on every scan.
     """
+    images = [b for b in binaries if is_kernel_image(b.name)]
+    if images:
+        return min(images, key=lambda b: b.name)
     for binary in binaries:
         if binary.name == source:
             return binary
@@ -436,6 +447,39 @@ def _release_ids(
     return out
 
 
+class OsvPagingLimitError(ValueError):
+    """An answer ran past ``_MAX_OSV_PAGES`` pages (Req 2.9).
+
+    A ``ValueError``, like ``ResponseTooLargeError``, so the query is reported
+    unanswered rather than as the pages that did arrive.
+    """
+
+
+def _query_all_pages(
+    client: httpx.Client, url: str, payload: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Every advisory OSV has for one ``/query``, across all its pages (Req 2.9).
+
+    OSV answers a large query in pages and says so with ``next_page_token``.
+    The first page alone reads exactly like a complete answer, so stopping
+    there would drop the rest without a trace -- the kernel's ``linux`` source
+    has thousands of advisories per release. Any failed page, or an answer
+    longer than the ceiling, raises: a partial list is never returned.
+    """
+    vulns: list[dict[str, Any]] = []
+    body = dict(payload)
+    for _ in range(_MAX_OSV_PAGES):
+        resp = request_limited(client, "POST", url, limit=_MAX_OSV_RESPONSE, json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        vulns.extend(data.get("vulns") or [])
+        token = data.get("next_page_token")
+        if not token:
+            return vulns
+        body = {**payload, "page_token": token}
+    raise OsvPagingLimitError(f"OSV answer ran past {_MAX_OSV_PAGES} pages")
+
+
 class OsvUnavailableError(RuntimeError):
     """OSV could not answer for one or more of the queried packages.
 
@@ -451,6 +495,17 @@ class OsvUnavailableError(RuntimeError):
     never did. Returning "nothing found" for "could not ask" is the silent false
     negative this project exists to prevent.
     """
+
+
+class OsvPartialAnswerError(OsvUnavailableError, PartialMatchError):
+    """OSV answered for the userland packages and not for the kernel (Req 12.7).
+
+    Still an :class:`OsvUnavailableError` -- the scan is partial -- and carries
+    the advisories that did come back, which the matcher keeps.
+    """
+
+    def __init__(self, message: str, advisories: list[RawAdvisory]) -> None:
+        PartialMatchError.__init__(self, message, advisories)
 
 
 class OsvHttpClient:
@@ -469,6 +524,8 @@ class OsvHttpClient:
         self._max_workers = max_workers
         self._http_client = http_client
         self._advisory_cache: dict[str, list[RawAdvisory]] = {}
+        #: Releases OSV has been seen to describe; see _fetch_advisories.
+        self._tracked_releases: set[tuple[str, tuple[int, ...]]] = set()
 
     def match_packages(self, packages: list[Package]) -> list[RawAdvisory]:
         """Query OSV for vulnerabilities affecting the supplied packages.
@@ -492,6 +549,31 @@ class OsvHttpClient:
         silently discard every entry, and with them the release filter and the
         fix.
         """
+        userland: list[Package] = []
+        kernel: list[Package] = []
+        for pkg in packages:
+            if not is_kernel_package(pkg.name, pkg.source_name):
+                userland.append(pkg)
+            elif kernel_is_matched(pkg.ecosystem):
+                kernel.append(pkg)
+
+        advisories = self._match_by_source(userland)
+        if not kernel:
+            return advisories
+        # The kernel is asked separately, so an answer too large to read or an
+        # outage part-way through costs the host its kernel findings, not all
+        # of them (Req 12.7). The partial answer keeps the scan partial, so the
+        # kernel findings it could not re-check are kept, not resolved.
+        try:
+            kernel_advisories = self._match_by_source(kernel)
+        except OsvUnavailableError as exc:
+            raise OsvPartialAnswerError(
+                f"the kernel was not checked: {exc}", advisories
+            ) from exc
+        return self._deduplicate_findings(advisories + kernel_advisories)
+
+    def _match_by_source(self, packages: list[Package]) -> list[RawAdvisory]:
+        """Ask under source and binary names, and report once per source (Req 2.8)."""
         queries: dict[tuple[str, str, str], Package] = {}
         remap: dict[str, str] = {}
         groups: dict[tuple[str, str, str], tuple[Package, list[Package]]] = {}
@@ -685,6 +767,7 @@ class OsvHttpClient:
         """
         vulnerable: list[tuple[Package, str]] = []
         ids: dict[tuple[str, str], set[str] | None] = {}
+        paged: list[tuple[Package, str]] = []
         batch_url = f"{self._base_url}/querybatch"
 
         for i in range(0, len(query_items), _BATCH_CHUNK_SIZE):
@@ -714,6 +797,8 @@ class OsvHttpClient:
                     # unknown rather than as "not matched".
                     complete = not (result or {}).get("next_page_token")
                     ids[(_cache_key(item[0]), item[1])] = found if complete else None
+                    if not complete and parse_release(item[1]) is not None:
+                        paged.append(item)
                     if found:
                         vulnerable.append(item)
             except Exception:
@@ -721,6 +806,27 @@ class OsvHttpClient:
                 for item in chunk:
                     ids[(_cache_key(item[0]), item[1])] = None
                     vulnerable.append(item)
+
+        # The release filter (Req 14.7) needs the complete ids for a release,
+        # and a paged batch answer does not have them -- which would switch the
+        # filter off for exactly the largest answers, the kernel's. Ask again,
+        # following every page (Req 2.9). If that fails the ids stay unknown,
+        # which keeps every advisory: the safe direction.
+        query_url = f"{self._base_url}/query"
+
+        def _all_ids(item: tuple[Package, str]) -> tuple[tuple[Package, str], set[str] | None]:
+            pkg, eco = item
+            payload = {"package": {"name": pkg.name, "ecosystem": eco}, "version": pkg.version}
+            try:
+                vulns = _query_all_pages(client, query_url, payload)
+            except (httpx.HTTPError, ValueError):
+                return item, None
+            return item, {str(v.get("id")) for v in vulns if v.get("id")}
+
+        if paged:
+            with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
+                for item, found_all in pool.map(_all_ids, paged):
+                    ids[_pair_key(item)] = found_all
 
         return vulnerable, ids
 
@@ -750,14 +856,10 @@ class OsvHttpClient:
                 "version": pkg.version,
             }
             try:
-                # ResponseTooLargeError is a ValueError, so an oversized answer
-                # is reported as unanswered below, never as no vulnerabilities.
-                resp = request_limited(
-                    client, "POST", query_url, limit=_MAX_OSV_RESPONSE, json=payload
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return item, data.get("vulns", [])
+                # ResponseTooLargeError and OsvPagingLimitError are ValueErrors,
+                # so an oversized or endless answer is reported as unanswered
+                # below, never as no vulnerabilities or as its first pages.
+                return item, _query_all_pages(client, query_url, payload)
             except (httpx.HTTPError, ValueError) as exc:
                 # Transport failures, non-2xx responses (including OSV's 400 for
                 # an ecosystem it does not recognise) and unparseable bodies.
@@ -773,17 +875,25 @@ class OsvHttpClient:
                 else:
                     answered.append((pkg, eco, result))
 
-        # Which releases OSV describes anywhere in this scan's advisories. A
-        # release that appears nowhere (an end-of-life Ubuntu interim) is one OSV
-        # does not track, and silence about it must not read as "not affected".
-        described: set[tuple[str, tuple[int, ...]]] = set()
+        # Which releases OSV describes anywhere in the advisories this client
+        # has seen. A release that appears nowhere (an end-of-life Ubuntu
+        # interim) is one OSV does not track, and silence about it must not
+        # read as "not affected".
+        #
+        # Kept across lookups, because it is a fact about OSV, not about one
+        # answer: the kernel is asked apart from userland (Req 12.7), and a
+        # patched RHEL 9 kernel's answer holds only RHEL 10 advisories. Judged
+        # on that answer alone RHEL 9 looked untracked, and every RHEL 10
+        # advisory was kept as "fixed upstream" -- four known-exploited false
+        # positives on a current Rocky 9 kernel, measured end to end.
         for _pkg, _eco, vulns in answered:
             for vuln in vulns:
                 for aff in vuln.get("affected") or []:
                     if isinstance(aff, dict):
                         release = parse_release(_block_ecosystem(aff))
                         if release:
-                            described.add((release.family, release.key))
+                            self._tracked_releases.add((release.family, release.key))
+        described = set(self._tracked_releases)
 
         for pkg, eco, vulns in answered:
             cache_key = _cache_key(pkg)
@@ -857,11 +967,15 @@ class OsvHttpClient:
         return advisories
 
     def _deduplicate_findings(self, advisories: list[RawAdvisory]) -> list[RawAdvisory]:
-        """Deduplicate findings by (cve_id, pkg_name), prioritizing records with fix versions."""
+        """Deduplicate findings by CVE and package, prioritizing records with fix versions.
+
+        The package is :func:`finding_package`: its name, and for a kernel its
+        version as well, so two installed ``kernel-core`` packages keep a
+        finding each (Req 12.6).
+        """
         dedup_map: dict[tuple[str, str], RawAdvisory] = {}
         for adv in advisories:
-            pkg_name = _parse_pkg_name(adv.package_identifier) or ""
-            key = (adv.cve_id, pkg_name)
+            key = (adv.cve_id, finding_package(adv.package_identifier) or "")
             if key not in dedup_map:
                 dedup_map[key] = adv
             else:

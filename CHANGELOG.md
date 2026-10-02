@@ -8,6 +8,104 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.9.0] - 2026-10-02
+
+**Upgrading: the first scan after this release will report kernel findings on
+Debian, RHEL, Rocky, AlmaLinux, SUSE, openSUSE and Alpine hosts. They were always
+there.** 0.8.15 matched every package by its source except the kernel, and each
+host said so. The kernel is now matched too, and the machine page shows it apart
+from everything else. Ubuntu's kernel is the exception, and its hosts still say
+their kernel was not checked. The migration (`f3d9a1c5e7b2`) adds one nullable
+column and runs on start-up.
+
+### Security
+
+- **An answer OSV sends in pages is read to the last page.** OSV splits a large
+  answer into pages and says so; the client read the first and stopped, and a
+  first page looks exactly like a complete answer. Every page is now read, and a
+  page that fails -- or an answer past a fixed ceiling -- makes the whole lookup
+  unanswered rather than the part that arrived (Req 2.9). A paged answer about
+  the host's own release is read in full too, because leaving it unknown
+  switched off the release filter (Req 14.7) for exactly the largest answers.
+
+- **The kernel is matched against its advisories** (Req 12.5). It is asked
+  under its source, `linux`, wherever that is practical -- measured against live
+  OSV for an old kernel: Debian 12's answer is 9,171 advisories in 5 pages
+  (56 MB), RHEL, Rocky, AlmaLinux, SUSE and Alpine a page or two. A signed
+  kernel image is asked under the source it wraps: Debian's `linux-signed-amd64`
+  has no advisories of its own.
+
+- **Ubuntu's kernel is not, and says so.** Each Ubuntu kernel advisory lists
+  every Ubuntu kernel flavour, and the answer for one 22.04 kernel was still
+  arriving after 51 pages and 3.5 GB. Hosts matched against a tracker their
+  kernel was not built from (Arch, Fedora, Oracle Linux, Amazon Linux) are not
+  either. Their pages state that the kernel was not checked.
+
+- **What the host can fix is listed; the rest is counted.** Measured with the
+  real client against live OSV, an up-to-date Debian 12 kernel matches 2,319
+  kernel CVEs: none fixable in Debian 12 -- 2,187 fixed only in Debian 13, 132
+  fixed nowhere -- and Debian publishes no severity for any kernel CVE. A kernel
+  from early 2024 matches 8,137. A kernel CVE is a finding where the host's
+  release has a fix, where it is known exploited, or where its exploitation was
+  not checked; the rest are counted per installed kernel and the machine page
+  states them, by where their fix is (Req 12.9). An unscored kernel finding
+  ranks after every scored one -- under the userland rule thousands would sit
+  above every High -- and known exploitation still ranks first (Req 12.10).
+
+- **A kernel lookup that fails costs the kernel, not the scan** (Req 12.7). The
+  kernel is asked apart from everything else. If its answer fails, the userland
+  findings are kept, the scan is marked partial, and -- as for any partial scan
+  -- the kernel findings it could not re-check are kept rather than resolved.
+
+### Added
+
+- **Kernel matching takes time on Debian.** The first host scanned with an old
+  Debian kernel waits about 100 seconds for the answer (thousands of
+  advisories across several pages); every other host on the same kernel
+  version in that scan reuses it.
+
+- **Which installed kernel is running** (Req 12.6). `uname -r` has been
+  collected since Req 12 and is now compared with each installed kernel, per
+  package manager, against real package lists from Debian, Ubuntu, Rocky,
+  AlmaLinux, Alpine, openSUSE and Arch. Every kernel finding says whether it is
+  in the running kernel. A host that did not report its kernel has every kernel
+  finding treated as live; a container, whose running kernel is its host's,
+  says the running kernel was not checked.
+
+- **A kernel card on the machine page** (Req 12.8): the running kernel, how many
+  CVEs are in it and how many of those are known exploited, and the one action
+  that fixes them. That is a reboot when the kernel a reboot would bring up is
+  already installed and does not have the finding -- an upgraded host that was
+  never rebooted is told to reboot, not to upgrade again. Otherwise it is an
+  upgrade and a reboot, and on Debian the command upgrades the metapackage
+  (`linux-image-amd64`): a fixed kernel arrives under a new package name, so
+  upgrading the installed one does nothing. CVEs only in kernels installed but
+  not running are counted separately and sort after live findings.
+
+- **A Kernel / Userland selector** on the findings list, and `is_kernel` and
+  `kernel_running` on every finding, in the API and the CSV export. Kernel
+  findings stay in every total. `GET /api/machines/{id}/kernel` lists a host's
+  installed kernels.
+
+### Fixed
+
+- **Two installed kernels of the same name are two kernels.** RPM and SUSE
+  install each kernel beside the last as `kernel-core` or `kernel-default`, and a
+  finding was identified by its CVE and package name alone -- so a CVE in both
+  would have been one finding against whichever came first. A kernel finding is
+  now identified by version as well.
+- The host's bulk fix plan leaves the kernel out and says where its fix is,
+  rather than offering an `--only-upgrade` line that cannot bring a newer kernel.
+- The stored inventory's running kernel and pending-reboot state were never read
+  back. Nothing used them until now; they are read now.
+
+### Changed
+
+- The demo fleet carries kernels: one host upgraded and not rebooted, one with
+  an old kernel still installed, and an Ubuntu host whose kernel is not checked.
+
+---
+
 ## [0.8.15] - 2026-09-25
 
 **Upgrading: the first scan after this release will report many more

@@ -171,7 +171,14 @@ def test_a_host_without_a_matching_release_gets_an_upstream_fix_not_an_installab
 # --------------------------------------------------------------------------- #
 
 
-def _osv(batch_ids: dict[str, list[str]], details: dict[str, list[dict]], *, fail_batch=False, paged=()):
+def _osv(
+    batch_ids: dict[str, list[str]],
+    details: dict[str, list[dict]],
+    *,
+    fail_batch=False,
+    paged=(),
+    query_fails=(),
+):
     """A mock OSV: querybatch answers ids per ecosystem, query answers details."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -187,6 +194,8 @@ def _osv(batch_ids: dict[str, list[str]], details: dict[str, list[dict]], *, fai
                     entry["next_page_token"] = "more"
                 results.append(entry)
             return httpx.Response(200, json={"results": results})
+        if body["package"]["ecosystem"] in query_fails:
+            return httpx.Response(503)
         return httpx.Response(200, json={"vulns": details.get(body["package"]["ecosystem"], [])})
 
     return OsvHttpClient(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
@@ -245,10 +254,13 @@ def test_when_the_batch_fails_no_finding_is_dropped_on_the_strength_of_its_answe
 
 
 def test_a_paged_release_answer_drops_nothing_it_did_not_see():
+    # A paged batch answer is read again in full (Req 2.9); when that fails
+    # too, the release's ids are unknown and nothing may be dropped for it.
     client = _osv(
         batch_ids={"Debian": [v["id"] for v in ALL], "Debian:13": [NEWER_ONLY["id"]]},
         details={"Debian": ALL},
         paged=("Debian:13",),
+        query_fails=("Debian:13",),
     )
 
     found = _by_id(client.match_packages([DEBIAN_13]))

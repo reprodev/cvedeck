@@ -3448,3 +3448,97 @@ th {
   font-size: 0.75rem;
   color: var(--text-muted);
 }
+
+
+/* --- The kernel, apart from userland (Req 12.6, 12.8) -----------------------
+   A plain panel, not a warning: the kernel is just another part of the host,
+   with its own fix. The only red in it is the known-exploited badge, which is
+   the existing .badge-exploit. The not-checked state reuses the amber
+   .release-fix-notice, because there it *is* a notice. */
+.kernel-card {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.kernel-card.release-fix-notice {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+
+.kernel-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.kernel-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-weight: 600;
+}
+
+.kernel-card-release {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.kernel-card-line,
+.kernel-card-fix p,
+p.kernel-card-fix {
+  margin: 0 0 var(--space-2);
+}
+
+.kernel-card-idle {
+  color: var(--text-muted);
+}
+
+.kernel-card-command {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-muted);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-x: auto;
+}
+
+.kernel-card-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+}
+
+.kernel-card-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+
+.kernel-card-list code {
+  font-family: var(--font-mono);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.kernel-scope-select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: 0.35rem 0.5rem;
+}

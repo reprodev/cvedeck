@@ -45,7 +45,7 @@ from ..enums import (
 from ..models import Inventory as DomainInventory
 from ..models import OsInfo
 from ..models import Package as DomainPackage
-from ..package_identifier import parse_package_name
+from ..package_identifier import finding_package, parse_package_name
 from .schema import (
     CveFinding,
     EpssScore,
@@ -151,9 +151,11 @@ def finding_key(cve_id: str, package_identifier: str | None) -> FindingKey:
 
     The CVE and the package *name*. The version is left out on purpose: a
     package upgraded to a version that is still vulnerable is the same
-    unresolved problem, not one finding resolved and another new.
+    unresolved problem, not one finding resolved and another new. Except for
+    a kernel, where each installed version is a kernel of its own; see
+    :func:`finding_package` (Req 12.6).
     """
-    return cve_id, parse_package_name(package_identifier)
+    return cve_id, finding_package(package_identifier)
 
 
 @dataclass(frozen=True)
@@ -337,17 +339,19 @@ class Repository:
     def unchecked_kernel_package_counts(
         self, machine_ids: list[str] | None = None
     ) -> dict[str, int]:
-        """Installed kernel packages per machine, from each latest inventory (Req 12.5).
+        """Installed kernel packages not checked, per machine, from each latest inventory (Req 12.5).
 
-        Kernel packages are not yet matched against advisories, so the
-        dashboard has to say how many went unchecked rather than let a kernel
-        with no findings read as a clean one. A machine with an inventory and
-        no kernel package maps to 0; one with no inventory is absent.
+        A kernel is looked up only where its advisories can be fetched at a
+        practical cost (:func:`kernel_is_matched`); elsewhere -- Ubuntu, and
+        hosts matched against a borrowed tracker -- the dashboard has to say
+        how many went unchecked rather than let a kernel with no findings read
+        as a clean one. A machine with an inventory and no unchecked kernel
+        package maps to 0; one with no inventory is absent.
 
         One query for the fleet: SQL narrows the rows to names that could be a
         kernel, and :func:`is_kernel_package` decides.
         """
-        from ..package_identifier import is_kernel_package
+        from ..package_identifier import is_kernel_package, kernel_is_matched
 
         latest = (
             select(Inventory.machine_id, func.max(Inventory.collected_at).label("at"))
@@ -370,7 +374,9 @@ class Repository:
                 select(inventories.c.machine_id)
             ).scalars()
         }
-        candidates = select(inventories.c.machine_id, Package.name, Package.source_name).join(
+        candidates = select(
+            inventories.c.machine_id, Package.name, Package.source_name, Package.ecosystem
+        ).join(
             inventories, Package.inventory_id == inventories.c.id
         ).where(
             Package.name.like("linux%")
@@ -378,10 +384,30 @@ class Repository:
             | Package.source_name.like("linux%")
             | Package.source_name.like("kernel%")
         )
-        for machine_id, name, source_name in self._session.execute(candidates):
-            if is_kernel_package(name, source_name):
+        for machine_id, name, source_name, ecosystem in self._session.execute(candidates):
+            if is_kernel_package(name, source_name) and not kernel_is_matched(ecosystem):
                 counts[machine_id] = counts.get(machine_id, 0) + 1
         return counts
+
+    def _latest_inventory_row(self, machine_id: str) -> Inventory | None:
+        return self._session.execute(
+            select(Inventory)
+            .where(Inventory.machine_id == machine_id)
+            .order_by(Inventory.collected_at.desc())
+            .limit(1)
+        ).scalars().first()
+
+    def record_kernel_unfixed(self, machine_id: str, encoded: str) -> None:
+        """Store a scan's counted kernel CVEs on the inventory it matched (Req 12.9)."""
+        row = self._latest_inventory_row(machine_id)
+        if row is not None:
+            row.kernel_unfixed = encoded
+            self._session.flush()
+
+    def latest_kernel_unfixed(self, machine_id: str) -> str | None:
+        """The counted kernel CVEs of a machine's latest inventory; ``None`` if not assessed."""
+        row = self._latest_inventory_row(machine_id)
+        return row.kernel_unfixed if row is not None else None
 
     def get_latest_inventory_for_machine(
         self, machine_id: str
@@ -423,6 +449,10 @@ class Repository:
                 )
                 for pkg in row.packages
             ],
+            # Stored since Req 12 and never read back until the kernel was
+            # matched: without them every host's running kernel read as unknown.
+            kernel_version=row.kernel_version,
+            reboot_required=row.reboot_required,
             collected_at=row.collected_at,
         )
 

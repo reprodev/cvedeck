@@ -1,8 +1,8 @@
 // A finding is reported once per source package, against one representative
 // binary, and a fix must upgrade every installed binary of that source
 // (Req 2.8): `apt install --only-upgrade libc-bin` leaves libc6 vulnerable.
-// And kernel packages are not matched yet, which the host page must say rather
-// than show a kernel that reads as clean (Req 12.5).
+// And a kernel that was not looked up must be said to be unchecked rather than
+// shown as a kernel that reads as clean (Req 12.5).
 
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -57,7 +57,7 @@ describe("unchecked kernel packages (Req 12.5)", () => {
   it("says how many were not checked", () => {
     render(<MachineDrillDownView machineId="m1" findings={[glibc]} kernelPackagesUnchecked={3} />);
     expect(screen.getByTestId("kernel-unchecked")).toHaveTextContent(
-      "3 kernel packages are not checked against advisories yet.",
+      "3 kernel packages are not checked against advisories.",
     );
   });
 

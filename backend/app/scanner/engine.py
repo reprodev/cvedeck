@@ -44,6 +44,7 @@ from typing import Callable, Protocol, Sequence
 from app.data.repository import FindingDiff, FindingInput
 from app.enums import ScanStatus, SourceStatus
 from app.models import Credentials, Inventory, TargetMachine
+from app.package_identifier import is_kernel_package, kernel_is_matched
 from app.scanner.collectors import InventoryCollector, get_collector
 from app.scanner.exceptions import (
     AuthError,
@@ -51,6 +52,7 @@ from app.scanner.exceptions import (
     HostKeyUnknownError,
     InventoryUnavailableError,
 )
+from app.services.kernel import encode_unfixed, split_kernel_findings
 from app.scanner.matcher import (
     Finding,
     Matcher,
@@ -299,11 +301,31 @@ class ScannerEngine:
         # Known before saving, because a partial scan must not resolve anything:
         # a source that did not answer is not a patch (Req 18.3).
         unavailable = self._unavailable_sources(match_result)
+        # Kernel CVEs the host's release cannot fix are counted, not listed
+        # (Req 12.9). After enrichment, because a known-exploited one is always
+        # listed, and an unchecked one might be.
+        findings, unfixed = split_kernel_findings(
+            self._enrich([_finding_to_input(f) for f in match_result.findings])
+        )
         saved = self._repository.save_findings(
             target.id,
-            self._enrich([_finding_to_input(f) for f in match_result.findings]),
+            findings,
             suppress_resolved=bool(unavailable),
         )
+        # Recorded only when the kernel was actually asked about and answered:
+        # otherwise the counts stay unset, which reads as not assessed, not 0.
+        record = getattr(self._repository, "record_kernel_unfixed", None)
+        if (
+            record is not None
+            and self._osv is not None
+            and match_result.osv_status is SourceStatus.OK
+            and any(
+                kernel_is_matched(p.ecosystem)
+                for p in inventory.packages
+                if is_kernel_package(p.name, p.source_name)
+            )
+        ):
+            record(target.id, encode_unfixed(unfixed))
 
         return MachineScan(
             machine_id=target.id,

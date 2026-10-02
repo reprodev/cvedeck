@@ -153,6 +153,12 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
     }));
   }, [machines, discoveryResult]);
 
+  // Stable per machine: the kernel card reloads whenever this changes.
+  const loadKernel = useCallback(
+    () => (selectedMachineId ? api.getMachineKernel(selectedMachineId) : Promise.resolve(null)),
+    [api, selectedMachineId],
+  );
+
   const loadFindings = useCallback(
     async (machineId: string) => {
       setFindings(await api.getMachineCves(machineId));
@@ -655,6 +661,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           lastScanResolved={selectedMachine?.lastScanResolved ?? null}
           lastScanBaseline={selectedMachine?.lastScanBaseline ?? false}
           kernelPackagesUnchecked={selectedMachine?.kernelPackagesUnchecked ?? null}
+          onLoadKernel={loadKernel}
           onLoadScanRuns={(limit) => api.listScanRuns(selectedMachineId, limit)}
           onLoadScanChanges={(runId) => api.listScanChanges(selectedMachineId, runId)}
         />

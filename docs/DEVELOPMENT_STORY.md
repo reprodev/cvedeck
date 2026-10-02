@@ -2522,3 +2522,78 @@ What could not wait was the silence: a kernel with no findings reads as a clean
 one, so each host now says how many kernel packages went unchecked. It is the
 enrichment invariant again, in a new place: a question that was not asked must
 not look answered.
+
+## Chapter 26 — The kernel, and how much of it to say (v0.9.0)
+
+0.8.15 left one package out of source matching, on purpose and in public: the
+kernel. The handover named the three things it needed -- follow OSV's pages,
+decide which installed kernel is running, and design how hundreds of kernel
+CVEs are shown. Each one turned out to be a different size from the estimate.
+
+### The pages nobody read
+
+The first was not about the kernel at all. OSV answers a large query in pages
+and says so with a token; the client read the first page and stopped. A first
+page looks exactly like a complete answer, so every advisory past it had been
+dropped without a trace, for any package large enough to page. The batch
+endpoint's paged answers were already treated as unknown; the single-query
+endpoint was not. Every page is now read, and a page that fails -- or an answer
+that will not stop -- makes the whole lookup unanswered. Partial is never
+presented as complete.
+
+### Measuring before building
+
+The kernel's answers were measured before any matching was written, one
+distribution at a time. Debian 12's `linux` at an old version: 9,171 advisories
+in 5 pages, 56 MB. RHEL, Rocky, Alma, SUSE and Alpine: a page or two. Ubuntu
+22.04: still paging after 51 pages, 3.5 GB and twelve minutes, because every
+Ubuntu kernel advisory lists every Ubuntu kernel flavour. Building the kernel
+"for all distributions" would have made every Ubuntu scan hit the page ceiling
+and report the whole OSV source as down -- worse than not checking the kernel at
+all. So Ubuntu is not checked, and says so, and a kernel lookup is asked apart
+from everything else so that its failure costs the kernel and nothing more.
+
+### Which kernel is running
+
+`uname -r` had been collected since Requirement 12 and read by nothing. Turning
+it into "which installed kernel is this" meant real package lists, so kernels
+were installed into containers of seven distributions and the collector's own
+command run against them. Each package manager names the same thing differently:
+dpkg puts the release in the package name, rpm in the version, SUSE drops a
+build counter, apk adds the flavour, pacman swaps a dot for a dash. The fixtures
+caught two things a guess would have got wrong: Alpine's `linux-virt` is built
+from the `linux-lts` source, and Debian's signed image comes from a
+`linux-signed-amd64` source with its own version that has no advisories at all.
+
+Building the API found that the stored inventory had never read the running
+kernel back -- the column was written on every scan and read by nothing, so
+every host would have shown its running kernel as unknown. Seeding the demo
+found the next one: on RPM and SUSE every installed kernel has the same name,
+and three separate places identified a finding by CVE and package name, so a
+CVE in both the running kernel and an old one collapsed into one finding
+against whichever came first.
+
+### How much to say
+
+The third item was the one the estimate got most wrong. "Hundreds of kernel
+CVEs" was, measured end to end with the real client, 8,137 for a Debian kernel
+from early 2024 -- and 2,319 for a fully up-to-date one. None of those 2,319 is
+fixable in Debian 12, and Debian publishes no severity for kernel CVEs at all,
+so every one was Unscored, and Unscored ranks above High. A fully patched
+Debian host would have opened on two thousand findings it could do nothing
+about, above everything it could.
+
+The decision went back to the owner of the project, with the numbers. A kernel
+CVE is now a finding where the host's release can fix it, where it is known
+exploited, or where nobody checked whether it is -- the enrichment invariant,
+again: an unchecked one might be exploited, and that must never be reduced to a
+number. The rest are counted per installed kernel and stated on the machine
+page, by where their fix lives. Unscored kernel findings rank after scored
+ones. And the card's main job is the advice: a host that installed the fixed
+kernel and never rebooted is told to reboot, not to upgrade again, because the
+upgrade it would otherwise be given brings nothing new.
+
+The lesson is the one chapter 25 ended on, turned round. A question not asked
+must not look answered; but an answer nobody can act on, repeated two thousand
+times, hides the ones they can. Saying everything is not the same as saying it
+well.

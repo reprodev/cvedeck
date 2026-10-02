@@ -622,10 +622,16 @@ very large one.
 
 ## Known limitations
 
-- **Kernel packages are not matched against advisories yet.** Every other
-  package is looked up under its source package and its own name (since
-  0.8.15); the kernel is not, and each host's page says how many kernel packages
-  went unchecked. Its findings are not "none" -- they were not asked for.
+- **Ubuntu's kernel is not matched against advisories.** Since 0.9.0 the
+  kernel is matched on Debian, RHEL, Rocky, AlmaLinux, SUSE, openSUSE and
+  Alpine. Ubuntu's kernel answer from OSV runs to gigabytes, and Arch, Fedora,
+  Oracle and Amazon hosts are matched against trackers their kernel was not
+  built from, so on those the host's page says its kernel was not checked. Its
+  findings are not "none" -- they were not asked for.
+- **Matching the kernel takes time.** An old Debian kernel's answer is
+  thousands of advisories across several pages. It is asked once per kernel
+  version per scan and shared by every host running that kernel, but the first
+  host in a scan waits for it.
 - **NVD matching is opt-in and off by default.** Package-level matching via
   OSV.dev is fully operational and always on. OS-level matching against NIST NVD
   is implemented but gated behind `CVEDECK_NVD_ENABLED` because NVD's rate

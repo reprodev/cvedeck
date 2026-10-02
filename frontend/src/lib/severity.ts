@@ -40,11 +40,22 @@ export const SEVERITY_RANK: Readonly<Record<Severity, number>> =
  * ranking on, and the paragraph directly above already warns against producing
  * the NaN this function then produced.
  */
+/**
+ * Where a finding's band ranks. An unscored *kernel* finding ranks after every
+ * scored one (Req 12.10): Debian publishes no severity for any kernel CVE, and
+ * the userland rule -- unscored between Critical and High, since it could be
+ * either (Req 10.11) -- would put thousands of them above every High.
+ */
+function bandRank(f: Pick<CveFinding, "severity"> & Pick<Partial<CveFinding>, "isKernel">): number {
+  if (f.isKernel && f.severity === "unscored") return Math.max(...Object.values(SEVERITY_RANK)) + 1;
+  return SEVERITY_RANK[f.severity];
+}
+
 export function compareBySeverity(
-  a: Pick<CveFinding, "severity" | "cvssScore">,
-  b: Pick<CveFinding, "severity" | "cvssScore">,
+  a: Pick<CveFinding, "severity" | "cvssScore"> & Pick<Partial<CveFinding>, "isKernel">,
+  b: Pick<CveFinding, "severity" | "cvssScore"> & Pick<Partial<CveFinding>, "isKernel">,
 ): number {
-  const byBand = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+  const byBand = bandRank(a) - bandRank(b);
   if (byBand !== 0) return byBand;
 
   const aScore = a.cvssScore ?? null;

@@ -166,6 +166,15 @@ export interface CveFinding {
    * below: an unanswered question is not a reassuring answer.
    */
   blastRadius?: BlastRadius | null;
+  /** In a kernel rather than in userland (Req 12.8). */
+  isKernel?: boolean;
+  /**
+   * For a kernel finding, whether it is in the kernel the host is running
+   * (Req 12.6). `null` where that is not known -- the host did not report its
+   * running kernel, or the response loaded no inventory -- which must be
+   * shown as possibly running, never as idle.
+   */
+  kernelRunning?: boolean | null;
 
   // --- Threat-intel enrichment ---------------------------------------------
   // Every field here is nullable, and null means "not enriched" -- NOT "safe".
@@ -497,3 +506,34 @@ export interface TestConnectionResult {
 }
 
 
+
+/** One installed kernel image (Req 12.6). */
+export interface InstalledKernel {
+  package: string;
+  version: string;
+  /** `null` when the host did not report its running kernel. */
+  running: boolean | null;
+  /** The highest version installed: what a reboot would most likely boot. */
+  newest: boolean;
+  /**
+   * CVEs in this kernel with no fix in the host's release, counted rather
+   * than listed (Req 12.9). `null` when the scan did not assess it -- not 0.
+   */
+  noFix: number | null;
+  /** Of those, the ones fixed in another release, by release. `null`: not assessed. */
+  fixedElsewhere: Record<string, number> | null;
+}
+
+/** A host's kernels, from its latest inventory (Req 12.5, 12.6, 12.8). */
+export interface KernelInfo {
+  /** What `uname -r` printed; `null` when the host did not say. */
+  release: string | null;
+  /** False: the kernel was not looked up, so its findings are absent, not zero. */
+  checked: boolean;
+  /** False: the running kernel comes from no installed package and was not checked. */
+  runningInstalled: boolean | null;
+  rebootRequired: boolean | null;
+  installed: InstalledKernel[];
+  /** What to upgrade to get a newer kernel (the metapackage on Debian and Ubuntu). */
+  upgradePackages: string[];
+}

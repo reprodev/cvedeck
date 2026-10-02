@@ -18,6 +18,7 @@
 
 import type {
   CveFinding,
+  KernelInfo,
   DiscoveredHost,
   DiscoveredService,
   DiscoverySweepResult,
@@ -187,6 +188,8 @@ interface CveFindingWire {
   depended_on_by?: string[];
   affected_packages?: string[];
   blast_radius?: "low" | "medium" | "high" | null;
+  is_kernel?: boolean;
+  kernel_running?: boolean | null;
   // Threat-intel enrichment. Null means unenriched, not safe -- see types.ts.
   kev_listed?: boolean | null;
   kev_due_date?: string | null;
@@ -194,6 +197,23 @@ interface CveFindingWire {
   epss_percentile?: number | null;
   first_seen_at?: string | null;
   is_new?: boolean;
+}
+
+/** Wire shape of GET /api/machines/{id}/kernel. */
+interface KernelWire {
+  release: string | null;
+  checked: boolean;
+  running_installed: boolean | null;
+  reboot_required: boolean | null;
+  installed: {
+    package: string;
+    version: string;
+    running: boolean | null;
+    newest: boolean;
+    no_fix?: number | null;
+    fixed_elsewhere?: Record<string, number> | null;
+  }[];
+  upgrade_packages: string[];
 }
 
 /** Wire shape of a per-target scan outcome as serialized by the backend. */
@@ -385,6 +405,9 @@ function toCveFinding(wire: CveFindingWire): CveFinding {
     // dependency graph, which is not a claim that nothing depends on this
     // package (Req 10.10).
     blastRadius: wire.blast_radius ?? null,
+    isKernel: wire.is_kernel ?? false,
+    // `?? null`, never `?? false`: unknown may be running (Req 12.6).
+    kernelRunning: wire.kernel_running ?? null,
     // `?? null` deliberately, never `?? false`: an absent field means the
     // backend did not enrich this finding, which is not the same claim as
     // "this CVE is not being exploited".
@@ -708,6 +731,34 @@ export class CveScannerApiClient {
       `/api/machines/${encodeURIComponent(machineId)}`,
     );
     return toMachineSummary(wire);
+  }
+
+  /**
+   * GET /api/machines/{machineId}/kernel -- installed kernels and which one is
+   * running (Req 12.6, 12.8). `null` when nothing was collected yet.
+   */
+  async getMachineKernel(machineId: string): Promise<KernelInfo | null> {
+    const wire = await this.request<KernelWire | null>(
+      "GET",
+      `/api/machines/${encodeURIComponent(machineId)}/kernel`,
+    );
+    if (wire === null || wire === undefined) return null;
+    return {
+      release: wire.release,
+      checked: wire.checked,
+      runningInstalled: wire.running_installed,
+      rebootRequired: wire.reboot_required,
+      installed: wire.installed.map((k) => ({
+        package: k.package,
+        version: k.version,
+        running: k.running,
+        newest: k.newest,
+        // `?? null`, never `?? 0`: absent means not assessed (Req 12.9).
+        noFix: k.no_fix ?? null,
+        fixedElsewhere: k.fixed_elsewhere ?? null,
+      })),
+      upgradePackages: wire.upgrade_packages,
+    };
   }
 
   /** GET /api/machines/{machineId}/cves?severity= */

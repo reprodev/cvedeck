@@ -101,9 +101,10 @@ Everything is manual for now: no scheduled scans, and no automated remediation.
   openSUSE, SLES, Wolfi and Chainguard, through a five-tier resolution pipeline. A
   distribution without its own OSV tracker resolves onto the upstream it derives
   from; an unrecognised one queries every canonical ecosystem rather than
-  guessing. The running kernel and pending-reboot state are collected too, so a
-  fully patched host still running the kernel it booted from isn't reported as
-  clean.
+  guessing. The kernel is matched too, and each installed kernel is told apart as
+  running or not: a host that installed the fixed kernel and never rebooted is
+  told to reboot, not to upgrade again (Ubuntu's kernel is the exception, and
+  says so).
 
 - **Tells you what you can actually fix.** Findings are split into those with a
   vendor patch available in the host's repositories, those awaiting an upstream

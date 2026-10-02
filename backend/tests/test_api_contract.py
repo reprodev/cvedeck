@@ -213,6 +213,8 @@ _FINDING_KEYS = {
     # fleet-wide list does not build the dependency graph, so it omits this
     # rather than reporting an impact nobody measured (Req 10.10).
     "blast_radius": (str, type(None)),
+    "is_kernel": bool,
+    "kernel_running": (bool, type(None)),
     # Threat-intel enrichment. Every one of these is nullable on purpose:
     # null means "not enriched", which a client must render as unknown rather
     # than as a negative. Only an explicit false on kev_listed means the CVE

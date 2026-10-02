@@ -42,6 +42,7 @@ Nothing here is called during a normal scan. Seeding happens only when
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -91,7 +92,7 @@ _HOSTS: list[tuple[str, Platform, str, str, str | None, ScanStatus, float | None
     ("app-alma.lan",    Platform.LINUX,   "AlmaLinux",        "9.3",   "5.14.0-362.el9",  ScanStatus.SUCCESS, 48,   False, False),
     ("cache-01.lan",    Platform.LINUX,   "Alpine Linux",     "3.19",  "6.6.7-0-lts",     ScanStatus.SUCCESS, 1,    True,  False),
     ("build-arm.lan",   Platform.LINUX,   "Raspbian",         "12",    "6.1.0-rpi7-rpi-v8", ScanStatus.SUCCESS, 1, True,  False),
-    ("edge-proxy.lan",  Platform.LINUX,   "Rocky Linux",      "9.3",   "5.14.0-362.el9",  ScanStatus.SUCCESS, 1,    True,  False),
+    ("edge-proxy.lan",  Platform.LINUX,   "Rocky Linux",      "9.3",   "5.14.0-362.8.1.el9_3.x86_64", ScanStatus.SUCCESS, 1, True, False),
     # A month old: the fleet view flags this as stale.
     ("nas-01.lan",      Platform.LINUX,   "openSUSE Leap",    "15.5",  "5.14.21-150500",  ScanStatus.SUCCESS, 720,  True,  False),
     ("web-02.lan",      Platform.LINUX,   "Ubuntu",           "22.04", "5.15.0-91-generic", ScanStatus.SUCCESS, 1,  True,  False),
@@ -188,6 +189,78 @@ _FINDINGS_LINUX: list[
     ("CVE-2023-4039",   4.8, Severity.LOW,      "gcc-12",       "12.2.0-14",           False, 0.0003, 0.0912),
     ("CVE-2024-2236",   5.3, Severity.LOW,      "libgcrypt20",  "1.10.1-3",            False, 0.0002, 0.0655),
 ]
+# Kernels (Req 12.5, 12.6, 12.8), per host, because which kernel a host runs is
+# the point. Three hosts show the three things the kernel card can say:
+#
+#   - db-primary was upgraded and not rebooted. It runs 6.1.0-18 with 6.1.0-21
+#     installed beside it, so two of its live CVEs are fixed by a reboot, and
+#     one is in both kernels and needs an upgrade as well.
+#   - edge-proxy runs its newest kernel and still has an old one installed,
+#     whose CVEs matter only if it is booted again.
+#   - web-01 runs Ubuntu, whose kernel is not looked up: its kernel must read
+#     as not checked, never as a clean one.
+#
+# The other hosts carry no kernel package, which is what a container looks
+# like, and show no kernel card.
+#
+# (package, version, ecosystem) installed, then findings in _FINDINGS_LINUX's
+# shape with the package being "image@version": on Rocky every installed
+# kernel is called kernel-core, and only the version says which one a finding
+# is in.
+_KERNELS: dict[
+    str,
+    tuple[
+        list[tuple[str, str, str]],
+        list[tuple[str, float | None, Severity, str, str | None, bool | None, float | None, float | None]],
+    ],
+] = {
+    "db-primary.lan": (
+        [
+            ("linux-image-6.1.0-18-amd64", "6.1.76-1", "Debian:12"),
+            ("linux-image-6.1.0-21-amd64", "6.1.90-1", "Debian:12"),
+            ("linux-image-amd64", "6.1.90-1", "Debian:12"),
+        ],
+        [
+            ("CVE-2024-1086",  7.8, Severity.HIGH,   "linux-image-6.1.0-18-amd64@6.1.76-1", "6.1.90-1", True,  0.8851, 0.9952),
+            ("CVE-2024-36971", 7.8, Severity.HIGH,   "linux-image-6.1.0-18-amd64@6.1.76-1", "6.1.90-1", True,  0.0412, 0.9188),
+            ("CVE-2024-26925", 4.4, Severity.MEDIUM, "linux-image-6.1.0-18-amd64@6.1.76-1", "6.1.94-1", False, 0.0005, 0.1702),
+            ("CVE-2024-26925", 4.4, Severity.MEDIUM, "linux-image-6.1.0-21-amd64@6.1.90-1", "6.1.94-1", False, 0.0005, 0.1702),
+        ],
+    ),
+    "edge-proxy.lan": (
+        [
+            ("kernel-core", "5.14.0-362.8.1.el9_3", "Rocky Linux:9"),
+            ("kernel-core", "5.14.0-284.11.1.el9_2", "Rocky Linux:9"),
+        ],
+        [
+            ("CVE-2024-1086",  7.8, Severity.HIGH,   "kernel-core@5.14.0-362.8.1.el9_3", "5.14.0-362.24.1.el9_3", True,  0.8851, 0.9952),
+            ("CVE-2023-4623",  7.8, Severity.HIGH,   "kernel-core@5.14.0-284.11.1.el9_2", "5.14.0-362.8.1.el9_3",  False, 0.0011, 0.4417),
+        ],
+    ),
+    "web-01.lan": (
+        [
+            ("linux-image-5.15.0-91-generic", "5.15.0-91.101", "Ubuntu:22.04:LTS"),
+            ("linux-image-generic", "5.15.0.91.88", "Ubuntu:22.04:LTS"),
+        ],
+        [],
+    ),
+}
+
+# Kernel CVEs each kernel has with no fix in its host's release, counted rather
+# than listed (Req 12.9), in the stored form. Fictional, but the shape the real
+# answer has: a Debian 12 kernel's unfixable CVEs are mostly fixed only in
+# Debian 13. Hosts not listed were never assessed, which is not zero.
+_KERNEL_UNFIXED: dict[str, dict[str, dict[str, object]]] = {
+    "db-primary.lan": {
+        "linux-image-6.1.0-18-amd64@6.1.76-1": {"no_fix": 41, "elsewhere": {"Debian 13": 612}},
+        "linux-image-6.1.0-21-amd64@6.1.90-1": {"no_fix": 41, "elsewhere": {"Debian 13": 598}},
+    },
+    "edge-proxy.lan": {
+        "kernel-core@5.14.0-362.8.1.el9_3": {"no_fix": 3, "elsewhere": {}},
+        "kernel-core@5.14.0-284.11.1.el9_2": {"no_fix": 5, "elsewhere": {}},
+    },
+}
+
 # Hosts whose findings were never enriched. Their KEV and EPSS columns must
 # render as unknown -- not as a clean bill of health.
 _UNENRICHED_HOSTS = {"nas-01.lan", "build-arm.lan"}
@@ -406,6 +479,11 @@ def seed_demo_fleet(session: Session) -> int:
             os_version=os_version,
             kernel_version=kernel,
             reboot_required=reboot,
+            kernel_unfixed=(
+                json.dumps(_KERNEL_UNFIXED[hostname], sort_keys=True)
+                if hostname in _KERNEL_UNFIXED
+                else None
+            ),
             collected_at=_ago(hours=scanned_ago_h or 0),
             sync_status=SyncStatus.PENDING_SYNC,
         )
@@ -507,6 +585,50 @@ def seed_demo_fleet(session: Session) -> int:
                 )
             )
 
+        # Kernel packages carry their host's own ecosystem: Ubuntu's kernel is
+        # not looked up (Req 12.5), and recorded as "Debian" like the rest of
+        # the demo inventory it would read as checked and clean.
+        kernels, kernel_findings = _KERNELS.get(hostname, ([], []))
+        for name, version, kernel_eco in kernels:
+            session.add(
+                Package(
+                    id=_uid(),
+                    inventory_id=inventory.id,
+                    name=name,
+                    version=version,
+                    ecosystem=kernel_eco,
+                    source_name=None,
+                )
+            )
+        kernel_eco = kernels[0][2] if kernels else ecosystem
+        for cve_id, cvss, severity, package, fixed, kev, epss, pct in kernel_findings:
+            checked = _checked(enriched, partial, kev)
+            session.add(
+                CveFinding(
+                    id=_uid(),
+                    machine_id=machine.id,
+                    cve_id=cve_id,
+                    cvss_score=cvss,
+                    severity=severity,
+                    source="osv",
+                    # The kernel's real version, not the demo's 1.0-demo: it is
+                    # what ties a finding to the installed kernel it is in.
+                    package_identifier=(
+                        f"{kernel_eco}:{package}"
+                        + ("" if fixed is None else f" (fixed in {fixed})")
+                    ),
+                    kev_listed=kev if checked else None,
+                    kev_due_date="2024-07-01" if (checked and kev) else None,
+                    epss_score=epss if checked else None,
+                    epss_percentile=pct if checked else None,
+                    first_seen_at=baseline_at,
+                    sync_status=SyncStatus.PENDING_SYNC,
+                )
+            )
+            seeded.append(
+                (cve_id, cvss, severity, package.split("@")[0], kev if checked else None)
+            )
+
         count = len(seeded)
         by_cve = {row[0]: row for row in seeded}
         session.add(_run(machine, baseline_at, finding_count=count, baseline=True))
@@ -571,7 +693,7 @@ def seed_demo_fleet(session: Session) -> int:
 def _seed_intel_cache(session: Session) -> None:
     """Give the demo a fictional KEV and EPSS cache of its own (Req 15.6).
 
-    Derived from ``_FINDINGS_LINUX`` rather than written out again, so the cache
+    Derived from ``_FINDINGS_LINUX`` and ``_KERNELS`` rather than written out again, so the cache
     and the findings cannot disagree: the catalogue lists exactly the CVEs the
     fleet carries as exploited, and the score set carries exactly the
     probabilities its findings were given.
@@ -585,11 +707,14 @@ def _seed_intel_cache(session: Session) -> None:
     re-seeds. Shipping the cache instead means the demo is right on first paint
     and never needs the network at all.
 
-    Deliberately not a copy of the real catalogues. These are the four CVEs this
+    Deliberately not a copy of the real catalogues. These are the CVEs this
     fictional fleet treats as exploited; what CISA lists today is a question
     about the real world, which a demo has no business answering.
     """
-    kev_cves = [cve for cve, *_rest, kev, _s, _p in _FINDINGS_LINUX if kev is True]
+    catalogue = _FINDINGS_LINUX + [
+        row for _installed, rows in _KERNELS.values() for row in rows
+    ]
+    kev_cves = sorted({cve for cve, *_rest, kev, _s, _p in catalogue if kev is True})
     for cve_id in kev_cves:
         session.add(
             KevEntry(
@@ -600,11 +725,11 @@ def _seed_intel_cache(session: Session) -> None:
             )
         )
 
-    scored = [
+    scored = sorted({
         (cve, score, percentile)
-        for cve, *_rest, _kev, score, percentile in _FINDINGS_LINUX
+        for cve, *_rest, _kev, score, percentile in catalogue
         if score is not None and percentile is not None
-    ]
+    })
     for cve_id, score, percentile in scored:
         session.add(
             EpssScore(

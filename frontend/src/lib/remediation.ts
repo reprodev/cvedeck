@@ -411,7 +411,11 @@ export function buildBulkFixScript(
   platform: Platform | undefined,
   osName: string | undefined,
 ): string {
-  const fixable = findings.filter(hasFix);
+  // The kernel is left out: a fixed kernel arrives as a new package and runs
+  // only after a reboot, so --only-upgrade on the installed one fixes nothing
+  // (Req 12.8). The kernel section of the host's page has its own command.
+  const fixable = findings.filter((f) => hasFix(f) && !f.isKernel);
+  const kernelFixable = findings.filter((f) => hasFix(f) && f.isKernel).length;
   // Every binary of every fixable source, not just each representative.
   const packages = upgradeTargets(fixable);
 
@@ -443,7 +447,17 @@ export function buildBulkFixScript(
     commands.push(...packages.map((pkg) => tooling.updateCmd(pkg)));
   }
 
-  return [...header, ...commands, ...elsewhere, ""].join("\n");
+  const kernel =
+    kernelFixable > 0
+      ? [
+          "",
+          `# ${kernelFixable} kernel CVE(s) are not in this plan. A kernel is fixed by ` +
+            "installing a newer one and rebooting into it:",
+          "# see the Kernel section of this host's page.",
+        ]
+      : [];
+
+  return [...header, ...commands, ...elsewhere, ...kernel, ""].join("\n");
 }
 
 /** Comment lines describing the findings a package upgrade cannot clear. */

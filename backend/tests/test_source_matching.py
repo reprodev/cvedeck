@@ -132,15 +132,14 @@ def test_the_source_version_is_the_one_asked():
     assert ("bash", "5.2.15-2") in asked_versions
 
 
-def test_the_kernel_is_not_yet_looked_up_by_source():
-    """Req 12.5: the kernel waits for its own release; asked as before, by binary."""
+def test_the_kernel_is_looked_up_by_source_where_that_is_practical():
+    """Req 12.5: since 0.9.0 the kernel is asked under ``linux``, like any source."""
     asked: list[str] = []
     host = [_pkg("linux-image-6.1.0-9-amd64", "linux", "6.1.27-1")]
 
     _osv({}, asked).match_packages(host)
 
-    assert "linux" not in asked
-    assert "linux-image-6.1.0-9-amd64" in asked
+    assert "linux" in asked
     assert is_kernel_package("linux-image-6.1.0-9-amd64", "linux")
     assert is_kernel_package("linux-libc-dev", "linux")  # built from the kernel source
     assert not is_kernel_package("linux-base", "linux-base")

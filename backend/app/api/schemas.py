@@ -170,6 +170,13 @@ class CveFindingOut(BaseModel):
     #: by design, and a default of "low" there stated an impact nobody
     #: measured. Clients must render it as unassessed.
     blast_radius: str | None = None
+    #: Whether the finding is in a kernel rather than in userland (Req 12.8).
+    is_kernel: bool = False
+    #: For a kernel finding, whether it is in the kernel the host is running
+    #: (Req 12.6). ``None`` for a userland finding, where no inventory was
+    #: loaded, and where the host did not report its running kernel -- that
+    #: last one may well be running, and must not be shown as safely idle.
+    kernel_running: bool | None = None
 
     # --- Threat-intel enrichment ------------------------------------------
     # ``None`` throughout means "not enriched", which clients must render as
@@ -212,6 +219,44 @@ class HostKeyOut(BaseModel):
     first_seen_at: datetime
     last_seen_at: datetime
     machine_id: str | None = None
+
+
+class InstalledKernelOut(BaseModel):
+    """One installed kernel image (Req 12.6)."""
+
+    package: str
+    version: str
+    #: ``None`` when the host did not report its running kernel release.
+    running: bool | None
+    #: The highest version installed: what a reboot would most likely boot.
+    newest: bool
+    #: CVEs in this kernel with no fix in the host's release, counted rather
+    #: than listed as findings (Req 12.9): ``no_fix`` has no fix anywhere yet,
+    #: ``fixed_elsewhere`` is per release that has one. ``None`` when the scan
+    #: did not assess it -- not zero.
+    no_fix: int | None = None
+    fixed_elsewhere: dict[str, int] | None = None
+
+
+class KernelOut(BaseModel):
+    """A host's kernels, from its latest inventory (Req 12.5, 12.6, 12.8).
+
+    ``checked`` false means the kernel was not looked up at all -- Ubuntu's
+    kernel answer is too large to fetch, and some hosts are matched against a
+    tracker their kernel was not built from -- and its findings are absent
+    for that reason, not because there are none. ``running_installed`` false
+    means the running kernel comes from no installed package (a container, a
+    hand-built kernel), so nothing here was checked for it.
+    """
+
+    release: str | None
+    checked: bool
+    running_installed: bool | None
+    reboot_required: bool | None
+    installed: list[InstalledKernelOut]
+    #: What to upgrade to get a newer kernel; on Debian and Ubuntu the
+    #: metapackage, since a fixed kernel arrives under a new package name.
+    upgrade_packages: list[str]
 
 
 class ScanRunOut(BaseModel):

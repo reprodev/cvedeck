@@ -170,6 +170,20 @@ class NvdClient(Protocol):
         ...
 
 
+class PartialMatchError(Exception):
+    """A data source answered for some packages and not for others (Req 12.7).
+
+    Carries the advisories it did get. The matcher keeps them as findings and
+    still records the source as unavailable, so the scan is partial and
+    resolves nothing it did not see (Req 18.3) -- the kernel's lookup failing
+    does not cost a host its userland findings, nor read as its kernel patched.
+    """
+
+    def __init__(self, message: str, advisories: list[RawAdvisory]) -> None:
+        super().__init__(message)
+        self.advisories = advisories
+
+
 @runtime_checkable
 class OsvClient(Protocol):
     """Contract for a client that matches software inventory against OSV.dev.
@@ -293,8 +307,18 @@ class Matcher:
             osv_status = SourceStatus.DATA_SOURCE_UNAVAILABLE
         else:
             try:
-                raw_advisories = osv.match_packages(inventory.packages)
-                osv_status = SourceStatus.OK
+                try:
+                    raw_advisories = osv.match_packages(inventory.packages)
+                    osv_status = SourceStatus.OK
+                except PartialMatchError as partial:
+                    _LOGGER.warning(
+                        "OSV answered only in part for %s; recording "
+                        "DATA_SOURCE_UNAVAILABLE: %s",
+                        machine_id,
+                        partial,
+                    )
+                    raw_advisories = partial.advisories
+                    osv_status = SourceStatus.DATA_SOURCE_UNAVAILABLE
                 for raw in raw_advisories:
                     findings.append(
                         Finding(

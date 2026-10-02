@@ -5,8 +5,9 @@ The API names every installed binary of that source, because a fix command
 that upgraded only the representative would leave the rest vulnerable, and
 because what breaks if glibc goes is what depends on any part of it.
 
-Kernel packages are not matched yet, and each machine says how many it has, so
-a kernel with no findings does not read as a clean one.
+A kernel that is not looked up -- Ubuntu's, and hosts matched against a
+borrowed tracker -- is counted per machine, so a kernel with no findings does
+not read as a clean one (Req 12.5).
 """
 
 from __future__ import annotations
@@ -56,8 +57,8 @@ def _host(session, machine_id: str, packages: list[Package] | None, findings=())
     session.commit()
 
 
-def _pkg(name, source=None, deps=()):
-    return Package(name=name, version="2.36-9", ecosystem=ECO, source_name=source,
+def _pkg(name, source=None, deps=(), ecosystem=ECO):
+    return Package(name=name, version="2.36-9", ecosystem=ecosystem, source_name=source,
                    source_version="2.36-9" if source else None, dependencies=list(deps))
 
 
@@ -104,12 +105,18 @@ def test_the_fleet_list_names_the_binary_it_has(client, session):
 
 
 def test_each_machine_counts_its_unchecked_kernel_packages(client, session):
+    ubuntu = "Ubuntu:22.04:LTS"
     _host(session, "with-kernel", [
-        _pkg("linux-image-6.1.0-9-amd64", "linux"),
-        _pkg("linux-image-6.1.0-18-amd64", "linux"),
-        _pkg("linux-libc-dev", "linux"),  # headers for userspace, from the kernel source
-        _pkg("linux-base", "linux-base"),  # not a kernel
-        _pkg("libc6", "glibc"),
+        _pkg("linux-image-5.15.0-25-generic", "linux-signed", ecosystem=ubuntu),
+        _pkg("linux-modules-5.15.0-25-generic", "linux", ecosystem=ubuntu),
+        _pkg("linux-libc-dev", "linux", ecosystem=ubuntu),  # userspace headers, from the kernel source
+        _pkg("linux-base", "linux-base", ecosystem=ubuntu),  # not a kernel
+        _pkg("libc6", "glibc", ecosystem=ubuntu),
+    ])
+    # Debian's kernel is looked up (Req 12.5), so none of it is unchecked.
+    _host(session, "debian-kernel", [
+        _pkg("linux-image-6.1.0-9-amd64", "linux-signed-amd64"),
+        _pkg("linux-libc-dev", "linux"),
     ])
     _host(session, "no-kernel", [_pkg("libc6", "glibc")])  # a container
     _host(session, "never-scanned", None)
@@ -118,13 +125,14 @@ def test_each_machine_counts_its_unchecked_kernel_packages(client, session):
 
     # linux-libc-dev is built from the linux source, so it is not checked either.
     assert by_id["with-kernel"]["kernel_packages_unchecked"] == 3
+    assert by_id["debian-kernel"]["kernel_packages_unchecked"] == 0
     assert by_id["no-kernel"]["kernel_packages_unchecked"] == 0
     assert by_id["never-scanned"]["kernel_packages_unchecked"] is None
     assert client.get("/api/machines/with-kernel").json()["kernel_packages_unchecked"] == 3
 
 
 def test_only_the_latest_inventory_counts(client, session):
-    _host(session, "m1", [_pkg("linux-image-6.1.0-9-amd64", "linux")])
+    _host(session, "m1", [_pkg("linux-image-6.1.0-9-amd64", "linux", ecosystem="Ubuntu:22.04:LTS")])
     Repository(session).save_inventory(Inventory(
         machine_id="m1", os_info=OsInfo(name="Debian", version="12"), packages=[_pkg("libc6")]))
     session.commit()

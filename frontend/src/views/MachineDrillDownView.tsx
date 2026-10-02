@@ -16,6 +16,7 @@ import {
   type CveFinding,
   type FindingChangeRow,
   type HostKeyPin,
+  type KernelInfo,
   type Platform,
   type ScanRun,
   type RemediationStatus,
@@ -40,6 +41,8 @@ import { ScanHistoryPanel } from "../components/ScanHistoryPanel";
 import { RemediationCell } from "../components/RemediationCell";
 import { CveDetailModal } from "../components/CveDetailModal";
 import { OtherPortPins } from "../components/OtherPortPins";
+import { KernelCard } from "../components/KernelCard";
+import { filterByKernel, type KernelScope } from "../lib/kernel";
 import { impactBadgeLabel, impactTone } from "../lib/impact";
 import { Modal } from "../components/Modal";
 import { Icon } from "../components/Icon";
@@ -111,6 +114,11 @@ export interface MachineDrillDownViewProps {
    * (Req 12.5). Null when no inventory was collected.
    */
   kernelPackagesUnchecked?: number | null;
+  /**
+   * Load the host's kernels (Req 12.6, 12.8). Given, the kernel card replaces
+   * the not-checked note above and says which kernel is running.
+   */
+  onLoadKernel?: () => Promise<KernelInfo | null>;
   /** Load the host's scan runs. Omitted, the scan history panel is not shown. */
   onLoadScanRuns?: (limit: number) => Promise<ScanRun[]>;
   /** Load one run's new and resolved findings. */
@@ -182,6 +190,7 @@ export function MachineDrillDownView({
   lastScanResolved = null,
   lastScanBaseline = false,
   kernelPackagesUnchecked = null,
+  onLoadKernel,
   onLoadScanRuns,
   onLoadScanChanges,
 }: MachineDrillDownViewProps) {
@@ -207,6 +216,10 @@ export function MachineDrillDownView({
           : "The last scan completed and matched nothing. If an advisory source had been unreachable, the fleet view would show a partial-results warning for this host."
         : "The findings shown here are whatever the last successful scan recorded; a failed scan neither adds nor clears any. Fix the cause and scan again.";
   const [newOnly, setNewOnly] = useState(false);
+  // Kernel or userland (Req 12.8): one kernel source can carry hundreds of
+  // CVEs, and someone patching userland needs to see past them.
+  const [kernelScope, setKernelScope] = useState<KernelScope>("all");
+  const hasKernelFindings = useMemo(() => findings.some((f) => f.isKernel), [findings]);
   const [confirmForget, setConfirmForget] = useState(false);
   const [forgetting, setForgetting] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
@@ -331,10 +344,11 @@ export function MachineDrillDownView({
   // Filter by severity (Requirement 3.3), and to what the last scan found new
   // (Req 18.6).
   const severityFilteredFindings = useMemo(() => {
+    const scoped = filterByKernel(findings, kernelScope);
     const bySeverity =
-      severityFilter === "all" ? findings : filterBySeverity(findings, severityFilter);
+      severityFilter === "all" ? scoped : filterBySeverity(scoped, severityFilter);
     return newOnly ? bySeverity.filter((f) => f.isNew) : bySeverity;
-  }, [findings, severityFilter, newOnly]);
+  }, [findings, kernelScope, severityFilter, newOnly]);
 
   // Filter by patch readiness
   const patchFilteredFindings = useMemo(() => {
@@ -462,7 +476,7 @@ export function MachineDrillDownView({
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [severityFilter, patchFilter, searchQuery, viewMode]);
+  }, [severityFilter, patchFilter, searchQuery, viewMode, kernelScope]);
 
   // Pagination for CVEs
   const totalCvePages = Math.ceil(visibleFindings.length / pageSize) || 1;
@@ -617,7 +631,15 @@ export function MachineDrillDownView({
         </div>
       )}
 
-      {kernelPackagesUnchecked !== null && kernelPackagesUnchecked > 0 && (
+      {onLoadKernel ? (
+        <KernelCard
+          findings={findings}
+          findingsLoaded={findingsLoaded}
+          platform={platform}
+          osName={osName}
+          onLoad={onLoadKernel}
+        />
+      ) : kernelPackagesUnchecked !== null && kernelPackagesUnchecked > 0 && (
         // A question not asked must not look answered: a kernel with no
         // findings below would otherwise read as a clean one (Req 12.5).
         <div className="release-fix-notice" role="note" data-testid="kernel-unchecked">
@@ -625,10 +647,10 @@ export function MachineDrillDownView({
           <div>
             <strong>
               {kernelPackagesUnchecked} kernel package{kernelPackagesUnchecked === 1 ? " is" : "s are"}{" "}
-              not checked against advisories yet.
+              not checked against advisories.
             </strong>{" "}
-            CveDeck does not match the kernel yet, so the findings below say nothing
-            about it. Keep the kernel updated through your distribution until it does.
+            CveDeck does not look up the kernel on this distribution, so the findings
+            below say nothing about it. Keep the kernel updated through your distribution.
           </div>
         </div>
       )}
@@ -895,6 +917,20 @@ export function MachineDrillDownView({
               />
             </div>
 
+            {hasKernelFindings && (
+              <select
+                className="kernel-scope-select"
+                value={kernelScope}
+                onChange={(e) => setKernelScope(e.target.value as KernelScope)}
+                aria-label="Kernel or userland findings"
+                data-testid="kernel-scope"
+              >
+                <option value="all">Kernel and userland</option>
+                <option value="userland">Userland only</option>
+                <option value="kernel">Kernel only</option>
+              </select>
+            )}
+
             {/* The severity dropdown that stood here is now the chip row in the
                 host summary above -- same filter, one control. */}
           </div>
@@ -983,6 +1019,7 @@ export function MachineDrillDownView({
                 { label: "search", value: searchQuery.trim() },
                 { label: "severity", value: severityFilter === "all" ? "" : severityFilter },
                 { label: "new", value: newOnly ? "new only" : "" },
+                { label: "scope", value: kernelScope === "all" ? "" : kernelScope },
                 { label: "patch state", value: patchFilter === "all" ? "" : patchFilter },
                 { label: "blast radius", value: blastFilter === "all" ? "" : blastFilter },
               ]}
@@ -990,6 +1027,7 @@ export function MachineDrillDownView({
                 setSearchQuery("");
                 setSeverityFilter("all");
                 setNewOnly(false);
+                setKernelScope("all");
                 setPatchFilter("all");
                 setBlastFilter("all");
                 setCurrentPage(1);

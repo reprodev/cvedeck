@@ -63,6 +63,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 6. WHERE an advisory names a qualitative severity but publishes no CVSS_Score that can be parsed under its own version of the CVSS specification, THE Scanner_Engine SHALL record that Severity_Level and SHALL record no CVSS_Score, rather than substituting a number from within the band.
 7. IF a CVE has neither a CVSS_Score that can be parsed nor a qualitative severity, THEN THE Scanner_Engine SHALL record its Severity_Level as Unscored and its CVSS_Score as absent, and SHALL NOT substitute a default score, so that an unmeasured finding is never presentable as a measured one.
 8. WHEN THE Scanner_Engine looks up a package's advisories, THE Scanner_Engine SHALL ask under the package's source name and source version as well as under the binary's own, since distributions publish advisories under either, and SHALL report each advisory once per source package however many of its binaries are installed and however many of the names asked found it.
+9. WHEN OSV_Source answers a query in pages, THE Scanner_Engine SHALL read every page before using the answer, and IF any page cannot be read or the answer exceeds a fixed page ceiling, THEN THE Scanner_Engine SHALL treat the whole query as unanswered rather than use the pages that arrived.
 
 ### Requirement 3: Machine List and Severity Filtering
 
@@ -212,7 +213,8 @@ incomplete, so that I do not mistake a partial scan for a clean host.
 11. WHERE a CVE_Finding has no CVSS_Score, THE Web_Dashboard, THE Backend_API and
    their exports SHALL present it as unscored rather than as any numeric value,
    and SHALL rank it below Critical and above High, since an unmeasured finding
-   could be either (extends the enrichment invariant).
+   could be either (extends the enrichment invariant), except a kernel finding,
+   which Requirement 12.10 places.
 12. WHERE CVE_Findings are ordered by CVSS_Score, THE CVE_Scanner_System SHALL
    place a finding that has no score explicitly and identically on every
    supported database, rather than inheriting the store's default ordering for
@@ -300,11 +302,37 @@ as clean.
    read.
 4. THE collection commands SHALL remain read-only, containing no filesystem
    write redirect.
-5. UNTIL the system matches kernel packages against the advisories published
-   for their source, THE system SHALL NOT present a host's kernel packages as
-   checked: it SHALL state, for each host, how many installed kernel packages
-   were not checked against advisories, since a kernel with no findings would
-   otherwise read as a clean one.
+5. WHERE a kernel's advisories can be obtained at a practical cost, THE system
+   SHALL match each installed kernel against the advisories published for its
+   source, asking under the source a signed kernel image wraps. WHERE they
+   cannot, THE system SHALL NOT present the host's kernel as checked: it SHALL
+   state, for that host, that its kernel was not checked and why, since a
+   kernel with no findings would otherwise read as a clean one.
+6. THE system SHALL tell each kernel finding apart as belonging to the running
+   kernel, to a kernel that is installed but not running, or -- where the
+   running kernel release is not known -- to a kernel that may be running; and
+   IF the running kernel release matches no installed kernel package, THEN THE
+   system SHALL state that the running kernel was not checked.
+7. IF a kernel's advisories cannot be obtained during a Scan, THEN THE system
+   SHALL keep the findings obtained for every other package, SHALL record the
+   Scan as partial, and SHALL NOT resolve any finding on the strength of it.
+8. THE dashboard SHALL show a host's kernel findings apart from its other
+   findings while counting them in every total and export, SHALL offer to show
+   either part alone, and SHALL state the action that fixes them: a reboot
+   where the kernel a reboot would bring up is installed and does not have the
+   finding, otherwise an upgrade of the kernel followed by a reboot. It SHALL
+   NOT offer an upgrade command that cannot bring a newer kernel.
+9. THE system SHALL record a kernel CVE as a CVE_Finding only where the host's
+   own release has a fix for it, where it is known exploited, or where it was
+   not checked against the exploited-vulnerability catalogue; it SHALL count
+   the others per installed kernel, by whether and where a fix exists, and the
+   dashboard SHALL state those counts. WHERE a Scan did not obtain the
+   kernel's advisories, THE system SHALL record the counts as not assessed
+   rather than as zero. A counted CVE SHALL be assessed again at the next Scan.
+10. WHERE a kernel finding has no CVSS_Score and no published severity, THE
+    Web_Dashboard SHALL rank it after every scored finding of the host, while
+    still ranking known-exploited findings first: a distribution that rates
+    no kernel CVE would otherwise place thousands of them above every High.
 
 ### Requirement 13: Fleet-scale operation
 

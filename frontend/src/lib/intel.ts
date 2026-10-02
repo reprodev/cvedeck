@@ -141,6 +141,13 @@ export function sortByRisk(findings: CveFinding[]): CveFinding[] {
     const bKev = isKnownExploited(b) ? 1 : 0;
     if (aKev !== bKev) return bKev - aKev;
 
+    // A kernel installed but not running is exposed only if it is booted
+    // again, so its findings follow everything live. Unknown counts as live
+    // (Req 12.6).
+    const aIdle = a.isKernel && a.kernelRunning === false ? 1 : 0;
+    const bIdle = b.isKernel && b.kernelRunning === false ? 1 : 0;
+    if (aIdle !== bIdle) return aIdle - bIdle;
+
     const aEpss = a.epssScore ?? -1;
     const bEpss = b.epssScore ?? -1;
     if (aEpss !== bEpss) return bEpss - aEpss;

@@ -120,6 +120,10 @@ class Inventory(Base):
     # Whether a reboot is pending; NULL when the distribution offers no
     # read-only way to ask.
     reboot_required: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Kernel CVEs with no fix in the host's release, counted per installed
+    # kernel rather than stored as findings (Req 12.9). JSON text; NULL when the
+    # kernel was not looked up -- not assessed, not zero.
+    kernel_unfixed: Mapped[str | None] = mapped_column(String, nullable=True)
     collected_at: Mapped[datetime] = mapped_column(nullable=False)
     sync_status: Mapped[SyncStatus] = mapped_column(
         SqlEnum(SyncStatus, name="sync_status"), nullable=False
