@@ -185,3 +185,48 @@ def in_family(ecosystem: str, family: str) -> bool:
     """Whether an OSV ecosystem string belongs to a distribution family."""
     prefix = _FAMILY_PREFIXES.get(family)
     return bool(prefix and (ecosystem or "").lower().startswith(prefix))
+
+
+#: Red Hat product names in OSV ecosystem strings, as Red Hat writes them.
+_RED_HAT_PRODUCTS = {
+    "enterprise_linux": "RHEL {v}",
+    "enterprise_linux_eus": "RHEL {v} EUS",
+    "enterprise_linux_nvidia": "RHEL {v} for NVIDIA",
+    "rhel_eus": "RHEL {v} EUS",
+    "rhel_aus": "RHEL {v} AUS",
+    "rhel_e4s": "RHEL {v} E4S",
+    "rhel_tus": "RHEL {v} TUS",
+    "rhel_mission_critical": "RHEL {v} Mission Critical",
+    "openshift": "OpenShift {v}",
+    "hummingbird": "Red Hat Hummingbird {v}",
+}
+
+
+def release_display_name(ecosystem: str) -> str:
+    """A person's name for the release an OSV ecosystem string names.
+
+    Display only. :func:`parse_release` deliberately does not recognise most of
+    these -- RHEL's minor-version and extended-support streams are not a host's
+    release, and treating them as one would change which advisories are
+    filtered -- but when a fix note has to name one, it should read
+    ``RHEL 10.2``, not ``Red Hat:enterprise_linux:10.2``. Anything not
+    recognised is returned as it is: an exact name beats a wrong one.
+    """
+    eco = (ecosystem or "").strip()
+    if release := parse_release(eco):
+        return release.label
+    if m := re.fullmatch(r"Red Hat:([a-z0-9_]+):([0-9][0-9.]*)(?:::?[A-Za-z0-9_]+)?", eco):
+        product, version = m.group(1), m.group(2)
+        template = _RED_HAT_PRODUCTS.get(product)
+        if template:
+            return template.format(v=version)
+        if product.startswith("rhel_"):
+            # rhel_els, and whatever extended stream comes next.
+            return f"RHEL {version} {product[len('rhel_'):].replace('_', ' ').upper()}"
+        return f"Red Hat {product.replace('_', ' ').title()} {version}"
+    return eco
+
+
+def display_version(version: str) -> str:
+    """A fixed version as shown: an explicit ``0:`` epoch is the same as none."""
+    return version[2:] if version.startswith("0:") else version

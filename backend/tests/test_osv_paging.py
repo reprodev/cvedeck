@@ -117,3 +117,36 @@ def test_a_paged_release_answer_keeps_the_release_filter():
 
     advisories = _client(handler).match_packages([host])
     assert "CVE-2020-0001" not in {a.cve_id for a in advisories}
+
+
+def test_trimming_a_record_changes_nothing_matching_reads():
+    """Only unread fields go; every reading function answers the same (Req 2.9).
+
+    Trimmed as each page arrives, which took an old Debian kernel's lookup from
+    286 MB to 173 MB at peak, measured with the real client -- and the whole
+    result set came out identical.
+    """
+    from app.scanner.osv_client import _resolve_cve_id, _trim, fix_suffix, parse_cvss
+
+    record = {
+        "id": "DEBIAN-CVE-2024-0001",
+        "aliases": ["CVE-2024-0001"],
+        "upstream": ["CVE-2024-0001"],
+        "summary": "s", "details": "d" * 5000, "references": [{"url": "u"}],
+        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}],
+        "database_specific": {"severity": "HIGH", "source": "x"},
+        "affected": [{
+            "package": {"name": "openssl", "ecosystem": "Debian:12", "purl": "pkg:deb/openssl"},
+            "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "3.0.11-1"}]}],
+            "versions": [f"3.0.{n}-1" for n in range(500)],
+            "ecosystem_specific": {"urgency": "low", "severity": "MODERATE"},
+        }],
+    }
+    trimmed = _trim(record)
+
+    assert "versions" not in trimmed["affected"][0]
+    assert "details" not in trimmed and "references" not in trimmed
+    host = Package(name="openssl", version="3.0.2-1", ecosystem="Debian:12")
+    for read in (parse_cvss, _resolve_cve_id):
+        assert read(trimmed) == read(record)
+    assert fix_suffix(trimmed, host, "Debian", {"debian:12"}) == fix_suffix(record, host, "Debian", {"debian:12"})

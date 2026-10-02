@@ -10,8 +10,8 @@ CVE IDs, CVSS base scores, and package identifiers (Req 2.2, 2.3, 7.1).
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any, Callable
 
 import httpx
 
@@ -34,7 +34,9 @@ from app.scanner.releases import (
     Release,
     host_releases,
     in_family,
+    display_version,
     parse_release,
+    release_display_name,
     release_query_ecosystems,
 )
 from app.scanner.http_bounds import MIB, request_limited
@@ -364,7 +366,10 @@ def fix_suffix(
                     newer.append(((0, release.key), release.label, fixed))
         if newer:
             _order, label, fixed = min(newer)
-            return f" (no fix in {host[0].label}{ELSEWHERE_MARKER}{label}: {fixed})"
+            return (
+                f" (no fix in {host[0].label}{ELSEWHERE_MARKER}{label}: "
+                f"{display_version(fixed)})"
+            )
         return ""
 
     if not host:
@@ -377,9 +382,8 @@ def fix_suffix(
     for b, fixed in fixes:
         if fixed:
             eco = _block_ecosystem(b)
-            release = parse_release(eco)
-            label = release.label if release else (eco or queried_ecosystem)
-            return f" {UPSTREAM_MARKER}{label}: {fixed})"
+            label = release_display_name(eco) if eco else queried_ecosystem
+            return f" {UPSTREAM_MARKER}{label}: {display_version(fixed)})"
     return ""
 
 
@@ -455,8 +459,58 @@ class OsvPagingLimitError(ValueError):
     """
 
 
+def _severity_only(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict) and "severity" in value:
+        return {"severity": value["severity"]}
+    return None
+
+
+def _trim(vuln: dict[str, Any]) -> dict[str, Any]:
+    """Keep only what matching reads from an OSV record.
+
+    The id, aliases and upstream (the CVE id), severity, and per affected
+    package its name, ecosystem, range events and severity. OSV records also
+    carry a description, references and -- for distribution packages --
+    enumerated lists of every affected version, which for an old Debian kernel
+    is most of a 74 MB answer held in memory for nothing. Trimmed as each page
+    arrives, so the full records never accumulate.
+    """
+    out: dict[str, Any] = {
+        key: vuln[key] for key in ("id", "aliases", "upstream", "severity") if key in vuln
+    }
+    if (db := _severity_only(vuln.get("database_specific"))) is not None:
+        out["database_specific"] = db
+    affected = []
+    for aff in vuln.get("affected") or []:
+        if not isinstance(aff, dict):
+            continue
+        package = aff.get("package") or {}
+        entry: dict[str, Any] = {
+            "package": {
+                key: package[key] for key in ("name", "ecosystem") if key in package
+            },
+            "ranges": [
+                {"events": rng.get("events") or []}
+                for rng in aff.get("ranges") or []
+                if isinstance(rng, dict)
+            ],
+        }
+        if (eco := _severity_only(aff.get("ecosystem_specific"))) is not None:
+            entry["ecosystem_specific"] = eco
+        affected.append(entry)
+    out["affected"] = affected
+    return out
+
+
+def _id_only(vuln: dict[str, Any]) -> dict[str, Any]:
+    return {"id": vuln.get("id")}
+
+
 def _query_all_pages(
-    client: httpx.Client, url: str, payload: dict[str, Any]
+    client: httpx.Client,
+    url: str,
+    payload: dict[str, Any],
+    keep: Callable[[dict[str, Any]], dict[str, Any]] = _trim,
 ) -> list[dict[str, Any]]:
     """Every advisory OSV has for one ``/query``, across all its pages (Req 2.9).
 
@@ -472,7 +526,7 @@ def _query_all_pages(
         resp = request_limited(client, "POST", url, limit=_MAX_OSV_RESPONSE, json=body)
         resp.raise_for_status()
         data = resp.json()
-        vulns.extend(data.get("vulns") or [])
+        vulns.extend(keep(v) for v in data.get("vulns") or [] if isinstance(v, dict))
         token = data.get("next_page_token")
         if not token:
             return vulns
@@ -652,23 +706,32 @@ class OsvHttpClient:
             should_close = True
 
         try:
-            vulnerable_all, matched_ids = self._filter_vulnerable_queries(
-                client, query_items + release_items
-            )
-            release_pairs = set(map(_pair_key, release_items))
-            vulnerable_queries = [
-                item for item in vulnerable_all if _pair_key(item) not in release_pairs
-            ]
-            release_ids = _release_ids(uncached_packages, query_items + release_items, matched_ids)
-            if not vulnerable_queries:
-                # Cache negative matches to avoid re-querying safe packages
-                for p in uncached_packages:
-                    self._advisory_cache[f"{p.ecosystem}:{p.name}:{p.version}"] = []
-                return self._deduplicate_findings(cached_results)
+            with ThreadPoolExecutor(max_workers=self._max_workers) as side:
+                pending: dict[tuple[str, str], Future] = {}
+                vulnerable_all, matched_ids = self._filter_vulnerable_queries(
+                    client, query_items + release_items, side, pending
+                )
+                release_pairs = set(map(_pair_key, release_items))
+                vulnerable_queries = [
+                    item for item in vulnerable_all if _pair_key(item) not in release_pairs
+                ]
+                if not vulnerable_queries:
+                    # Cache negative matches to avoid re-querying safe packages
+                    for p in uncached_packages:
+                        self._advisory_cache[f"{p.ecosystem}:{p.name}:{p.version}"] = []
+                    return self._deduplicate_findings(cached_results)
 
-            fetched = self._fetch_advisories(
-                client, vulnerable_queries, uncached_packages, release_ids
-            )
+                def release_ids() -> dict[str, tuple[set[str], set[str] | None]]:
+                    for key, future in pending.items():
+                        _item, found_all = future.result()
+                        matched_ids[key] = found_all
+                    return _release_ids(
+                        uncached_packages, query_items + release_items, matched_ids
+                    )
+
+                fetched = self._fetch_advisories(
+                    client, vulnerable_queries, uncached_packages, release_ids
+                )
             all_results = cached_results + fetched
             return self._deduplicate_findings(all_results)
         finally:
@@ -758,6 +821,8 @@ class OsvHttpClient:
         self,
         client: httpx.Client,
         query_items: list[tuple[Package, str]],
+        side: ThreadPoolExecutor | None = None,
+        pending: dict[tuple[str, str], Future] | None = None,
     ) -> tuple[list[tuple[Package, str]], dict[tuple[str, str], set[str] | None]]:
         """Batch query OSV to find which (package, ecosystem) pairs have findings.
 
@@ -818,12 +883,18 @@ class OsvHttpClient:
             pkg, eco = item
             payload = {"package": {"name": pkg.name, "ecosystem": eco}, "version": pkg.version}
             try:
-                vulns = _query_all_pages(client, query_url, payload)
+                vulns = _query_all_pages(client, query_url, payload, keep=_id_only)
             except (httpx.HTTPError, ValueError):
                 return item, None
             return item, {str(v.get("id")) for v in vulns if v.get("id")}
 
-        if paged:
+        if paged and side is not None and pending is not None:
+            # Not waited for here: the full answers are fetched meanwhile, and
+            # these ids are only needed to filter them (see _fetch_advisories).
+            # Measured on an old Debian kernel, this re-read alone is ~40 s.
+            for item in paged:
+                pending[_pair_key(item)] = side.submit(_all_ids, item)
+        elif paged:
             with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
                 for item, found_all in pool.map(_all_ids, paged):
                     ids[_pair_key(item)] = found_all
@@ -835,7 +906,11 @@ class OsvHttpClient:
         client: httpx.Client,
         vulnerable_queries: list[tuple[Package, str]],
         uncached_packages: list[Package],
-        release_ids: dict[str, tuple[set[str], set[str] | None]] | None = None,
+        release_ids: (
+            dict[str, tuple[set[str], set[str] | None]]
+            | Callable[[], dict[str, tuple[set[str], set[str] | None]]]
+            | None
+        ) = None,
     ) -> list[RawAdvisory]:
         """Fetch full advisory details for vulnerable packages and populate cache.
 
@@ -894,6 +969,11 @@ class OsvHttpClient:
                         if release:
                             self._tracked_releases.add((release.family, release.key))
         described = set(self._tracked_releases)
+
+        # Resolved only now, after the full answers arrived: a release's ids
+        # may still have been arriving alongside them.
+        if callable(release_ids):
+            release_ids = release_ids()
 
         for pkg, eco, vulns in answered:
             cache_key = _cache_key(pkg)

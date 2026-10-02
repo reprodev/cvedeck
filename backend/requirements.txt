@@ -2,7 +2,7 @@
 # Development and test dependencies live in requirements-dev.txt.
 fastapi==0.141.1
 pydantic==2.13.5
-sqlalchemy==2.0.54
+sqlalchemy==2.1.0
 alembic==1.20.0
 paramiko==5.0.0
 pywinrm==0.5.0

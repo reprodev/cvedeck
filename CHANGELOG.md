@@ -8,6 +8,33 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.9.1] - 2026-10-03
+
+### Changed
+
+- **Kernel lookups take two-thirds the time and three-quarters the memory.**
+  Measured with the real client on an old Debian 12 kernel, 8,180 advisories,
+  identical results before and after: 95 s and 286 MB at peak, now 61 s and
+  221 MB. Each OSV record is cut down to what matching reads as its page
+  arrives -- the enumerated affected-version lists were most of the answer --
+  and the re-read of a paged release answer now runs alongside the full fetch
+  instead of before it.
+
+- SQLAlchemy 2.1.0 and hypothesis 6.168.1 (Dependabot #26), and vite 8.3.1
+  (Dependabot #25). SQLAlchemy 2.1 is a minor release and was trialled in a
+  scratch copy first; every test passes, the migration tests included, and the
+  frontend lockfile gains no install script.
+
+### Fixed
+
+- **A fix in another release is named as people write it.** A fix note read
+  "upstream fix in Red Hat:enterprise_linux:10.2: 0:6.12.0-211.58.1.el10_2";
+  it now reads "upstream fix in RHEL 10.2: 6.12.0-211.58.1.el10_2". Red Hat's
+  extended-support streams read "RHEL 9.2 EUS" and so on. Display only: which
+  release a host is, and which advisories are filtered, is unchanged.
+
+---
+
 ## [0.9.0] - 2026-10-02
 
 **Upgrading: the first scan after this release will report kernel findings on

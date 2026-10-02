@@ -22,6 +22,7 @@ from app.scanner.osv_client import OsvHttpClient, fix_suffix
 from app.scanner.releases import (
     host_releases,
     parse_release,
+    release_display_name,
     release_query_ecosystems,
 )
 
@@ -281,3 +282,46 @@ def test_red_hat_advisories_for_other_products_do_not_affect_rhel_9():
     found = _by_id(client.match_packages([pkg]))
 
     assert list(found.values()) == ["Red Hat:9:curl@7.76.1-26.el9 (fixed in 7.76.1-26.el9_3.2)"]
+
+
+@pytest.mark.parametrize(
+    "eco, shown",
+    [
+        ("Red Hat:enterprise_linux:10.2", "RHEL 10.2"),
+        ("Red Hat:rhel_eus:9.2::baseos", "RHEL 9.2 EUS"),
+        ("Red Hat:rhel_aus:8.4::baseos", "RHEL 8.4 AUS"),
+        ("Red Hat:rhel_els:7.9::server", "RHEL 7.9 ELS"),
+        ("Red Hat:enterprise_linux_nvidia:10::el10", "RHEL 10 for NVIDIA"),
+        ("Red Hat:openshift:4.13::el9", "OpenShift 4.13"),
+        ("Red Hat:hummingbird:1", "Red Hat Hummingbird 1"),
+        ("Red Hat:enterprise_linux:9::baseos", "RHEL 9"),
+        ("Debian:13", "Debian 13"),
+        # Not recognised: shown exactly, never guessed at.
+        ("SUSE:Linux Enterprise Server 15 SP6", "SUSE:Linux Enterprise Server 15 SP6"),
+    ],
+)
+def test_release_names_are_shown_as_people_write_them(eco, shown):
+    """Display only: the release filter's own parsing is unchanged (Req 14.8)."""
+    assert release_display_name(eco) == shown
+
+
+def test_names_shown_do_not_change_which_releases_are_parsed():
+    """RHEL's minor and extended streams stay unparsed, so filtering is unchanged."""
+    assert parse_release("Red Hat:enterprise_linux:10.2") is None
+    assert parse_release("Red Hat:rhel_eus:9.2::baseos") is None
+
+
+def test_an_upstream_fix_note_reads_cleanly_and_still_parses():
+    """``0:`` is no epoch at all; the label is a release name (Req 14.8)."""
+    pkg = Package(name="curl", version="8.6.0-10.fc40", ecosystem="Fedora")
+    vuln = _vuln("RHSA-x", _aff("Red Hat:enterprise_linux:10.2", fixed="0:8.12.1-2.el10_2"))
+
+    suffix = fix_suffix(vuln, pkg, "Red Hat", set())
+
+    assert suffix == " (not confirmed for this release; upstream fix in RHEL 10.2: 8.12.1-2.el10_2)"
+    assert parse_fix("Fedora:curl@8.6.0-10.fc40" + suffix) == ("upstream", "RHEL 10.2", "8.12.1-2.el10_2")
+
+
+def test_a_real_epoch_is_kept():
+    vuln = _vuln("X", _aff("Debian:13"), _aff("Debian:14", fixed="1:9.18.24-1"))
+    assert fix_suffix(vuln, DEBIAN_13, "Debian", {"debian:13"}).endswith("Debian 14: 1:9.18.24-1)")
