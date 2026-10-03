@@ -193,6 +193,7 @@ class ScannerEngine:
         collector_factory: Callable[..., InventoryCollector] = get_collector,
         record_status: Callable[[TargetMachine, "MachineScan"], None] | None = None,
         enricher: _Enricher | None = None,
+        ubuntu_kernel_source: object | None = None,
     ) -> None:
         self._repository = repository
         self._credentials_for = credentials_for
@@ -202,6 +203,10 @@ class ScannerEngine:
         self._collector_factory = collector_factory
         self._record_status = record_status
         self._enricher = enricher
+        # Fetches an Ubuntu release's kernel feed the first time a scan needs
+        # it (Req 12.11); None leaves it to the scheduled refresh.
+        self._ubuntu_kernel_source = ubuntu_kernel_source
+        self._ubuntu_feeds_tried: set[str] = set()
 
     def set_credentials(self, credentials_by_id: dict[str, Credentials]) -> None:
         """Install a per-target credential lookup from an id -> credentials map.
@@ -370,8 +375,45 @@ class ScannerEngine:
                 and repository.count_ubuntu_kernel_entries(codename) > 0
             )
 
+        self._fetch_ubuntu_feed_if_needed(inventory, usable)
         return check_ubuntu_kernel(
             inventory, repository, enabled=ubuntu_kernel_feed_enabled(), feed_usable=usable
+        )
+
+    def _fetch_ubuntu_feed_if_needed(self, inventory: Inventory, usable) -> None:
+        """Fetch a release's kernel feed now, if a scan needs it and has none.
+
+        Feeds are refreshed for the releases the fleet already runs, so the
+        first host of a new release used to wait for the next scheduled
+        refresh -- up to a day of "not fetched yet" for a kernel that could be
+        checked. Tried once per release per batch, whether or not it works: a
+        failed fetch leaves the kernel saying why, and is not retried for every
+        host of the same release. An end-of-life release is never fetched; it
+        is not checked either way.
+        """
+        if self._ubuntu_kernel_source is None:
+            return
+        from app.config import ubuntu_kernel_feed_enabled
+        from app.scanner.ubuntu_kernel_feed import codename_for
+        from app.services.enrichment import FeedRefreshService
+        from app.services.ubuntu_kernel import UBUNTU_END_OF_LIFE, ubuntu_kernel_images
+
+        images = ubuntu_kernel_images(inventory)
+        codename = codename_for(images[0].ecosystem) if images else None
+        if (
+            codename is None
+            or not ubuntu_kernel_feed_enabled()
+            or codename in UBUNTU_END_OF_LIFE
+            or codename in self._ubuntu_feeds_tried
+            or usable(codename)
+        ):
+            return
+        self._ubuntu_feeds_tried.add(codename)
+        outcome = FeedRefreshService(
+            self._repository, ubuntu_kernel_source=self._ubuntu_kernel_source
+        ).refresh_ubuntu_kernel(codename)
+        _LOGGER.info(
+            "Fetched the %s kernel feed for a scan: %s", codename, outcome.status.value
         )
 
     def _enrich(self, findings: list[FindingInput]) -> list[FindingInput]:

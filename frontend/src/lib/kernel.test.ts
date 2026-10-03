@@ -261,3 +261,17 @@ describe("the Ubuntu kernel feed is not threat intelligence (Req 12.11)", () => 
     expect(enrichmentWarning(feeds.filter(isIntelFeed) as never)).toContain("never been loaded");
   });
 });
+
+describe("oldKernelsCommand", () => {
+  it.each([
+    ["Debian GNU/Linux 12", "sudo apt autoremove --purge"],
+    ["Ubuntu 22.04.4 LTS", "sudo apt autoremove --purge"],
+    ["Rocky Linux 9.4", "sudo dnf remove --oldinstallonly"],
+    ["openSUSE Leap 15.5", "sudo zypper purge-kernels"],
+    ["Alpine Linux v3.18", null],
+    ["Arch Linux", null],
+  ])("%s", async (osName, expected) => {
+    const { oldKernelsCommand } = await import("./kernel");
+    expect(oldKernelsCommand("linux", osName, null)).toBe(expected);
+  });
+});

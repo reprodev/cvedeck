@@ -181,3 +181,28 @@ export function unfixedSummary(kernel: KernelInfo, which: "live" | "idle"): Unfi
   const ordered = [...elsewhere.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   return { total: noFix + ordered.reduce((sum, [, n]) => sum + n, 0), noFix, elsewhere: ordered };
 }
+
+/**
+ * The command that removes kernels nothing runs, or null where there is none.
+ *
+ * Each keeps the running kernel and the newest: apt's autoremove (which also
+ * offers any other package nothing depends on, so it is shown with a note to
+ * review), dnf's --oldinstallonly, zypper's purge-kernels. Alpine and Arch
+ * replace the kernel in place on upgrade, so there is nothing old to remove.
+ */
+export function oldKernelsCommand(
+  platform: Platform | undefined,
+  osName: string | undefined,
+  packageIdentifier: string | null,
+): string | null {
+  switch (getDistroTooling(platform, osName, packageIdentifier).family) {
+    case "debian":
+      return "sudo apt autoremove --purge";
+    case "rhel":
+      return "sudo dnf remove --oldinstallonly";
+    case "suse":
+      return "sudo zypper purge-kernels";
+    default:
+      return null;
+  }
+}

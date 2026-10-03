@@ -12,6 +12,7 @@ import type { CveFinding, KernelInfo, Platform } from "../types";
 import {
   kernelPlan,
   kernelUpgradeCommand,
+  oldKernelsCommand,
   uncheckedReasonText,
   unfixedSummary,
   type UnfixedSummary,
@@ -93,6 +94,8 @@ export function KernelCard({ findings, findingsLoaded, platform, osName, onLoad 
   const idleUnfixed = unfixedSummary(kernel, "idle");
   const sampleIdentifier = findings.find((f) => f.isKernel)?.packageIdentifier ?? null;
   const upgrade = kernelUpgradeCommand(kernel, platform, osName, sampleIdentifier);
+  const removeOld = oldKernelsCommand(platform, osName, sampleIdentifier);
+  const idleCves = plan.idle.length + (idleUnfixed?.total ?? 0);
 
   return (
     <section className="kernel-card" data-testid="kernel-card" aria-label="Kernel">
@@ -195,6 +198,21 @@ export function KernelCard({ findings, findingsLoaded, platform, osName, onLoad 
           The kernels not running have {plural(idleUnfixed.total, "more CVE")} with no fix in this release
           ({unfixedParts(idleUnfixed)}).
         </p>
+      )}
+
+      {idleCves > 0 && removeOld && (
+        // The CVEs in kernels nothing runs have a fix of their own: remove them.
+        <div className="kernel-card-fix" data-testid="kernel-remove-old">
+          <p>
+            <Icon name="trash" /> <strong>Remove kernels nothing runs</strong> — the running kernel and
+            the newest are kept.
+            {removeOld.startsWith("sudo apt") &&
+              " apt also offers any other package nothing depends on; review its list before confirming."}
+          </p>
+          <pre className="kernel-card-command">
+            <code>{removeOld}</code>
+          </pre>
+        </div>
       )}
 
       <ul className="kernel-card-list">

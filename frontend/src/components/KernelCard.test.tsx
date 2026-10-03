@@ -100,6 +100,19 @@ describe("KernelCard", () => {
     );
   });
 
+  it("offers to remove the kernels nothing runs when they carry CVEs", async () => {
+    renderCard(UPGRADED_NOT_REBOOTED, [onKernel("CVE-B", OLD, true), onKernel("CVE-B", NEW, false)]);
+    const remove = await screen.findByTestId("kernel-remove-old");
+    expect(remove).toHaveTextContent("sudo apt autoremove --purge");
+    expect(remove).toHaveTextContent("review its list before confirming");
+  });
+
+  it("does not offer it when no kernel nothing runs has a CVE", async () => {
+    renderCard(UPGRADED_NOT_REBOOTED, [onKernel("CVE-A", OLD, true)]);
+    await screen.findByTestId("kernel-live");
+    expect(screen.queryByTestId("kernel-remove-old")).toBeNull();
+  });
+
   it("says a kernel that was not looked up was not checked", async () => {
     renderCard({ ...UPGRADED_NOT_REBOOTED, checked: false }, []);
 

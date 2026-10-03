@@ -282,3 +282,78 @@ def test_feed_health_lists_each_ubuntu_release_in_the_fleet(session):
     repo = _host(session)
     names = [f["feed_name"] for f in _client(session).get("/api/feeds").json()]
     assert names == ["kev", "epss", ubuntu_kernel_feed_name("jammy")]
+
+
+# --- Fetching on demand (0.10.1) ----------------------------------------- #
+
+
+def _scan_with(session, inventories, feed):
+    repo = Repository(session)
+    by_id = {inv.machine_id: inv for inv in inventories}
+    for machine_id in by_id:
+        repo.upsert_target_machine(machine_id, machine_id, Platform.LINUX, ScanStatus.NEVER_SCANNED)
+    result = ScannerEngine(
+        repo, lambda t: Credentials(username="u", password=SecretStr("p")),
+        osv=_NoOsv(), enricher=_Checked(), ubuntu_kernel_source=feed,
+        collector_factory=lambda platform: _ByTarget(by_id),
+    ).scan([TargetMachine(id=m, hostname=m, platform=Platform.LINUX) for m in by_id])
+    session.commit()
+    return repo, result
+
+
+class _ByTarget:
+    def __init__(self, by_id):
+        self._by_id = by_id
+
+    def collect(self, target, credentials):
+        return self._by_id[target.id]
+
+
+def test_the_first_scan_of_a_new_release_fetches_its_feed_and_checks_the_kernel(session):
+    """No waiting a day for the scheduled refresh (Req 12.11)."""
+    feed = _Feed()
+    repo, _ = _scan_with(session, [_inventory()], feed)
+
+    assert feed.asked == [("jammy", None)]
+    assert decode_unfixed(repo.latest_kernel_unfixed("m1")) is not None
+    assert session.query(CveFinding).filter(CveFinding.cve_id == "CVE-2024-1086").count() == 1
+
+
+def test_one_fetch_per_release_per_batch(session):
+    feed = _Feed()
+    second = _inventory().model_copy(update={"machine_id": "m2"})
+    _scan_with(session, [_inventory(), second], feed)
+    assert feed.asked == [("jammy", None)]
+
+
+def test_a_failed_fetch_leaves_the_scan_whole_and_the_kernel_unchecked(session):
+    feed = _Feed(fail=True)
+    repo, result = _scan_with(session, [_inventory(), _inventory().model_copy(update={"machine_id": "m2"})], feed)
+
+    assert [s.status for s in result.machine_scans] == [ScanStatus.SUCCESS, ScanStatus.SUCCESS]
+    assert feed.asked == [("jammy", None)], "not retried for every host of the release"
+    assert repo.latest_kernel_unfixed("m1") is None
+
+
+def test_a_fresh_feed_is_not_fetched_again_by_a_scan(session):
+    repo = _host(session)
+    _refresh(repo)
+    feed = _Feed()
+    _scan_with(session, [_inventory()], feed)
+    assert feed.asked == []
+
+
+def test_switched_off_a_scan_fetches_nothing(monkeypatch, session):
+    monkeypatch.setenv("CVEDECK_UBUNTU_KERNEL_FEED", "off")
+    feed = _Feed()
+    _scan_with(session, [_inventory()], feed)
+    assert feed.asked == []
+
+
+@pytest.mark.parametrize("env", [{"CVEDECK_UBUNTU_KERNEL_FEED": "off"}, {"CVEDECK_DEMO_MODE": "1"}], ids=["off", "demo"])
+def test_the_deployment_gives_a_scan_no_client_when_it_may_not_fetch(monkeypatch, env):
+    from app.api.wiring import _ubuntu_kernel_source
+
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert _ubuntu_kernel_source() is None

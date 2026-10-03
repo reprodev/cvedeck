@@ -8,6 +8,30 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.10.1] - 2026-10-03
+
+### Fixed
+
+- **A new Ubuntu release's kernel is checked in its first scan.** The Ubuntu
+  kernel feed was refreshed for the releases the fleet already ran, so the
+  first host of a new release -- the first 24.04 machine, say -- read "feed not
+  fetched yet" until the next scheduled refresh, up to a day later. A scan that
+  meets an Ubuntu release with no fresh feed now fetches it there and then, once
+  per release per batch, and checks the kernel in the same scan. A failed fetch
+  leaves the scan whole and the kernel saying why; it is not retried for every
+  host. Never when the feed is switched off, nor in demo mode.
+
+### Added
+
+- **Old kernels get a command, not just advice.** When kernels nothing runs
+  carry CVEs, the kernel card now offers the distribution's own way to remove
+  them -- `apt autoremove --purge`, `dnf remove --oldinstallonly`, `zypper
+  purge-kernels` -- each of which keeps the running kernel and the newest. apt
+  also offers other packages nothing depends on, and the card says to review
+  its list. Alpine and Arch replace the kernel in place, so nothing is offered.
+
+---
+
 ## [0.10.0] - 2026-10-03
 
 **Upgrading: Ubuntu hosts' kernels are checked from this release on.** A new

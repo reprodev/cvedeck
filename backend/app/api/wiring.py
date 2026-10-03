@@ -188,6 +188,19 @@ def _no_credentials(target: TargetMachine) -> Credentials:
     raise KeyError(f"no credentials supplied for target {target.id!r}")
 
 
+def _ubuntu_kernel_source():
+    """The Ubuntu kernel feed client a scan may fetch with, or ``None`` (Req 12.11).
+
+    None when the feed is switched off, and in demo mode, where nothing is
+    ever fetched (Req 15.6).
+    """
+    if not config.ubuntu_kernel_feed_enabled() or config.demo_mode():
+        return None
+    from ..scanner.ubuntu_kernel_feed import UbuntuKernelFeedClient
+
+    return UbuntuKernelFeedClient(config.ubuntu_kernel_feed_url(), timeout=config.feed_timeout())
+
+
 class DeploymentScannerEngine(ScannerEngine):
     """Scanner engine that owns target registration and the transaction.
 
@@ -217,6 +230,7 @@ class DeploymentScannerEngine(ScannerEngine):
             enricher=FindingEnricher(
                 repository, max_age_hours=config.feed_max_age_hours()
             ),
+            ubuntu_kernel_source=_ubuntu_kernel_source(),
         )
         self._session = session
         self._repo = repository
