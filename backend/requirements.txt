@@ -1,6 +1,6 @@
 # Runtime dependencies, pinned for reproducible container and server builds.
 # Development and test dependencies live in requirements-dev.txt.
-fastapi==0.142.1
+fastapi==0.142.2
 pydantic==2.13.5
 sqlalchemy==2.1.1
 alembic==1.20.0
