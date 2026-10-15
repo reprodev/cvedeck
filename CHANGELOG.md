@@ -8,6 +8,20 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.10.2] - 2026-10-15
+
+### Changed
+
+- FastAPI 0.143.0, pydantic 2.14.0, SQLAlchemy 2.1.4 and hypothesis 6.168.5
+  (Dependabot #32), and vite 8.3.4, vitest 5.0.3 and @vitejs/plugin-react
+  6.1.2 (Dependabot #31). FastAPI 0.143 makes its OpenTelemetry export opt-in;
+  CveDeck ships neither the OpenTelemetry SDK nor an exporter and sets no
+  endpoint, so nothing was exported before and nothing is now. Both sets were
+  trialled in a scratch copy first; every test passes, and the frontend
+  lockfile changes versions only and gains no install script.
+
+---
+
 ## [0.10.1] - 2026-10-03
 
 ### Fixed
