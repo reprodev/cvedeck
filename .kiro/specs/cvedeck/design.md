@@ -829,3 +829,31 @@ could say what changed (Req 18).
 - **Remediation** is untouched by a resolution (Req 18.9). The changes route
   returns the CVE's current remediation status, so the UI can show a finding
   cleared by a scan beside a record still marked open.
+
+### Transaction boundaries
+
+The Local_Database is SQLite by default, which allows one writer at a time; a
+write transaction holds the lock from its first write until it commits. So the
+rule is: **no write transaction is open while the process waits on the
+network** (Req 13.6, 13.7).
+
+- **Scans commit per target.** `DeploymentScannerEngine.scan` upserts the batch's
+  targets and commits, then scans each target and commits it on its own. Within
+  a target, host-key pins and touches commit at the SSH handshake, and
+  `_scan_one` writes the inventory, findings and status only after its last
+  network call. A target whose results cannot be written is reported failed
+  with the driver's message and the batch continues (Property 1). A new host
+  therefore reads `NEVER_SCANNED` while its first scan is in flight.
+- **Feed refreshes download, then write.** `FeedRefreshService` splits each feed
+  into a fetch (network, reads only) returning a pending apply (writes).
+  `refresh_all` runs every fetch first and every apply after, in the caller's
+  one transaction. A failed or empty download still never overwrites a good
+  cache.
+- **Residual contention is a 503.** The engine waits 30 s for the lock
+  (`SQLITE_BUSY_TIMEOUT`, also used by the CLI) rather than pysqlite's 5. A
+  request that still cannot write gets HTTP 503 with `Retry-After`; any other
+  `OperationalError` stays a 500 (Req 13.8).
+
+Up to 0.10.2 a scan committed once per batch and a refresh held one transaction
+across its downloads, so either one made every other write fail with a 500 for
+as long as it ran.

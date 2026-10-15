@@ -8,6 +8,39 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.10.3] - 2026-10-15
+
+### Fixed
+
+- **A scan no longer locks every other change out.** SQLite allows one writer
+  at a time, and a scan held the database's write lock from its first second
+  to its last -- every SSH session and advisory query, up to the request
+  timeout. Anything else that wrote meanwhile failed with HTTP 500 after five
+  seconds: a second scan, enrolling a discovered host, a remediation note, the
+  daily feed refresh, and with sign-in on, a page load that falls due to
+  refresh its session (at most once every five minutes). A scan now
+  saves each host as it finishes it, and writes nothing while it waits on the
+  network. The fleet view shows a new host as *Never scanned* until its first
+  scan completes.
+- **A feed refresh no longer holds the lock while it downloads.** KEV was
+  written before EPSS and Canonical's kernel feeds were downloaded, in one
+  transaction, so the same 500 could hit anything written during a refresh --
+  including the scan that first showed this, five seconds after a fresh start.
+  Every feed is now downloaded before anything is written. A failed download
+  still never replaces a good cache. Holding the feeds until then costs about
+  36 MiB more at the refresh's peak (292 to 328 MiB, measured with Canonical's
+  feed parsed in full).
+- **A busy database is reported as busy.** Writes now wait 30 seconds for the
+  lock instead of five, and a request that still cannot write gets HTTP 503
+  with `Retry-After` -- "try again in a few seconds" -- rather than a 500.
+
+### Changed
+
+- pydantic 2.14.1 and hypothesis 6.169.0 (Dependabot #33), trialled in a
+  scratch copy first; every test passes and the update adds no package.
+
+---
+
 ## [0.10.2] - 2026-10-15
 
 ### Changed

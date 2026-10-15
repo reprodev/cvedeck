@@ -39,10 +39,16 @@ def _read_password(from_stdin: bool) -> str:
 
 
 def _session() -> Session:
+    from ..api.dependencies import SQLITE_BUSY_TIMEOUT
+
     url = config.database_url()
+    connect_args = {}
     if url.startswith("sqlite"):
         config.data_dir().mkdir(parents=True, exist_ok=True)
-    engine = create_engine(url)
+        # Runs beside the server, against the same file: wait for its writes
+        # the way it waits for ours.
+        connect_args = {"timeout": SQLITE_BUSY_TIMEOUT}
+    engine = create_engine(url, connect_args=connect_args)
     upgrade_to_head(engine)
     return Session(engine)
 

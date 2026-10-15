@@ -27,6 +27,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import OperationalError
 
 from .. import config
 from ..auth.dependencies import login_required, require_principal, resolve_principal
@@ -35,7 +36,7 @@ from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.10.2"
+_VERSION = "0.10.3"
 
 
 async def _validation_error_without_input(
@@ -55,6 +56,33 @@ async def _validation_error_without_input(
         for error in exc.errors()
     ]
     return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
+
+
+logger = logging.getLogger(__name__)
+
+#: SQLite's two contention errors: SQLITE_BUSY and SQLITE_LOCKED.
+_CONTENTION = ("database is locked", "database table is locked")
+
+
+async def _database_busy(request: Request, exc: OperationalError) -> JSONResponse:
+    """A write that lost the race for SQLite's single writer is a 503, not a 500 (Req 13.8).
+
+    Nothing in this process now holds the write lock for long -- scans commit per
+    target and feed refreshes download before writing (Req 13.6, 13.7) -- and the
+    engine waits out a busy lock before giving up, so this should be rare. When
+    it happens anyway the request did nothing wrong and will work if repeated,
+    which is what a 503 with ``Retry-After`` says and a 500 does not. Any other
+    database error is re-raised: a missing table is a defect, and "busy, try
+    again" would send the operator round in circles.
+    """
+    if not any(marker in str(exc.orig) for marker in _CONTENTION):
+        raise exc
+    logger.warning("Database busy on %s %s: %s", request.method, request.url.path, exc.orig)
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": "5"},
+        content={"detail": "The database is busy with another write; try again in a few seconds."},
+    )
 
 
 def create_app(*, wire_production: bool = False) -> FastAPI:
@@ -88,6 +116,7 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
     )
 
     app.add_exception_handler(RequestValidationError, _validation_error_without_input)
+    app.add_exception_handler(OperationalError, _database_busy)
     security.install(app)
 
     origins = config.cors_origins() if wire_production else []

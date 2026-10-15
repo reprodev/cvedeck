@@ -33,12 +33,13 @@ marked partial.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from functools import lru_cache
 
 from fastapi import Depends, HTTPException
 from sqlalchemy import Engine, create_engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .. import config
@@ -62,18 +63,39 @@ from ..services.enrichment import FindingEnricher
 from ..services.sync import SyncService
 from .dependencies import get_session
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class RepositoryHostKeyStore:
     """The :class:`~app.scanner.host_keys.HostKeyStore` over the request session.
 
     Scans and connection tests both build one, which is what makes a key
     accepted by a connection test the key the next scan is held to (Req 17.6).
-    Writes flush and join the caller's transaction like every repository write.
+    Writes flush and join the caller's transaction like every repository write
+    -- unless ``commit_writes`` is set, which a scan sets (Req 13.6). A pin or a
+    touch happens during the SSH handshake, before the host is even read, and an
+    uncommitted write there would hold SQLite's single write lock through the
+    whole collection and every advisory query after it. A scan always kept its
+    pins anyway, failed authentication included, so committing at once changes
+    nothing a scan records. The connection test commits right after the
+    handshake itself, for its own reason, and leaves this off.
     """
 
-    def __init__(self, repository: Repository, session: Session) -> None:
+    def __init__(
+        self, repository: Repository, session: Session, *, commit_writes: bool = False
+    ) -> None:
         self._repository = repository
         self._session = session
+        self._commit_writes = commit_writes
+
+    def _written(self) -> None:
+        if not self._commit_writes:
+            return
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
 
     def get(self, hostname: str, port: int) -> PinnedHostKey | None:
         row = self._repository.get_host_key(hostname, port)
@@ -125,9 +147,12 @@ class RepositoryHostKeyStore:
                 ) from None
             # The same key, pinned by whoever got there first (Req 17.2).
             self.touch(hostname, port)
+            return
+        self._written()
 
     def touch(self, hostname: str, port: int) -> None:
         self._repository.touch_host_key(hostname, port)
+        self._written()
 
 
 def build_collector(
@@ -202,13 +227,25 @@ def _ubuntu_kernel_source():
 
 
 class DeploymentScannerEngine(ScannerEngine):
-    """Scanner engine that owns target registration and the transaction.
+    """Scanner engine that owns target registration and the transactions.
 
-    Wraps :meth:`ScannerEngine.scan` so a batch is durable: targets are upserted
-    first (the inventory foreign key requires them), the inherited per-target
-    fault isolation runs untouched, and the whole batch commits at the end. A
-    failure that escapes the engine leaves the transaction uncommitted, and the
-    request-scoped session rolls it back.
+    Targets are upserted and committed first (the inventory foreign key requires
+    them), then each target is scanned and committed on its own, with the
+    inherited per-target fault isolation untouched.
+
+    **One commit per target, never one per batch (Req 13.6).** SQLite has a
+    single writer, and a write transaction holds the lock until it commits. Up
+    to 0.10.2 the batch committed once at the end, so a scan held the lock for
+    its whole length -- every SSH session and advisory query, up to the request
+    timeout -- and anything else that wrote meanwhile, a second scan, an
+    enrollment, a remediation note, the periodic feed refresh, failed as an
+    HTTP 500. Now nothing is written while a host is being read or matched:
+    host keys commit at the handshake (see :class:`RepositoryHostKeyStore`), and
+    :meth:`ScannerEngine._scan_one` persists only after its last network call.
+
+    A target whose results cannot be written -- the lock still busy after the
+    timeout, say -- is reported as a failure naming the database, and the batch
+    goes on, as for any other per-target failure (Property 1).
     """
 
     def __init__(
@@ -219,7 +256,7 @@ class DeploymentScannerEngine(ScannerEngine):
         nvd: NvdClient | None = None,
     ) -> None:
         repository = Repository(session)
-        host_keys = RepositoryHostKeyStore(repository, session)
+        host_keys = RepositoryHostKeyStore(repository, session, commit_writes=True)
         super().__init__(
             repository=repository,
             credentials_for=_no_credentials,
@@ -236,23 +273,52 @@ class DeploymentScannerEngine(ScannerEngine):
         self._repo = repository
 
     def scan(self, targets: list[TargetMachine]) -> ScanResult:
-        """Register every target, scan the batch, then commit once."""
+        """Register every target, then scan and commit them one at a time."""
         for target in targets:
             self._upsert_machine(target)
-        self._session.flush()
-        result = super().scan(targets)
         self._session.commit()
-        return result
+        return super().scan(targets)
+
+    def _scan_one(self, target: TargetMachine) -> MachineScan:
+        """Scan a target, turning a failed database write into a reportable error.
+
+        Rolled back here, before the base class records the failure, so that
+        record is written on a clean session rather than one a failed flush
+        has poisoned.
+        """
+        try:
+            return super()._scan_one(target)
+        except DBAPIError as exc:
+            self._session.rollback()
+            raise _unsaved(exc) from exc
+
+    def _scan_target(self, target: TargetMachine) -> MachineScan:
+        """Scan one target and commit it, so the write lock is never held for long (Req 13.6)."""
+        try:
+            scan = super()._scan_target(target)
+            self._session.commit()
+            return scan
+        except DBAPIError as exc:
+            # Recording the outcome failed too, or its commit did. The target
+            # is reported failed, and the batch carries on (Property 1).
+            self._session.rollback()
+            _LOGGER.warning("Could not save the scan of %s: %s", target.id, exc.orig)
+            return MachineScan(
+                machine_id=target.id,
+                status=ScanStatus.CONNECTION_FAILURE,
+                error=_unsaved(exc),
+            )
 
     def _upsert_machine(self, target: TargetMachine) -> TargetMachineRow:
         """Insert or refresh the ``target_machines`` row for a target.
 
-        A new row starts as ``NEVER_SCANNED``. ``_record_scan_status`` overwrites
-        it with the real outcome within the same uncommitted transaction, so no
-        reader ever observes the provisional value here -- but a host enrolled
-        from network discovery keeps it until someone scans it, which is what
-        stops the fleet view showing a red failure badge for a host nothing has
-        tried to reach yet.
+        A new row starts as ``NEVER_SCANNED``, and since targets are committed
+        before they are scanned (Req 13.6), that is what the fleet view shows
+        while its first scan is in flight -- which is true, and renders neutral.
+        ``_record_scan_status`` overwrites it with the real outcome. A host
+        enrolled from network discovery keeps it until someone scans it, which
+        is what stops the fleet view showing a red failure badge for a host
+        nothing has tried to reach yet.
         """
         row = self._session.get(TargetMachineRow, target.id)
         if row is None:
@@ -302,6 +368,16 @@ class DeploymentScannerEngine(ScannerEngine):
             # history can still say why a week later (Req 18.10).
             error_detail=scan.message,
         )
+
+
+def _unsaved(exc: DBAPIError) -> RuntimeError:
+    """The error a scan reports when its results could not be written.
+
+    The driver's own message ("database is locked"), not SQLAlchemy's, which
+    appends the statement and its parameters -- package data that means nothing
+    to an operator reading the scan result.
+    """
+    return RuntimeError(f"Could not save the results to the database: {exc.orig}")
 
 
 def build_scanner_engine(

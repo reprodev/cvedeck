@@ -300,7 +300,6 @@ class ScannerEngine:
         credentials = self._credentials_for(target)
 
         inventory = collector.collect(target, credentials)
-        self._repository.save_inventory(inventory)
 
         match_result = self._matcher.match(inventory, self._nvd, self._osv)
         # Known before saving, because a partial scan must not resolve anything:
@@ -317,6 +316,11 @@ class ScannerEngine:
         # (Req 12.9). After enrichment, because a known-exploited one is always
         # listed, and an unchecked one might be.
         findings, unfixed = split_kernel_findings(self._enrich(inputs))
+        # Persisted only now, after every network call for this host -- the
+        # advisory queries above can take minutes -- because the first write
+        # takes SQLite's single write lock until the target commits, and every
+        # other writer waits on it (Req 13.6).
+        self._repository.save_inventory(inventory)
         saved = self._repository.save_findings(
             target.id,
             findings,

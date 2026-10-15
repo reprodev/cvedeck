@@ -24,6 +24,13 @@ from ..data.migrations_runtime import upgrade_to_head
 
 logger = logging.getLogger(__name__)
 
+#: Seconds a SQLite write waits for the single write lock before giving up.
+#: pysqlite's default is 5. Every write transaction is now short -- scans commit
+#: per target and feed refreshes download before writing (Req 13.6, 13.7) -- but
+#: the longest, the EPSS rewrite of roughly 400,000 rows, can still take a few
+#: seconds, and a write arriving behind it should queue rather than fail.
+SQLITE_BUSY_TIMEOUT = 30.0
+
 
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
@@ -38,7 +45,7 @@ def get_engine() -> Engine:
     url = config.database_url()
     connect_args = {}
     if url.startswith("sqlite"):
-        connect_args = {"check_same_thread": False}
+        connect_args = {"check_same_thread": False, "timeout": SQLITE_BUSY_TIMEOUT}
         # A mounted volume may be empty on first boot; make sure the directory
         # the SQLite file lives in exists before SQLAlchemy opens it.
         config.data_dir().mkdir(parents=True, exist_ok=True)

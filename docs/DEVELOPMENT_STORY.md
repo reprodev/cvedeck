@@ -2645,3 +2645,46 @@ feed, the card said "not fetched yet", then "scan again", then showed the
 kernel: 6,451 findings for an old 22.04 kernel, fourteen of them known
 exploited, and 4,253 more counted -- the research's numbers, to the one CVE
 that was listed only because it is being exploited.
+
+## Chapter 28 — One writer (v0.10.3)
+
+0.10.2 was meant to be a dependency release, and its own test found a bug that
+had been in every release before it.
+
+### A test that failed for the wrong reason
+
+The end-to-end run scans four real hosts with the previous image, upgrades the
+volume to the new one, and scans again. On the first attempt the previous
+image's scan returned HTTP 500: `database is locked`. It had arrived five
+seconds after a fresh start, while the startup feed refresh was running. It
+did not happen again on demand, which is the shape of a race, and the code
+explained it: the refresh wrote KEV and then downloaded EPSS inside the same
+transaction, so SQLite's single write lock was held for the length of a
+download. A write that waited longer than pysqlite's five seconds failed.
+
+That was the bug the next release was going to fix. Tracing where else a write
+could wait on the network turned up a larger one. A scan upserted its targets,
+contacted every host and every advisory source, and committed once at the end.
+So a scan held the lock from its first second to its last, and an enrollment
+fired three seconds into a two-host scan failed with a 500 after exactly five
+seconds -- not sometimes, every time. So did a second scan. So would a
+remediation note, the periodic refresh, and a signed-in page refreshing its
+session. Nobody had seen it because every suite ran on an in-memory database
+over one shared connection, which cannot show locking at all, and because one
+person clicking through a dashboard rarely writes twice at once.
+
+### The rule, rather than the instance
+
+The fix is a rule: no write transaction is open while the process waits on the
+network. A scan commits per target; host keys commit at the handshake; a
+target's inventory is written after its last advisory query, not before the
+first. A refresh downloads every feed, then writes them all. What contention is
+left -- the EPSS rewrite still takes a few seconds -- waits thirty seconds
+rather than five, and a request that still loses is told 503 and when to try
+again, rather than 500.
+
+The tests park each path halfway through a network call, on a real database
+file, and check that a second connection can commit. Run against the old code,
+ten of the thirteen fail with the same message the container printed. The cost
+was measured rather than assumed: holding every feed until the writes raises the
+refresh's peak memory from 292 to 328 MiB, with Canonical's feed parsed in full.

@@ -39,7 +39,8 @@ import hashlib
 import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol, Sequence
+from functools import partial
+from typing import Any, Callable, Protocol, Sequence
 
 from ..data.repository import FindingInput, Repository
 from ..data.schema import EpssScore, KevEntry
@@ -155,6 +156,15 @@ class FeedRefreshService:
     :class:`~app.data.repository.Repository`. On failure the cache is left
     exactly as it was -- a failed download never overwrites good data with an
     empty catalogue.
+
+    **Every download happens before any write (Req 13.7).** Each refresh is a
+    fetch, which touches the network and only reads the database, returning a
+    pending apply, which writes. :meth:`refresh_all` runs every fetch first and
+    every apply after. SQLite has one writer, and a write transaction holds the
+    lock until the caller commits: up to 0.10.2 the KEV write took it and kept it
+    for the whole EPSS download and every Ubuntu download after it, so a scan,
+    an enrollment or a remediation note made meanwhile failed as an HTTP 500.
+    The writes still share the caller's one transaction.
     """
 
     def __init__(
@@ -171,15 +181,19 @@ class FeedRefreshService:
         self._ubuntu_kernel_source = ubuntu_kernel_source
 
     def refresh_all(self) -> list[FeedRefreshOutcome]:
-        """Refresh every configured feed, returning one outcome per feed."""
-        outcomes: list[FeedRefreshOutcome] = []
+        """Refresh every configured feed, returning one outcome per feed.
+
+        Downloads everything, then writes everything (Req 13.7): see the class
+        docstring.
+        """
+        pending: list[Callable[[], FeedRefreshOutcome]] = []
         if self._kev_source is not None:
-            outcomes.append(self.refresh_kev())
+            pending.append(self._fetch_kev())
         if self._epss_source is not None:
-            outcomes.append(self.refresh_epss())
+            pending.append(self._fetch_epss())
         if self._ubuntu_kernel_source is not None:
-            outcomes.extend(self.refresh_ubuntu_kernels())
-        return outcomes
+            pending.extend(self._fetch_ubuntu_kernels())
+        return [apply() for apply in pending]
 
     def refresh_ubuntu_kernels(self) -> list[FeedRefreshOutcome]:
         """Refresh Canonical's kernel feed for each Ubuntu release the fleet runs (Req 12.11).
@@ -187,12 +201,15 @@ class FeedRefreshService:
         Each release on its own, like KEV and EPSS: one release's outage must
         not cost another its data. A fleet with no Ubuntu host fetches nothing.
         """
+        return [apply() for apply in self._fetch_ubuntu_kernels()]
+
+    def _fetch_ubuntu_kernels(self) -> list[Callable[[], FeedRefreshOutcome]]:
         from ..scanner.ubuntu_kernel_feed import codename_for
 
         codenames = sorted(
             {c for c in map(codename_for, self._repository.fleet_ubuntu_ecosystems()) if c}
         )
-        return [self.refresh_ubuntu_kernel(codename) for codename in codenames]
+        return [self._fetch_ubuntu_kernel(codename) for codename in codenames]
 
     def refresh_ubuntu_kernel(self, codename: str) -> FeedRefreshOutcome:
         """Download one release's kernel feed and replace the stored copy.
@@ -200,8 +217,9 @@ class FeedRefreshService:
         The server's ETag is kept as the digest: an unchanged file is neither
         downloaded nor parsed again. Any failure keeps the previous table.
         """
-        from ..scanner.ubuntu_kernel_feed import encode_flavours
+        return self._fetch_ubuntu_kernel(codename)()
 
+    def _fetch_ubuntu_kernel(self, codename: str) -> Callable[[], FeedRefreshOutcome]:
         feed = ubuntu_kernel_feed_name(codename)
         row = self._repository.get_feed_refresh(feed)
         cached = self._repository.count_ubuntu_kernel_entries(codename)
@@ -213,8 +231,15 @@ class FeedRefreshService:
             _LOGGER.exception("%s refresh failed due to a defect, not an outage", feed)
             raise
         except Exception as exc:
-            return self._record_failure(feed, exc)
+            return partial(self._record_failure, feed, exc)
+        return partial(self._apply_ubuntu_kernel, codename, result, etag, cached)
 
+    def _apply_ubuntu_kernel(
+        self, codename: str, result: Any, etag: str | None, cached: int
+    ) -> FeedRefreshOutcome:
+        from ..scanner.ubuntu_kernel_feed import encode_flavours
+
+        feed = ubuntu_kernel_feed_name(codename)
         if result.table is None:
             self._repository.record_feed_refresh(
                 feed, status=FeedStatus.OK, record_count=cached, payload_digest=etag
@@ -229,16 +254,21 @@ class FeedRefreshService:
 
     def refresh_kev(self) -> FeedRefreshOutcome:
         """Download the KEV catalogue and replace the cached copy."""
+        return self._fetch_kev()()
+
+    def _fetch_kev(self) -> Callable[[], FeedRefreshOutcome]:
         if self._kev_source is None:
-            return self._record_unconfigured(KEV_FEED)
+            return partial(self._record_unconfigured, KEV_FEED)
         try:
             records = self._kev_source.fetch()
         except _PROGRAMMING_ERRORS:
             _LOGGER.exception("KEV refresh failed due to a defect, not an outage")
             raise
         except Exception as exc:
-            return self._record_failure(KEV_FEED, exc)
+            return partial(self._record_failure, KEV_FEED, exc)
+        return partial(self._apply_kev, records)
 
+    def _apply_kev(self, records: list[KevRecord]) -> FeedRefreshOutcome:
         # An empty catalogue from a 200 response means the feed changed shape
         # under us. Writing it would erase every KEV flag in the fleet, so it
         # is recorded as a failure and the previous cache is kept.
@@ -289,16 +319,21 @@ class FeedRefreshService:
 
     def refresh_epss(self) -> FeedRefreshOutcome:
         """Download the EPSS score set and replace the cached copy."""
+        return self._fetch_epss()()
+
+    def _fetch_epss(self) -> Callable[[], FeedRefreshOutcome]:
         if self._epss_source is None:
-            return self._record_unconfigured(EPSS_FEED)
+            return partial(self._record_unconfigured, EPSS_FEED)
         try:
             records = self._epss_source.fetch()
         except _PROGRAMMING_ERRORS:
             _LOGGER.exception("EPSS refresh failed due to a defect, not an outage")
             raise
         except Exception as exc:
-            return self._record_failure(EPSS_FEED, exc)
+            return partial(self._record_failure, EPSS_FEED, exc)
+        return partial(self._apply_epss, records)
 
+    def _apply_epss(self, records: list[EpssRecord]) -> FeedRefreshOutcome:
         if not records:
             return self._record_failure(
                 EPSS_FEED,

@@ -361,6 +361,18 @@ host.
 4. THE dashboard SHALL allow every fleet and finding table to be sorted.
 5. WHEN a list is empty because of active filters THEN the system SHALL name
    those filters and offer to clear them.
+6. WHILE a scan is running THE system SHALL accept and commit other writes -- a
+   second scan, an enrollment, a remediation update, a feed refresh, a session
+   refresh -- by holding no database write transaction open while it contacts a
+   host or an advisory source, committing each target's results on their own.
+   A target whose results cannot be written SHALL be reported as failed and
+   SHALL NOT abort the batch.
+7. WHEN THE system refreshes its threat-intel feeds THEN it SHALL complete
+   every download before it writes anything, and SHALL hold no database write
+   transaction open during a download.
+8. IF a request cannot write because the database is busy with another write
+   THEN the system SHALL respond with HTTP 503 and a `Retry-After` header, not
+   HTTP 500; any other database error SHALL NOT be reported as busy.
 
 ### Requirement 14: Accurate and reachable remediation guidance
 

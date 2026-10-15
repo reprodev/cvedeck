@@ -307,6 +307,18 @@ environment the app reads, so no alembic.ini edit is needed.
   rows stay PENDING_SYNC and nothing is written online; on reconnect the online DB
   converges to local and package_identifier + dependency_path_id are preserved.
   Properties 10 and 11.
+- **No write transaction is ever open while the process waits on the network**
+  (Req 13.6-13.8). SQLite has one writer, and a write holds the lock until commit.
+  Up to 0.10.2 a scan committed once per batch and a feed refresh wrote KEV before
+  downloading EPSS, so for the whole length of either -- minutes, for a scan --
+  every other write (a second scan, an enrollment, a remediation note, the
+  periodic refresh, a session touch) failed as an HTTP 500. Scans now commit per
+  target, host keys commit at the handshake, and `_scan_one` writes only after its
+  last network call; `FeedRefreshService` fetches every feed before applying any.
+  Do not add a write before a network call in either path, and do not go back to
+  one commit per batch. `tests/test_write_concurrency.py` parks each path
+  mid-download on a real database file and checks another connection can commit;
+  an in-memory database on one shared connection cannot show this at all.
 - Matcher Precision, Concurrency & 3-Tier Classification:
   - `_extract_fixed_version` in `osv_client.py` strictly validates `aff["package"]["name"] == package.name` and release-specific range events so companion packages (e.g. `xorg-server`) never leak fixes into target packages (`xwayland`).
   - Ubuntu targets query Ubuntu release trackers exclusively to eliminate Debian version suffix contamination (`+deb12u3`).
