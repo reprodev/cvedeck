@@ -92,7 +92,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
-# A single worker is deliberate: the SQLAlchemy engine is a process-wide
-# singleton over SQLite, which allows only one writer. Scaling to multiple
-# workers requires pointing CVEDECK_DB_URL at PostgreSQL first.
+# A single worker is required: scans are queued and run one at a time inside
+# this process (Req 19), and a second worker would overlap them and mark the
+# first's running scans interrupted. PostgreSQL does not change that.
 CMD ["uvicorn", "app.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

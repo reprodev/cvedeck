@@ -103,6 +103,28 @@ class FindingChange(str, Enum):
     RESOLVED = "resolved"
 
 
+class ScanJobStatus(str, Enum):
+    """Where a background scan job is in its life (Req 19).
+
+    ``INTERRUPTED`` is a job the process stopped before it finished -- a
+    restart. Its credentials lived only in memory and are gone, so it is never
+    resumed; it says so instead of sitting at "running" forever.
+    """
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    FINISHED = "finished"
+    INTERRUPTED = "interrupted"
+
+
+class ScanJobTargetState(str, Enum):
+    """Where one host in a scan job is (Req 19.2). Its outcome is a ScanStatus."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+
+
 class SourceStatus(str, Enum):
     """Reachability of a public vulnerability data source during matching."""
 

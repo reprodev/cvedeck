@@ -376,10 +376,11 @@ host.
 8. IF a request cannot write because the database is busy with another write
    THEN the system SHALL respond with HTTP 503 and a `Retry-After` header, not
    HTTP 500; any other database error SHALL NOT be reported as busy.
-9. IF a scan request names a host that is already being scanned THEN the system
-   SHALL refuse the request with HTTP 409, naming the busy hosts, and SHALL NOT
-   start any of its targets; a host's claim SHALL be released when its request
-   ends, however it ends.
+9. THE system SHALL run one scan at a time, so that two scans of the same host
+   never overlap; a scan requested while another is running SHALL wait its turn
+   rather than be refused, and a scan that fails SHALL NOT keep the next one
+   waiting. (0.10.4 refused a second scan of a busy host with HTTP 409;
+   background scanning, Requirement 19, replaced the refusal with the queue.)
 
 ### Requirement 14: Accurate and reachable remediation guidance
 
@@ -649,3 +650,29 @@ lists by hand.
     length and carrying no credential, so that a failed run says whether the
     host was unreachable, rejected the credentials, presented a different host
     key, or could not be inventoried, rather than only that it failed.
+
+### Requirement 19: Background scanning
+
+**User story:** As an operator, I want a scan to run in the background and show
+its progress host by host, so that I am not left watching a spinner for minutes,
+can leave the page, and can see which host is being scanned.
+
+#### Acceptance criteria
+
+1. WHEN a scan is requested from the dashboard THEN the system SHALL record it
+   as a job and answer at once with the job's identifier; jobs SHALL run one at
+   a time, oldest first.
+2. WHILE a job runs THE system SHALL report, for each of its hosts, whether it
+   is queued, being scanned, or done, and for each host that is done the same
+   outcome `POST /api/scans` reports; THE system SHALL keep the newest 100
+   finished jobs and SHALL NOT discard one that is queued or running.
+3. THE system SHALL NOT write a scan's credentials to the database or to any
+   file; they SHALL be held in memory only until the job starts.
+4. IF the process stops while a job is queued or running THEN, when it starts
+   again, THE system SHALL mark that job interrupted and say why, rather than
+   resume it or leave it reported as running.
+5. THE `POST /api/scans` route SHALL keep its request and response unchanged
+   and SHALL answer when its scan is done, running that scan as a job in its
+   turn like any other.
+6. IN demo mode THE system SHALL refuse to queue a scan job (extends Req 15).
+

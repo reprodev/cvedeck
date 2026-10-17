@@ -207,6 +207,10 @@ class ScannerEngine:
         # it (Req 12.11); None leaves it to the scheduled refresh.
         self._ubuntu_kernel_source = ubuntu_kernel_source
         self._ubuntu_feeds_tried: set[str] = set()
+        #: Called before and after each target, so a background job can show
+        #: which host is being scanned and what each one found (Req 19.2).
+        self.on_target_start: Callable[[TargetMachine], None] | None = None
+        self.on_target_done: Callable[[TargetMachine, MachineScan], None] | None = None
 
     def set_credentials(self, credentials_by_id: dict[str, Credentials]) -> None:
         """Install a per-target credential lookup from an id -> credentials map.
@@ -230,7 +234,12 @@ class ScannerEngine:
         """
         machine_scans: list[MachineScan] = []
         for target in targets:
-            machine_scans.append(self._scan_target(target))
+            if self.on_target_start is not None:
+                self.on_target_start(target)
+            scan = self._scan_target(target)
+            if self.on_target_done is not None:
+                self.on_target_done(target, scan)
+            machine_scans.append(scan)
         return ScanResult(machine_scans=machine_scans)
 
     def _scan_target(self, target: TargetMachine) -> MachineScan:

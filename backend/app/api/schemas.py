@@ -29,6 +29,8 @@ from ..enums import (
     FindingChange,
     Platform,
     RemediationStatus,
+    ScanJobStatus,
+    ScanJobTargetState,
     ScanStatus,
     Severity,
 )
@@ -474,6 +476,39 @@ class ScanResponse(BaseModel):
     """Aggregate outcome of a manually initiated scan (Req 1.1, 1.2)."""
 
     machine_scans: list[MachineScanOut]
+
+
+class ScanJobCreated(BaseModel):
+    """A queued scan, to follow at ``GET /api/scans/jobs/{job_id}`` (Req 19.1)."""
+
+    job_id: str
+
+
+class ScanJobTargetOut(BaseModel):
+    """One host in a scan job: where it is, then what its scan found (Req 19.2).
+
+    ``outcome`` is ``None`` until the host is done, and then exactly what
+    ``POST /api/scans`` reports for it.
+    """
+
+    machine_id: str
+    hostname: str
+    state: ScanJobTargetState
+    outcome: MachineScanOut | None = None
+
+
+class ScanJobOut(BaseModel):
+    """A background scan job and its hosts, in the order they are scanned (Req 19)."""
+
+    id: str
+    status: ScanJobStatus
+    requested_by: str
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    #: Why the job did not finish normally -- a restart, say (Req 19.4).
+    error_detail: str | None = None
+    targets: list[ScanJobTargetOut]
 
 
 class SyncResponse(BaseModel):

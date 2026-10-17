@@ -18,7 +18,6 @@ hosts or an online database:
 """
 
 import io
-import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -27,7 +26,6 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api import actions
 from app.api.app import create_app
 from tests.auth_helpers import override_auth
 from app.api.dependencies import (
@@ -229,84 +227,6 @@ def _install_scan_engine(app, session, *, collector_by_platform):
     )
     app.dependency_overrides[get_scanner_engine] = lambda: engine
     return engine
-
-
-def _scan_body(*machine_ids: str) -> dict:
-    return {
-        "targets": [
-            {"id": m, "hostname": f"{m}.example.com", "platform": "linux",
-             "username": "root", "password": "secret"}
-            for m in machine_ids
-        ]
-    }
-
-
-class _ParkingCollector(_StubCollector):
-    """Parks inside the first collection until released."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.reached = threading.Event()
-        self.release = threading.Event()
-
-    def collect(self, target, credentials) -> Inventory:
-        self.reached.set()
-        assert self.release.wait(10), "never released"
-        return super().collect(target, credentials)
-
-
-def test_a_second_scan_of_a_host_being_scanned_is_refused(app, client, session):
-    """Validates Req 13.9: one scan per host at a time.
-
-    The second request is refused before it reaches the engine or the
-    database, which is also why this can share the test's one session.
-    """
-    collector = _ParkingCollector()
-    _install_scan_engine(app, session, collector_by_platform={Platform.LINUX: collector})
-    first: dict = {}
-    thread = threading.Thread(
-        target=lambda: first.setdefault("resp", client.post("/api/scans", json=_scan_body("m1"))),
-        daemon=True,
-    )
-    thread.start()
-    assert collector.reached.wait(10)
-    try:
-        second = client.post("/api/scans", json=_scan_body("m2", "m1"))
-    finally:
-        collector.release.set()
-        thread.join(10)
-
-    assert second.status_code == 409
-    assert "m1" in second.json()["detail"] and "m2" not in second.json()["detail"]
-    assert first["resp"].status_code == 200
-    # Released when the first finished: the same host can be scanned again.
-    assert client.post("/api/scans", json=_scan_body("m1")).status_code == 200
-
-
-def test_a_host_not_being_scanned_is_not_held_up(app, client, session):
-    """Validates Req 13.9: the guard is per host, not per instance."""
-    _install_scan_engine(app, session, collector_by_platform={Platform.LINUX: _StubCollector()})
-
-    with actions._one_scan_per_host(["m1"]):
-        assert client.post("/api/scans", json=_scan_body("m2")).status_code == 200
-        assert client.post("/api/scans", json=_scan_body("m1")).status_code == 409
-
-
-def test_a_scan_that_crashes_still_releases_its_hosts(app, session):
-    """Validates Req 13.9: a claim never outlives its request, even a failed one."""
-
-    class _Exploding:
-        def set_credentials(self, credentials):
-            pass
-
-        def scan(self, targets):
-            raise RuntimeError("engine defect")
-
-    app.dependency_overrides[get_scanner_engine] = lambda: _Exploding()
-    client = TestClient(app, raise_server_exceptions=False)
-
-    assert client.post("/api/scans", json=_scan_body("m1")).status_code == 500
-    assert "m1" not in actions._scanning
 
 
 def test_scan_success_persists_and_reports_findings(app, client, session):

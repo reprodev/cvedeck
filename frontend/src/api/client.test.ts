@@ -195,4 +195,40 @@ describe("CveScannerApiClient", () => {
 
     expect(outcome.findingsUpdated).toBe(0);
   });
+
+  it("queues a scan job and maps its progress from the wire (Req 19)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ job_id: "job-7" }, 202))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          id: "job-7",
+          status: "running",
+          requested_by: "admin",
+          created_at: "2026-10-18T10:00:00Z",
+          started_at: "2026-10-18T10:00:01Z",
+          targets: [
+            {
+              machine_id: "m1",
+              hostname: "web-01",
+              state: "done",
+              outcome: { machine_id: "m1", status: "success", finding_count: 4, new_count: 1 },
+            },
+            { machine_id: "m2", hostname: "web-02", state: "running", outcome: null },
+          ],
+        }),
+      );
+    const client = new CveScannerApiClient({ fetchImpl });
+
+    const id = await client.startScanJob([{ id: "m1", hostname: "web-01", platform: "linux" }]);
+    const job = await client.getScanJob(id);
+
+    expect(id).toBe("job-7");
+    expect(fetchImpl.mock.calls[0][0]).toBe("/api/scans/jobs");
+    expect(fetchImpl.mock.calls[1][0]).toBe("/api/scans/jobs/job-7");
+    expect(job.finishedAt).toBeNull();
+    expect(job.errorDetail).toBeNull();
+    expect(job.targets[0].outcome).toMatchObject({ machineId: "m1", findingCount: 4, newCount: 1 });
+    expect(job.targets[1]).toEqual({ machineId: "m2", hostname: "web-02", state: "running", outcome: null });
+  });
 });

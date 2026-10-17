@@ -24,10 +24,8 @@ that never touch real hosts or an online database.
 
 import logging
 import socket
-import threading
 import time
-from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import paramiko
@@ -35,16 +33,18 @@ from sqlalchemy.orm import Session
 
 from .. import config
 from ..data.repository import Repository
-from ..enums import Platform, ScanStatus
+from ..data.schema import ScanJob
+from ..enums import Platform, ScanJobStatus, ScanStatus
 from ..models import Credentials, TargetMachine
 from ..scanner.collectors import (
     CommandOutputLimitError,
     _run_ssh_command_detailed,
     parse_private_key,
 )
-from ..scanner.engine import MachineScan, ScannerEngine
+from ..scanner.engine import ScannerEngine
 from ..scanner.exceptions import AuthError, HostKeyError, HostKeyMismatchError
 from ..scanner.host_keys import connect_pinned
+from ..services import scan_jobs
 from ..services.remediation import (
     RemediationRecordNotFoundError,
     RemediationService,
@@ -52,6 +52,7 @@ from ..services.remediation import (
 from ..services.sync import SyncService
 from .credentials import CredentialResolutionError, resolve_credentials
 from .dependencies import get_scanner_engine, get_session, get_sync_service
+from .routes import machine_scan_out
 from .wiring import RepositoryHostKeyStore
 from .schemas import (
     DiscoveredHostOut,
@@ -67,6 +68,7 @@ from .schemas import (
     MachineSummary,
     RemediationIn,
     RemediationOut,
+    ScanJobCreated,
     ScanRequest,
     ScanResponse,
     SeverityCounts,
@@ -228,45 +230,6 @@ def update_remediation(
     return _to_remediation_out(record)
 
 
-#: Machines with a scan in flight in this process (Req 13.9). One process is
-#: enough: the deployment runs a single uvicorn worker over SQLite (AGENTS §5).
-_scanning: set[str] = set()
-_scanning_lock = threading.Lock()
-
-
-@contextmanager
-def _one_scan_per_host(machine_ids: list[str]) -> Iterator[None]:
-    """Refuse to start a scan of a host that is already being scanned (Req 13.9).
-
-    Up to 0.10.2 a second scan could not run beside the first: the first held
-    SQLite's write lock throughout, and the second failed on it. 0.10.3 removed
-    that (Req 13.6), and two scans of one host can now overlap -- each reading
-    the host's previous findings before the other writes, so the scan history
-    records the wrong new and resolved counts. The whole request is refused,
-    naming the hosts, for the reason Windows targets are: a batch reported done
-    with part of it silently skipped is the worse answer. A queue that runs
-    scans one at a time replaces this when scans move to background jobs.
-    """
-    wanted = set(machine_ids)
-    with _scanning_lock:
-        busy = sorted(wanted & _scanning)
-        if busy:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Already being scanned; try again when that scan finishes: "
-                    + ", ".join(busy[:10])
-                    + (" ..." if len(busy) > 10 else "")
-                ),
-            )
-        _scanning.update(wanted)
-    try:
-        yield
-    finally:
-        with _scanning_lock:
-            _scanning.difference_update(wanted)
-
-
 def _refuse_unsupported_platforms(body: ScanRequest) -> None:
     """Refuse a scan that includes a platform CveDeck cannot yet assess (Req 10.8).
 
@@ -299,32 +262,16 @@ def _refuse_unsupported_platforms(body: ScanRequest) -> None:
         )
 
 
-@router.post(
-    "/scans",
-    response_model=ScanResponse,
-    dependencies=[
-        Depends(_demo_guard("Scanning")),
-        Depends(_refuse_unsupported_platforms),
-    ],
-)
-def initiate_scan(
-    body: ScanRequest,
-    request: Request,
-    engine: ScannerEngine = Depends(get_scanner_engine),
-) -> ScanResponse:
-    """Manually initiate a scan over a batch of Linux targets (Req 1.1, 13.1).
+def _queue_scan(body: ScanRequest, request: Request, session: Session) -> ScanJob:
+    """Audit, resolve credentials, and write the scan down as a queued job (Req 19.1).
 
-    Maps the request targets to domain :class:`TargetMachine` objects, hands
-    the credentials to the injected engine via a per-request lookup, and returns
-    the per-target scan outcomes. Per-target connection/auth failures are
-    recorded as statuses by the engine and never abort the batch (Req 11.9).
-    A host already being scanned refuses the request with 409 (Req 13.9).
+    A target may supply a password or a private key, or omit both and fall back
+    to the deployment's server-managed SSH key -- which is what lets a fleet
+    re-scan run without retyping credentials per host. A credential problem is
+    that target's failure, not the batch's: fault isolation has to hold for
+    targets that never reach the engine too. Credentials go to the job in
+    memory, never to its rows (Req 19.3).
     """
-    with _one_scan_per_host([t.id for t in body.targets]):
-        return _scan(body, request, engine)
-
-
-def _scan(body: ScanRequest, request: Request, engine: ScannerEngine) -> ScanResponse:
     targets = [
         TargetMachine(id=t.id, hostname=t.hostname, platform=t.platform)
         for t in body.targets
@@ -338,68 +285,87 @@ def _scan(body: ScanRequest, request: Request, engine: ScannerEngine) -> ScanRes
         + (" ..." if len(body.targets) > 10 else ""),
     )
 
-    # Resolve every target's credentials up front. A target may supply a
-    # password or a private key, or omit both and fall back to the deployment's
-    # server-managed SSH key -- which is what lets a fleet re-scan run without
-    # retyping credentials per host.
     credentials_by_id: dict[str, Credentials] = {}
-    unresolved: list[MachineScanOut] = []
-    for target in body.targets:
+    unresolved: list[tuple[TargetMachine, str]] = []
+    for target, wanted in zip(targets, body.targets):
         try:
             credentials_by_id[target.id] = resolve_credentials(
-                target.platform,
-                username=target.username,
-                password=target.password,
-                private_key=target.private_key,
-                passphrase=target.passphrase,
+                wanted.platform,
+                username=wanted.username,
+                password=wanted.password,
+                private_key=wanted.private_key,
+                passphrase=wanted.passphrase,
             )
         except CredentialResolutionError as exc:
-            # A credential problem is that target's failure, not the batch's.
-            # Fault isolation is the engine's defining behaviour, and it has to
-            # hold for targets that never reach the engine too.
-            unresolved.append(
-                MachineScanOut(
-                    machine_id=target.id,
-                    status=ScanStatus.AUTH_FAILURE,
-                    finding_count=0,
-                    sources_ok=False,
-                    message=str(exc),
-                )
-            )
+            unresolved.append((target, str(exc)))
 
-    scannable = [t for t in targets if t.id in credentials_by_id]
-    if not scannable:
-        return ScanResponse(machine_scans=unresolved)
-
-    engine.set_credentials(credentials_by_id)
-    result = engine.scan(scannable)
-    return ScanResponse(
-        machine_scans=unresolved
-        + [
-            MachineScanOut(
-                machine_id=scan.machine_id,
-                status=scan.status,
-                finding_count=len(scan.findings),
-                sources_ok=scan.sources_ok,
-                unavailable_sources=list(scan.unavailable_sources),
-                message=scan.message,
-                **_diff_counts(scan),
-            )
-            for scan in result.machine_scans
-        ]
+    return scan_jobs.create_job(
+        session,
+        targets=[t for t in targets if t.id in credentials_by_id],
+        credentials_by_id=credentials_by_id,
+        unresolved=unresolved,
+        requested_by=_requested_by(request),
     )
 
 
-def _diff_counts(scan: MachineScan) -> dict[str, object]:
-    """A scan outcome's new and resolved counts, as ``None`` where not assessed (Req 18.2)."""
-    diff = scan.diff
-    if diff is None or diff.baseline:
-        return {"new_count": None, "resolved_count": None, "baseline": diff is not None}
-    return {
-        "new_count": len(diff.new),
-        "resolved_count": len(diff.resolved) if diff.resolved_assessed else None,
-        "baseline": False,
-    }
+def _requested_by(request: Request) -> str:
+    principal = getattr(request.state, "principal", None)
+    return (getattr(principal, "username", None) or getattr(principal, "kind", None)) or "unknown"
+
+
+@router.post(
+    "/scans",
+    response_model=ScanResponse,
+    dependencies=[
+        Depends(_demo_guard("Scanning")),
+        Depends(_refuse_unsupported_platforms),
+    ],
+)
+def initiate_scan(
+    body: ScanRequest,
+    request: Request,
+    engine: ScannerEngine = Depends(get_scanner_engine),
+    session: Session = Depends(get_session),
+) -> ScanResponse:
+    """Scan a batch of Linux targets and wait for the outcome (Req 1.1, 13.1, 19.5).
+
+    The contract is unchanged since before background scanning: the same
+    request, answered when the scan is done with the same per-target outcomes.
+    Per-target connection and auth failures are statuses, never an aborted batch
+    (Req 11.9). Underneath, the scan is a job like any other: it takes its place
+    in the queue with the request's own engine and waits -- behind a scan
+    already running, never overlapping it (Req 13.9), and never ahead of a job
+    queued before it (Req 19.1) -- and it appears in the job list.
+    """
+    job = _queue_scan(body, request, session)
+    job = scan_jobs.run_in_turn(session, job.id, engine) or job
+    return ScanResponse(machine_scans=[machine_scan_out(row) for row in job.targets])
+
+
+@router.post(
+    "/scans/jobs",
+    response_model=ScanJobCreated,
+    status_code=202,
+    dependencies=[
+        Depends(_demo_guard("Scanning")),
+        Depends(_refuse_unsupported_platforms),
+    ],
+)
+def start_scan_job(
+    body: ScanRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> ScanJobCreated:
+    """Queue a scan and return at once with a job to follow (Req 19.1, 19.2).
+
+    The dashboard's way to scan: it polls ``GET /api/scans/jobs/{id}`` for
+    per-host progress instead of holding a request open for minutes. Refused
+    in demo mode like every route that dials out (Req 19.6).
+    """
+    job = _queue_scan(body, request, session)
+    if job.status is ScanJobStatus.QUEUED:
+        scan_jobs.submit(job.id)
+    return ScanJobCreated(job_id=job.id)
 
 
 @router.delete(

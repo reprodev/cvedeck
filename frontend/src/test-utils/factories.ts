@@ -8,6 +8,7 @@
 import type {
   CveFinding,
   MachineSummary,
+  ScanJob,
   ScanOutcome,
   SeverityCounts,
 } from "../types";
@@ -57,6 +58,21 @@ export function makeScanOutcome(
     newCount: null,
     resolvedCount: null,
     baseline: false,
+    ...overrides,
+  };
+}
+
+/** A background scan job (Req 19): one host, finished, by default. */
+export function makeScanJob(overrides: Partial<ScanJob> = {}): ScanJob {
+  return {
+    id: "job-1",
+    status: "finished",
+    requestedBy: "open",
+    createdAt: "2026-10-18T10:00:00Z",
+    startedAt: "2026-10-18T10:00:00Z",
+    finishedAt: "2026-10-18T10:00:05Z",
+    errorDetail: null,
+    targets: [{ machineId: "m1", hostname: "web-01", state: "done", outcome: makeScanOutcome() }],
     ...overrides,
   };
 }

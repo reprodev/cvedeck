@@ -65,6 +65,10 @@ def test_create_all_creates_every_table(engine):
         # Scan history (Req 18). Syncable, like the findings it describes.
         "scan_runs",
         "scan_finding_changes",
+        # Background scan jobs (Req 19). Not syncable: operational state of
+        # this instance, and the queue for scans it has not run yet.
+        "scan_jobs",
+        "scan_job_targets",
     }
 
 

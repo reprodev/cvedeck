@@ -361,6 +361,30 @@ export interface ScanOutcome {
   baseline: boolean;
 }
 
+/** One host in a background scan job (Req 19.2). */
+export interface ScanJobTarget {
+  machineId: string;
+  hostname: string;
+  /** "queued", "running" or "done". */
+  state: string;
+  /** Null until the host is done; then what POST /api/scans reports for it. */
+  outcome: ScanOutcome | null;
+}
+
+/** A background scan job (Req 19), as GET /api/scans/jobs/{id} reports it. */
+export interface ScanJob {
+  id: string;
+  /** "queued", "running", "finished" or "interrupted". */
+  status: string;
+  requestedBy: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  /** Why the job did not finish normally -- a restart, say. */
+  errorDetail: string | null;
+  targets: ScanJobTarget[];
+}
+
 /** Deployment capabilities reported by the backend. */
 export interface ServerCapabilities {
   /** Whether a server-managed SSH key is configured, enabling fleet re-scan. */

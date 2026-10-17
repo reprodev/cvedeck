@@ -86,3 +86,16 @@ def test_the_openssh_case_that_flapped():
         (kept,) = client._deduplicate_findings(order)
         assert kept.package_identifier.endswith("(fixed in 1:8.9p1-3ubuntu0.18)")
         assert kept.cvss_score == 9.8
+
+
+def test_a_named_band_and_a_derived_one_do_not_tie_on_arrival_order():
+    """The case Hypothesis found after 0.10.4 shipped: two records alike but for
+    one naming its band (High) and the other leaving it to its 7.0 score. They
+    rank alike and share an identifier, so the first to arrive used to win."""
+    named = _advisory("CVE-2026-2", "openssh-server", 7.0, Severity.HIGH, None)
+    derived = _advisory("CVE-2026-2", "openssh-server", 7.0, None, None)
+    client = OsvHttpClient()
+
+    assert client._deduplicate_findings([named, derived]) == client._deduplicate_findings(
+        [derived, named]
+    )

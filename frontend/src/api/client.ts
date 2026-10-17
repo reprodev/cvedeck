@@ -28,6 +28,7 @@ import type {
   RemediationRecord,
   FindingChangeRow,
   HostKeyPin,
+  ScanJob,
   ScanOutcome,
   ScanRun,
   ScanTargetInput,
@@ -267,7 +268,6 @@ interface FindingChangeWire {
   remediation_status: string | null;
 }
 
-/** Wire shape of the POST /api/scans response. */
 /** Deployment capabilities reported by GET /api/health. */
 interface HealthWire {
   status: string;
@@ -305,8 +305,34 @@ function toApiToken(wire: ApiTokenWire): ApiToken {
   };
 }
 
+/** Wire shape of the POST /api/scans response. */
 interface ScanResponseWire {
   machine_scans: MachineScanWire[];
+}
+
+/** Wire shape of POST /api/scans/jobs (Req 19.1). */
+interface ScanJobCreatedWire {
+  job_id: string;
+}
+
+/** Wire shape of one host in a scan job (Req 19.2). */
+interface ScanJobTargetWire {
+  machine_id: string;
+  hostname: string;
+  state: string;
+  outcome?: MachineScanWire | null;
+}
+
+/** Wire shape of GET /api/scans/jobs/{id}. */
+interface ScanJobWire {
+  id: string;
+  status: string;
+  requested_by: string;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error_detail?: string | null;
+  targets: ScanJobTargetWire[];
 }
 
 /** Wire shape of a remediation record as serialized by the backend. */
@@ -476,6 +502,44 @@ function toScanOutcome(wire: MachineScanWire): ScanOutcome {
     newCount: wire.new_count ?? null,
     resolvedCount: wire.resolved_count ?? null,
     baseline: wire.baseline ?? false,
+  };
+}
+
+function toScanJob(wire: ScanJobWire): ScanJob {
+  return {
+    id: wire.id,
+    status: wire.status,
+    requestedBy: wire.requested_by,
+    createdAt: wire.created_at,
+    startedAt: wire.started_at ?? null,
+    finishedAt: wire.finished_at ?? null,
+    errorDetail: wire.error_detail ?? null,
+    targets: wire.targets.map((target) => ({
+      machineId: target.machine_id,
+      hostname: target.hostname,
+      state: target.state,
+      outcome: target.outcome ? toScanOutcome(target.outcome) : null,
+    })),
+  };
+}
+
+/**
+ * The scan request body, shared by both scan routes. Credential fields are
+ * mapped explicitly rather than spreading the input: the wire format is
+ * snake_case, so a spread would send `privateKey` and the backend would
+ * silently ignore it and fall back to the server key.
+ */
+function scanRequestBody(targets: ScanTargetInput[]) {
+  return {
+    targets: targets.map((target) => ({
+      id: target.id,
+      hostname: target.hostname,
+      platform: target.platform,
+      username: target.username ?? null,
+      password: target.password ?? null,
+      private_key: target.privateKey ?? null,
+      passphrase: target.passphrase ?? null,
+    })),
   };
 }
 
@@ -818,13 +882,6 @@ export class CveScannerApiClient {
   }
 
   /**
-   * POST /api/scans -- scan a batch of targets and return the per-target outcome.
-   *
-   * The backend rejects an empty target list (ScanRequest requires at least
-   * one), so callers must supply at least one target. Credentials travel in the
-   * request body and are never echoed back in the response.
-   */
-  /**
    * Deployment capabilities, used to decide what the UI may offer.
    *
    * Fleet re-scan needs a server-managed SSH key; without one those scans have
@@ -843,26 +900,38 @@ export class CveScannerApiClient {
   }
 
   /**
-   * POST /api/scans -- scan a batch of targets.
+   * POST /api/scans -- scan a batch of targets and wait for the outcome.
    *
-   * Credential fields are mapped explicitly rather than spreading the input:
-   * the wire format is snake_case, so a spread would send `privateKey` and the
-   * backend would silently ignore it and fall back to the server key. Omitted
-   * fields are left out entirely so the backend's own default applies.
+   * Kept for API compatibility; the dashboard uses {@link startScanJob}, which
+   * returns at once and reports progress (Req 19). The backend rejects an empty
+   * target list, and credentials are never echoed back.
    */
   async startScan(targets: ScanTargetInput[]): Promise<ScanOutcome[]> {
-    const wire = await this.request<ScanResponseWire>("POST", "/api/scans", {
-      targets: targets.map((target) => ({
-        id: target.id,
-        hostname: target.hostname,
-        platform: target.platform,
-        username: target.username ?? null,
-        password: target.password ?? null,
-        private_key: target.privateKey ?? null,
-        passphrase: target.passphrase ?? null,
-      })),
-    });
+    const wire = await this.request<ScanResponseWire>("POST", "/api/scans", scanRequestBody(targets));
     return wire.machine_scans.map(toScanOutcome);
+  }
+
+  /** POST /api/scans/jobs -- queue a scan and return its job id at once (Req 19.1). */
+  async startScanJob(targets: ScanTargetInput[]): Promise<string> {
+    const wire = await this.request<ScanJobCreatedWire>(
+      "POST",
+      "/api/scans/jobs",
+      scanRequestBody(targets),
+    );
+    return wire.job_id;
+  }
+
+  /** GET /api/scans/jobs/{id} -- a job's progress, host by host (Req 19.2). */
+  async getScanJob(id: string): Promise<ScanJob> {
+    return toScanJob(
+      await this.request<ScanJobWire>("GET", `/api/scans/jobs/${encodeURIComponent(id)}`),
+    );
+  }
+
+  /** GET /api/scans/jobs?active=true -- jobs still queued or running, newest first. */
+  async listActiveScanJobs(): Promise<ScanJob[]> {
+    const wire = await this.request<ScanJobWire[]>("GET", "/api/scans/jobs?active=true");
+    return wire.map(toScanJob);
   }
 
   /**

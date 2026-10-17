@@ -19,6 +19,7 @@ import type {
   FeedHealth,
   Platform,
   RemediationStatus,
+  ScanJob,
   ScanOutcome,
   ScanTargetInput,
 } from "./types";
@@ -28,6 +29,7 @@ import { MachineListView } from "./views/MachineListView";
 import { Icon } from "./components/Icon";
 import { themeAffordance, useTheme } from "./lib/useTheme";
 import { useUrlState } from "./lib/useUrlState";
+import { progressLabel, useScanJob } from "./lib/useScanJob";
 import type { Workspace } from "./lib/useUrlState";
 import { ScanFormView } from "./views/ScanFormView";
 import { SettingsView } from "./views/SettingsView";
@@ -77,7 +79,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
   const [feeds, setFeeds] = useState<FeedHealth[]>([]);
   const [refreshingFeeds, setRefreshingFeeds] = useState(false);
   const toast = useToast();
-  const [scanning, setScanning] = useState(false);
+  const [startingScan, setStartingScan] = useState(false);
   const [scanOutcomes, setScanOutcomes] = useState<ScanOutcome[] | undefined>();
   // Pre-populates the scan form when a Quick Scan is triggered from the
   // discovery or fleet view (Req 8.5).
@@ -323,31 +325,36 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
   }, [api, loadFeeds, loadMachines, loadFindings, selectedMachineId]);
 
   /**
-   * Re-scan a batch of machines with the server-managed key.
+   * Toast a finished scan job, then refresh the fleet (Req 19.2).
    *
-   * `startScan` has always taken an array and the backend has always batched
-   * with per-target fault isolation; the UI simply never sent more than one.
-   * Credentials are omitted so the backend falls back to its configured key.
+   * One host reads as a single scan always has; several read as a fleet
+   * re-scan always has. Decided by the job's size rather than by which button
+   * started it, so a job picked up after a reload is reported the same way.
    */
-  const handleRescan = useCallback(
-    async (requested: MachineSummary[]) => {
-      // The fleet view already leaves Windows hosts out; this is the second
-      // line, because the backend refuses a whole batch that contains one
-      // (Req 10.8) and a single stray target would fail every host in it.
-      const targets = requested.filter((machine) => isScannable(machine.platform));
-      if (targets.length === 0) return;
-      setScanning(true);
-      setError(null);
-      try {
-        const outcomes = await api.startScan(
-          targets.map((machine) => ({
-            id: machine.machineId,
-            hostname: machine.hostname,
-            platform: machine.platform,
-          })),
-        );
-        setScanOutcomes(outcomes);
-
+  const reportScan = useCallback(
+    (job: ScanJob) => {
+      const outcomes = job.targets.flatMap((target) => (target.outcome ? [target.outcome] : []));
+      setScanOutcomes(outcomes);
+      if (job.status === "interrupted") {
+        toast.error(`Scan interrupted: ${job.errorDetail ?? "it stopped before finishing."}`);
+      } else if (job.targets.length === 1 && outcomes.length === 1) {
+        const [outcome] = outcomes;
+        if (outcome.status === "success" && !outcome.sourcesOk) {
+          toast.warning(`${outcome.machineId}: ${outcome.message ?? "partial results"}`);
+        } else if (outcome.status !== "success") {
+          toast.error(
+            `${outcome.machineId}: ${statusLabel(outcome.status)}` +
+              (outcome.message ? ` -- ${outcome.message}` : ""),
+          );
+        } else {
+          toast.success(
+            `Scan completed for ${job.targets[0].hostname}: ${outcome.findingCount} CVEs identified` +
+              (outcome.baseline || outcome.newCount === null
+                ? "."
+                : ` (${outcome.newCount} new, ${outcome.resolvedCount ?? "none"} resolved).`),
+          );
+        }
+      } else {
         const failed = outcomes.filter((o) => o.status !== "success");
         const partial = outcomes.filter((o) => o.status === "success" && !o.sourcesOk);
         if (failed.length === 0 && partial.length === 0) {
@@ -366,16 +373,56 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
             );
           }
         }
-        await loadMachines();
+      }
+      loadMachines().catch(() => {});
+    },
+    [loadMachines, toast],
+  );
+
+  const scanJob = useScanJob(api, reportScan, toast.error);
+  const scanning = startingScan || scanJob.job !== null;
+  const scanProgress = scanJob.job ? progressLabel(scanJob.job) : null;
+
+  /** Queue a scan as a background job; its result arrives through reportScan. */
+  const queueScan = useCallback(
+    async (targets: ScanTargetInput[]) => {
+      setStartingScan(true);
+      setError(null);
+      setScanOutcomes(undefined);
+      try {
+        await scanJob.start(targets);
       } catch (err: unknown) {
         const message = errorMessage(err);
         setError(message);
         toast.error(message);
       } finally {
-        setScanning(false);
+        setStartingScan(false);
       }
     },
-    [api, loadMachines, toast],
+    [scanJob, toast],
+  );
+
+  /**
+   * Re-scan a batch of machines with the server-managed key.
+   *
+   * Credentials are omitted so the backend falls back to its configured key.
+   */
+  const handleRescan = useCallback(
+    async (requested: MachineSummary[]) => {
+      // The fleet view already leaves Windows hosts out; this is the second
+      // line, because the backend refuses a whole batch that contains one
+      // (Req 10.8) and a single stray target would fail every host in it.
+      const targets = requested.filter((machine) => isScannable(machine.platform));
+      if (targets.length === 0) return;
+      await queueScan(
+        targets.map((machine) => ({
+          id: machine.machineId,
+          hostname: machine.hostname,
+          platform: machine.platform,
+        })),
+      );
+    },
+    [queueScan],
   );
 
   const handleBack = useCallback(() => {
@@ -395,40 +442,9 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
 
   const handleScan = useCallback(
     async (target: ScanTargetInput) => {
-      setScanning(true);
-      setError(null);
-      try {
-        const outcomes = await api.startScan([target]);
-        setScanOutcomes(outcomes);
-        for (const outcome of outcomes) {
-          if (outcome.status === "success" && !outcome.sourcesOk) {
-            toast.warning(
-              `${outcome.machineId}: ${outcome.message ?? "partial results"}`,
-            );
-          } else if (outcome.status !== "success") {
-            toast.error(
-              `${outcome.machineId}: ${statusLabel(outcome.status)}` +
-                (outcome.message ? ` -- ${outcome.message}` : ""),
-            );
-          } else {
-            toast.success(
-              `Scan completed for ${target.hostname}: ${outcome.findingCount} CVEs identified` +
-                (outcome.baseline || outcome.newCount === null
-                  ? "."
-                  : ` (${outcome.newCount} new, ${outcome.resolvedCount ?? "none"} resolved).`),
-            );
-          }
-        }
-        await loadMachines();
-      } catch (err: unknown) {
-        const message = errorMessage(err);
-        setError(message);
-        toast.error(message);
-      } finally {
-        setScanning(false);
-      }
+      await queueScan([target]);
     },
-    [api, loadMachines, toast],
+    [queueScan],
   );
 
   // Forgetting is the only way a pinned key changes (Req 17.7). The modal in
@@ -694,6 +710,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onScan={handleScan}
           onTestConnection={(input) => api.testConnection(input)}
           scanning={scanning}
+          scanProgress={scanProgress}
           outcomes={scanOutcomes}
           initialTarget={quickScanTarget}
           knownHosts={knownHosts}
@@ -708,6 +725,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onNavigateScan={() => handleNavigate("scan")}
           onRescan={capabilities?.serverSshKey ? handleRescan : undefined}
           scanning={scanning}
+          scanProgress={scanProgress}
           feeds={feeds}
           onRefreshFeeds={offerIntelRefresh ? handleRefreshFeeds : undefined}
           refreshingFeeds={refreshingFeeds}

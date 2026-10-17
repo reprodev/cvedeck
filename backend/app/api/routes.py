@@ -39,11 +39,13 @@ from ..data.repository import (
 from ..data.schema import (
     CveFinding,
     RemediationRecord,
+    ScanJob,
+    ScanJobTarget,
     ScanRun,
     SshHostKey,
     TargetMachine,
 )
-from ..enums import Severity
+from ..enums import ScanJobTargetState, ScanStatus, Severity
 from ..models import Package as DomainPackage
 from ..package_identifier import (
     advisory_source,
@@ -52,6 +54,7 @@ from ..package_identifier import (
     parse_package_name,
     parse_package_version,
 )
+from ..services import scan_jobs
 from ..services.enrichment import FindingEnricher
 from ..services.kernel import KernelView, decode_unfixed, kernel_view
 from .dependencies import get_session
@@ -62,7 +65,10 @@ from .schemas import (
     HostKeyOut,
     InstalledKernelOut,
     KernelOut,
+    MachineScanOut,
     MachineSummary,
+    ScanJobOut,
+    ScanJobTargetOut,
     ScanRunOut,
     SeverityCounts,
 )
@@ -632,3 +638,60 @@ def list_feeds(
         )
         for health in enricher.all_feed_health()
     ]
+
+
+def machine_scan_out(row: ScanJobTarget) -> MachineScanOut:
+    """A job target's outcome, as the scan response has always reported it (Req 19.5)."""
+    return MachineScanOut(
+        machine_id=row.machine_id,
+        status=row.status if row.status is not None else ScanStatus.NEVER_SCANNED,
+        finding_count=row.finding_count or 0,
+        sources_ok=bool(row.sources_ok),
+        unavailable_sources=[s for s in (row.unavailable_sources or "").split(",") if s],
+        message=row.message,
+        new_count=row.new_count,
+        resolved_count=row.resolved_count,
+        baseline=bool(row.baseline),
+    )
+
+
+def scan_job_out(job: ScanJob) -> ScanJobOut:
+    return ScanJobOut(
+        id=job.id,
+        status=job.status,
+        requested_by=job.requested_by,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        error_detail=job.error_detail,
+        targets=[
+            ScanJobTargetOut(
+                machine_id=row.machine_id,
+                hostname=row.hostname,
+                state=row.state,
+                outcome=machine_scan_out(row) if row.state is ScanJobTargetState.DONE else None,
+            )
+            for row in job.targets
+        ],
+    )
+
+
+@router.get("/scans/jobs", response_model=list[ScanJobOut])
+def list_scan_jobs(
+    active: bool = Query(default=False),
+    session: Session = Depends(get_session),
+) -> list[ScanJobOut]:
+    """Recent scan jobs, newest first; ``active=true`` for queued and running ones (Req 19.2).
+
+    What the dashboard asks after a reload, to pick up a scan it started before.
+    """
+    return [scan_job_out(job) for job in scan_jobs.list_jobs(session, active_only=active)]
+
+
+@router.get("/scans/jobs/{job_id}", response_model=ScanJobOut)
+def get_scan_job(job_id: str, session: Session = Depends(get_session)) -> ScanJobOut:
+    """A scan job's progress, host by host, and each host's outcome once done (Req 19.2)."""
+    job = scan_jobs.get_job(session, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="No such scan job")
+    return scan_job_out(job)

@@ -58,6 +58,8 @@ export interface MachineListViewProps {
   onRescan?: (machines: MachineSummary[]) => void;
   /** Whether a scan is currently running, to disable the controls. */
   scanning?: boolean;
+  /** What the running scan is doing, e.g. "Scanning 2 of 5: web-01" (Req 19.2). */
+  scanProgress?: string | null;
   /**
    * Whether the first fleet fetch is still in flight.
    *
@@ -96,6 +98,7 @@ export function MachineListView({
   onNavigateScan,
   onRescan,
   scanning = false,
+  scanProgress = null,
   loading = false,
   feeds = [],
   onRefreshFeeds,
@@ -730,6 +733,11 @@ export function MachineListView({
               >
                 {`Re-scan all shown (${rescanShown.length})`}
               </button>
+              {scanProgress && (
+                <span className="scan-progress" role="status">
+                  {scanProgress}
+                </span>
+              )}
               {unscannableInView > 0 && (
                 <span className="hint" title={WINDOWS_SCAN_UNSUPPORTED} data-testid="rescan-skipped">
                   {unscannableInView} Windows {unscannableInView === 1 ? "host" : "hosts"} not

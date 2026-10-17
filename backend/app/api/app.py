@@ -36,7 +36,7 @@ from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.10.4"
+_VERSION = "0.11.0"
 
 
 async def _validation_error_without_input(
@@ -236,17 +236,33 @@ async def _open_database_at_startup(_: FastAPI):
     download, so every trigger passes it -- this hook, the HTTP route and the
     CLI alike (Req 15.6).
     """
+    from sqlalchemy.orm import Session
+
+    from ..services import scan_jobs
     from ..services.feed_scheduler import (
         start_periodic_refresh,
         stop_periodic_refresh,
     )
+    from .wiring import DeploymentScannerEngine
 
     engine = get_engine()
+    # A job queued or running when the process last stopped lost its
+    # credentials with it; say so before anything reads it (Req 19.4).
+    with Session(engine) as session:
+        interrupted = scan_jobs.interrupt_unfinished(session)
+    if interrupted:
+        logging.getLogger(__name__).warning(
+            "%d scan job(s) were interrupted by a restart", interrupted
+        )
+    # The scan worker, started here for the same reason as the refresher: a
+    # test app has no lifespan and so no background thread (Req 19.1).
+    scan_jobs.start_worker(lambda: Session(engine), DeploymentScannerEngine)
     refresher = start_periodic_refresh(engine, config.feed_refresh_hours_in_effect())
     try:
         yield
     finally:
         await stop_periodic_refresh(refresher)
+        scan_jobs.stop_worker()
 
 
 def _configure_logging() -> None:

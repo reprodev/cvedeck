@@ -53,6 +53,8 @@ _SYNC_ORDER: tuple[type[Base], ...] = (
     ScanRun,
     ScanFindingChange,
     RemediationRecord,
+    # Not scan_jobs or scan_job_targets (Req 19): this instance's queue and
+    # its progress are operational state, not scan data.
 )
 
 

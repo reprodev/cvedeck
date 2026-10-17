@@ -89,12 +89,46 @@ function jsonResponse(body: unknown, status = 200): Response {
  * fixtures above, honoring the ?severity= filter on the per-machine CVE route.
  */
 function makeFetchStub() {
+  // Background scan jobs (Req 19): what POST /api/scans/jobs was asked to scan.
+  const jobs = new Map<string, { id: string; hostname: string }[]>();
   return vi.fn(async (
     input: RequestInfo | URL,
     init?: RequestInit,
   ): Promise<Response> => {
     const url = typeof input === "string" ? input : input.toString();
     const [path, query] = url.split("?");
+
+    if (path === "/api/scans/jobs" && init?.method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        targets?: { id: string; hostname: string }[];
+      };
+      const id = `job-${jobs.size + 1}`;
+      jobs.set(id, body.targets ?? []);
+      return jsonResponse({ job_id: id }, 202);
+    }
+    if (path === "/api/scans/jobs") {
+      return jsonResponse([]); // no scan was running before this page loaded
+    }
+    const jobMatch = path.match(/^\/api\/scans\/jobs\/([^/]+)$/);
+    if (jobMatch) {
+      // Mirror the backend: one outcome per requested target, finished.
+      const targets = jobs.get(decodeURIComponent(jobMatch[1])) ?? [];
+      return jsonResponse({
+        id: jobMatch[1],
+        status: "finished",
+        requested_by: "open",
+        created_at: "2026-10-18T10:00:00Z",
+        started_at: "2026-10-18T10:00:00Z",
+        finished_at: "2026-10-18T10:00:05Z",
+        error_detail: null,
+        targets: targets.map((t) => ({
+          machine_id: t.id,
+          hostname: t.hostname,
+          state: "done",
+          outcome: { machine_id: t.id, status: "success", finding_count: 0 },
+        })),
+      });
+    }
 
     if (path === "/api/scans") {
       // Mirror the backend: one outcome per requested target.
@@ -326,9 +360,10 @@ describe("App end-to-end data flow", () => {
     await userEvent.click(screen.getByRole("button", { name: "Start scan" }));
 
     // The request carries the target and its credentials in the documented shape.
+    // It is queued as a background job (Req 19.1), in the same body shape.
     await waitFor(() =>
       expect(fetchImpl).toHaveBeenCalledWith(
-        "/api/scans",
+        "/api/scans/jobs",
         expect.objectContaining({
           method: "POST",
           // Credential fields are mapped explicitly to snake_case; unset ones

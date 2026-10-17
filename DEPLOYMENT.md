@@ -463,11 +463,15 @@ warns on start while login is off and it is unset.
 
 ## Reverse proxies
 
-If you front the application with nginx, Traefik, or Caddy, **raise the read
-timeout to several minutes**. `POST /api/scans` is synchronous: it connects to
-every requested target over SSH or WinRM inline and only responds once the whole
-batch finishes. Nginx's 60-second default will cut off any multi-host scan. The
-example config sets `proxy_read_timeout 900s`.
+Since 0.11.0 the dashboard runs scans as background jobs: it queues one with
+`POST /api/scans/jobs`, which answers at once, and polls it for progress. A
+proxy's default timeouts are fine for that.
+
+**If scripts call `POST /api/scans` through the proxy, raise its read timeout to
+several minutes.** That route keeps its original contract: it answers only once
+its scan -- and any scan queued before it -- has finished. Nginx's 60-second
+default will cut off a multi-host scan. The example config sets
+`proxy_read_timeout 900s`, which is only needed for that route.
 
 ## SSH key authentication
 
@@ -615,14 +619,16 @@ need HTTPS to `api.osv.dev`, `www.cisa.gov`, `epss.empiricalsecurity.com`, and
 
 ## Scaling
 
-The image runs a single uvicorn worker on purpose. The SQLAlchemy engine is a
-process-wide singleton and SQLite permits only one writer, so additional workers
-would contend on the database. To scale, move to PostgreSQL with
-`CVEDECK_DB_URL` first, then raise `--workers`.
+The image runs a single uvicorn worker on purpose, and since 0.11.0 it must
+stay that way. Scans are queued and run one at a time by a thread inside that
+one process, and the queue, the credentials waiting in it and the guarantee that
+two scans never overlap all live in its memory. A second worker process would
+run scans side by side again, and on starting would mark the first worker's
+running scans as interrupted. PostgreSQL (`CVEDECK_DB_URL`) removes SQLite's
+single writer, but not this: keep `--workers 1`.
 
-Because scans run inline within the request, a scan of many hosts occupies a
-worker thread for its full duration. Prefer several smaller batches over one
-very large one.
+Scans run one at a time, so a large batch delays the scans queued behind it;
+the dashboard shows each job's progress host by host.
 
 ## Known limitations
 

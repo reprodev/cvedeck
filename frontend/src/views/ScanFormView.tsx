@@ -25,6 +25,8 @@ export interface ScanFormViewProps {
   onTestConnection?: (input: TestConnectionInput) => Promise<TestConnectionResult>;
   /** True while a scan request is in flight; disables the form. */
   scanning?: boolean;
+  /** What the running scan is doing, e.g. "Scanning 2 of 5: web-01" (Req 19.2). */
+  scanProgress?: string | null;
   /** Per-target results of the most recent scan, if any. */
   outcomes?: ScanOutcome[];
   /** Optional pre-filled target to scan (e.g. from discovery quick scan). */
@@ -46,6 +48,7 @@ export function ScanFormView({
   onScan,
   onTestConnection,
   scanning = false,
+  scanProgress = null,
   outcomes,
   initialTarget,
   knownHosts = [],
@@ -409,6 +412,12 @@ export function ScanFormView({
           </div>
         )}
       </form>
+
+      {scanProgress && (
+        <p className="scan-progress" role="status">
+          {scanProgress}
+        </p>
+      )}
 
       {outcomes && outcomes.length > 0 && (
         <div className="scan-outcomes" role="status">

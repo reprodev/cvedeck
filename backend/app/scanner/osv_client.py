@@ -181,8 +181,16 @@ def _merge_duplicates(group: list[RawAdvisory]) -> RawAdvisory:
     the risk. Ties go to the lowest identifier, so the result is the same in
     any order.
     """
-    def order(advisory: RawAdvisory) -> tuple[tuple[int, float], str]:
-        return _severity_rank(advisory), advisory.package_identifier
+    def order(advisory: RawAdvisory) -> tuple[tuple[int, float], str, str, float]:
+        # Every field, so no two different records ever tie: one naming its
+        # band and one leaving it to its score rank alike, and once compared
+        # only on rank and identifier the first to arrive won (0.11.0).
+        return (
+            _severity_rank(advisory),
+            advisory.package_identifier,
+            advisory.severity.value if advisory.severity is not None else "",
+            advisory.cvss_score if advisory.cvss_score is not None else -1.0,
+        )
 
     worst = min(group, key=order)
     fixed = [a for a in group if "fixed in" in a.package_identifier]

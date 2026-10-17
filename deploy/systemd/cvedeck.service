@@ -11,9 +11,9 @@ Group=cvedeck
 WorkingDirectory=/opt/cvedeck/backend
 EnvironmentFile=/etc/cvedeck/cvedeck.env
 
-# A single worker is deliberate: the SQLAlchemy engine is a process-wide
-# singleton over SQLite, which allows only one writer. Move to PostgreSQL via
-# CVEDECK_DB_URL before raising this.
+# A single worker is required: scans are queued and run one at a time inside
+# this process (Req 19); a second worker would overlap them. PostgreSQL does
+# not change that -- do not raise this.
 ExecStart=/opt/cvedeck/venv/bin/uvicorn app.api.app:app \
     --host 127.0.0.1 \
     --port 8000 \

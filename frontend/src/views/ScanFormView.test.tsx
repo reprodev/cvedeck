@@ -178,6 +178,12 @@ describe("ScanFormView", () => {
     expect(screen.getByRole("button", { name: "Scanning..." })).toBeDisabled();
   });
 
+  it("says which host the running scan is on (Req 19.2)", () => {
+    render(<ScanFormView onScan={vi.fn()} scanning scanProgress="Scanning 2 of 5: web-01" />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Scanning 2 of 5: web-01");
+  });
+
   it("reports the per-target outcome of the last scan (Req 1.4, 1.5)", () => {
     render(
       <ScanFormView

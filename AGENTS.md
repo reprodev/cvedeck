@@ -318,7 +318,17 @@ environment the app reads, so no alembic.ini edit is needed.
   and commits after each one through the `checkpoint` every refresh path passes.
   Overlapping writes are now possible, so anything that reads, does slow work,
   then writes must cope with the row having changed: the sync flip is
-  conditional (Req 5.6), and a host is scanned by one request at a time (Req 13.9).
+  conditional (Req 5.6), and scans run one at a time (Req 13.9).
+- **Scans are jobs, and run through one slot** (Req 19, `services/scan_jobs.py`).
+  Every scan -- from the dashboard's `POST /api/scans/jobs` or a script's
+  `POST /api/scans` -- is a `scan_jobs` row run while holding `_scan_slot`. Do not
+  add a scan path that bypasses it: two scans of one host would overlap again and
+  record wrong change counts. `POST /api/scans` keeps its request and response
+  exactly (the owner's decision, 0.11.0); a test pins its keys. Credentials live
+  in `scan_jobs._credentials`, in memory, until the job starts, and never in a
+  row or a log -- a test greps the database file for the password. A restart
+  marks unfinished jobs `INTERRUPTED`; it never resumes them. The job tables are
+  not synced. 0.10.4's 409 guard is gone: a second request now waits.
   Do not add a write before a network call in either path, and do not go back to
   one commit per batch. `tests/test_write_concurrency.py` parks each path
   mid-download on a real database file and checks another connection can commit;
@@ -581,9 +591,11 @@ change; what has not is context.
   The env resolves the URL through `app/config.py`, never alembic.ini, so migrations
   always target the database the app uses. `render_as_batch` is on because SQLite
   cannot ALTER COLUMN. Never add a column to `app/data/schema.py` without a revision.
-- Deployment runs a single uvicorn worker because the engine is a process-wide
-  singleton over SQLite (one writer). Multiple workers require PostgreSQL via
-  CVEDECK_DB_URL.
+- Deployment runs a single uvicorn worker, and since 0.11.0 must: the scan queue,
+  the credentials waiting in it and the one scan slot live in that process's
+  memory (Req 19). A second worker would overlap scans and, on start, mark the
+  first's running jobs interrupted. PostgreSQL removes the one-writer limit, not
+  this one.
 - Single account, no roles (Req 16). Any signed-in session or API token can do
   everything except manage the account. Multiple users and scoped or read-only tokens
   are follow-ups; the `users` table already allows more than one row.
@@ -613,15 +625,12 @@ change; what has not is context.
 
 ### 5.2 Not built yet
 
-- **Scheduled scanning.** Scans run **inline inside the HTTP request** (hence
-  `proxy_read_timeout 900s` in DEPLOYMENT.md). Background execution
-  (`scan_jobs` + a worker thread, no Celery/Redis -- one uvicorn worker, one SQLite
-  writer) is the prerequisite for cron scans and progress reporting. No *scan* is
-  scheduled and no remediation is automatic; both are deliberate for v1. The feed
-  refresh got its own task in 0.8.7 (`services/feed_scheduler.py`) precisely
-  because it needs none of that machinery -- it is idempotent, owns no
-  transaction and keeps the previous cache on failure. Do not grow it into the
-  general scheduler; a scan needs a job model, a queue and progress reporting.
+- **Scheduled scanning.** Background execution shipped in 0.11.0 (see 5.1), so
+  the prerequisite is in place; no *scan* is scheduled yet, and no remediation is
+  automatic. Scheduled scans can only reach hosts the server-managed key opens,
+  because credentials are never stored. The feed refresh keeps its own task
+  (`services/feed_scheduler.py`): it is idempotent, owns no transaction and keeps
+  the previous cache on failure. Do not grow it into the scan scheduler.
 - **Windows Research & Engineering Roadmap**:
   - *Track 1 (WinRM Inbound & Remote Auth)*: WinRM over HTTPS (port 5986), Kerberos SPN auth, and non-domain UAC token filter research (`LocalAccountTokenFilterPolicy`) without altering client host configurations.
   - *Track 2 (Push-Based Outbound Collector)*: Lightweight standalone PowerShell/Go collector running locally with zero inbound open ports required, pushing WMI/CIM/Registry inventory outbound to `POST /api/scans/ingest`.

@@ -1287,6 +1287,16 @@ label {
   background: var(--ok-bg);
 }
 
+/* A running background scan's progress (Req 19.2). Interface text, not data,
+   so muted rather than coloured; numerals fixed-width so "2 of 5" does not
+   shift as it counts. */
+.scan-progress {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
 .scan-outcomes ul {
   margin: 0.4rem 0 0;
   padding-left: 1.1rem;

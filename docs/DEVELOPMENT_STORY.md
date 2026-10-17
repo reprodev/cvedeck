@@ -2725,3 +2725,49 @@ they finish. The owner chose the merge -- keep the fix, keep the worst rating --
 and four scans of the host now agree to the byte, with nine fixable: more than
 any single run had ever kept. A comparison that checked counts alone would
 have passed every one of those runs; it took comparing every field.
+
+## Chapter 29 — Waiting your turn (v0.11.0)
+
+A scan had always been one HTTP request held open until every host was done.
+That shaped everything around it: a ten-minute timeout in the dashboard, a
+900-second read timeout in every proxy, a button that said "Scanning..." and
+nothing else, and -- once 0.10.3 let writes overlap -- a refusal for a second
+scan of a busy host, because nothing else kept two scans apart.
+
+### A job, written down first
+
+A scan is now a job: a row for the request and a row per host, each host
+marked running and then done with its outcome, so the dashboard can say which
+host it is on. Credentials are the exception to writing things down. They wait
+for their job in memory and are dropped when it starts, which means a restart
+cannot resume a job; it says so instead, marked interrupted with the reason.
+A test reads the database file looking for the password.
+
+The owner decided the old route would not change. Scripts that call
+`POST /api/scans` send the same request and get the same answer, so underneath
+it is a job like any other, and the dashboard moved to the new routes beside
+it.
+
+### Oldest first, across both doors
+
+The first container run looked right and was not. The old route ran its job
+itself and competed for the one scan slot with the worker thread, and it won:
+a dashboard job queued earlier sat waiting while a later scripted scan ran. Two
+doors into one queue are only fair if they really are one queue, so the old
+route now hands its job -- with its own session and engine -- to the worker and
+waits in line. The test for it parks a running scan, queues a second, calls the
+old route, and checks who went first.
+
+The same release closed a gap in the last one. Hypothesis, run again, found two
+duplicate advisories that 0.10.4's tie-break still could not tell apart: alike
+but for one naming its severity band and the other leaving it to its score. The
+finding looked the same either way, but the property did not hold, so now every
+field breaks the tie, and the case is kept as a test.
+
+### What one process means
+
+Moving the queue into the process made a deployment rule into a hard one. One
+uvicorn worker had been a consequence of SQLite; with jobs it is a requirement,
+because a second process would run scans side by side and, on starting, mark
+the first's running scans interrupted. PostgreSQL removes the one-writer limit
+but not this one, and the deployment guide now says so.

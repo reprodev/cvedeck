@@ -8,6 +8,50 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.11.0] - 2026-10-18
+
+**Upgrading:** keep a single uvicorn worker (the image's default). Scans are now
+queued inside that one process, and a second worker would run them side by side
+and mark the first's running scans as interrupted. A database migration adds two
+tables for scan jobs; it runs on start, as always.
+
+### Added
+
+- **Scans run in the background, with progress.** Starting a scan, or a fleet
+  re-scan, no longer holds the page on "Scanning..." for minutes. The scan is
+  queued at once, and the scan form and the fleet's re-scan bar show where it
+  is -- "Scanning 2 of 5: web-01". It carries on if you open another page, and
+  a reload picks it back up. The same toasts as before report the result.
+- **Scans run one at a time, oldest first.** A scan started while another is
+  running waits its turn instead of being refused, so two scans of the same
+  host can no longer overlap. This replaces 0.10.4's "already being scanned"
+  refusal.
+- **For scripts:** `POST /api/scans/jobs` queues a scan and answers `202` with
+  a job id; `GET /api/scans/jobs/{id}` reports each host as queued, running or
+  done, with its outcome; `GET /api/scans/jobs?active=true` lists jobs still
+  under way. The newest 100 jobs are kept.
+
+### Changed
+
+- **`POST /api/scans` is unchanged** -- the same request, answered with the
+  same response when its scan is done -- but it now waits for any scan queued
+  before it. Only callers of this route need a long proxy read timeout; the
+  dashboard no longer does (see DEPLOYMENT.md).
+- **A restart stops queued and running scans.** Credentials are never written
+  down -- they wait for their scan in memory -- so a scan the restart caught
+  cannot be resumed. It is marked *interrupted*, with the reason, rather than
+  left showing as running.
+
+### Fixed
+
+- **Duplicate advisories are now merged the same way every time.** 0.10.4 made
+  this independent of the order OSV's answers arrive in, but two records alike
+  apart from one naming its severity band and the other leaving it to its
+  score could still go either way. What a finding showed did not change; the
+  property now holds.
+
+---
+
 ## [0.10.4] - 2026-10-17
 
 0.10.3 let writes overlap instead of failing. This release fixes the two

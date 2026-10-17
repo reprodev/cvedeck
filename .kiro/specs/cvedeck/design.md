@@ -873,3 +873,28 @@ network** (Req 13.6, 13.7).
 Up to 0.10.2 a scan committed once per batch and a refresh held one transaction
 across its downloads, so either one made every other write fail with a 500 for
 as long as it ran.
+
+### Background scanning (0.11.0)
+
+A scan is a job (Req 19). `app/services/scan_jobs.py` writes it down first --
+a `scan_jobs` row and a `scan_job_targets` row per host -- and runs it while
+holding the process's one **scan slot**, a lock: the worker thread for a job
+queued through `POST /api/scans/jobs`, or the request itself for
+`POST /api/scans`, which keeps its contract and waits its turn (Req 19.5). One
+slot means one scan at a time (Req 13.9, 19.1); one process is the right
+scope, since the deployment runs a single uvicorn worker.
+
+- **Progress.** `ScannerEngine` calls `on_target_start` and `on_target_done`
+  around each target; the job marks the host running, then writes its outcome,
+  committing each at once. A finished job's target rows are exactly its scan
+  response (`routes.machine_scan_out`).
+- **Credentials** are resolved at request time and held in memory, by job id,
+  until the job starts (Req 19.3). A restart therefore cannot resume a job:
+  startup marks queued and running jobs `INTERRUPTED` (Req 19.4).
+- **Engine seam.** The worker builds `DeploymentScannerEngine` per job from its
+  own session; `POST /api/scans` uses the request's injected engine, so test
+  overrides of `get_scanner_engine` still apply.
+- **Not synced, pruned.** The job tables are operational state. The newest 100
+  jobs are kept, plus any still active.
+- **Dashboard.** Starts jobs and polls them, so a scan survives navigation and
+  a reload (it resumes through `GET /api/scans/jobs?active=true`).

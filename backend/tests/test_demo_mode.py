@@ -97,6 +97,27 @@ def test_scanning_is_refused(demo):
     assert "demo mode" in response.json()["detail"].lower()
 
 
+def test_queueing_a_scan_job_is_refused(demo):
+    """Validates Req 19.6: the background route dials out just as surely (Req 15)."""
+    response = demo.post(
+        "/api/scans/jobs",
+        json={
+            "targets": [
+                {
+                    "id": "m1",
+                    "hostname": "example.invalid",
+                    "platform": "linux",
+                    "username": "root",
+                    "password": "hunter2",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 403
+    assert "demo mode" in response.json()["detail"].lower()
+
+
 def test_discovery_sweep_is_refused(demo):
     response = demo.post("/api/discovery/sweep", json={"cidr": "192.0.2.0/30"})
 

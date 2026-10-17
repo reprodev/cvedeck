@@ -14,10 +14,14 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
 from app.api import schemas
 from app.api.app import create_app
-from app.api.dependencies import get_scanner_engine
+from app.api.dependencies import get_scanner_engine, get_session
+from app.data.schema import Base
 from tests.auth_helpers import override_auth
 
 SECRET = "correct-horse-battery-staple-" + "x" * schemas.MAX_SECRET
@@ -30,6 +34,12 @@ def client(monkeypatch):
     # The scan route builds its engine before validation errors are raised,
     # and these tests must never reach one.
     app.dependency_overrides[get_scanner_engine] = lambda: None
+    # Nor the real database: since scans became jobs (Req 19) the route takes a
+    # session too, and the default one opens cvedeck.db in the working
+    # directory -- a developer's own database, which a test must not touch.
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    app.dependency_overrides[get_session] = lambda: Session(engine)
     return TestClient(app)
 
 

@@ -42,6 +42,8 @@ from ..enums import (
     FindingChange,
     Platform,
     RemediationStatus,
+    ScanJobStatus,
+    ScanJobTargetState,
     ScanStatus,
     Severity,
     SyncStatus,
@@ -339,6 +341,72 @@ class ScanFindingChange(Base):
     )
 
     scan_run: Mapped[ScanRun] = relationship(back_populates="changes")
+
+
+class ScanJob(Base):
+    """A requested scan of one or more hosts, run in the background (Req 19).
+
+    Operational state, not findings: never synced to the Online_Database. Holds
+    no credentials -- they live in the process only, so a job a restart
+    interrupted cannot be resumed and is marked ``INTERRUPTED`` (Req 19.4).
+    """
+
+    __tablename__ = "scan_jobs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    status: Mapped[ScanJobStatus] = mapped_column(
+        SqlEnum(ScanJobStatus, name="scan_job_status"), nullable=False, index=True
+    )
+    requested_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    #: Why the job as a whole did not finish normally; ``None`` when it did.
+    error_detail: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    targets: Mapped[list[ScanJobTarget]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="ScanJobTarget.position",
+    )
+
+
+class ScanJobTarget(Base):
+    """One host in a scan job: its progress, then its outcome (Req 19.2).
+
+    The outcome columns mirror ``MachineScanOut`` field for field, so a finished
+    job's targets are its scan response. ``machine_id`` is not a foreign key: a
+    job records what was asked, and a target that failed before it was
+    registered has no machine row.
+    """
+
+    __tablename__ = "scan_job_targets"
+
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("scan_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(String, nullable=False)
+    hostname: Mapped[str] = mapped_column(String, nullable=False)
+    platform: Mapped[Platform] = mapped_column(
+        SqlEnum(Platform, name="platform"), nullable=False
+    )
+    state: Mapped[ScanJobTargetState] = mapped_column(
+        SqlEnum(ScanJobTargetState, name="scan_job_target_state"), nullable=False
+    )
+    status: Mapped[ScanStatus | None] = mapped_column(
+        SqlEnum(ScanStatus, name="scan_status"), nullable=True
+    )
+    finding_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sources_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    #: Comma-separated source names; empty when every source answered.
+    unavailable_sources: Mapped[str | None] = mapped_column(String, nullable=True)
+    message: Mapped[str | None] = mapped_column(String, nullable=True)
+    new_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    resolved_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    baseline: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    job: Mapped[ScanJob] = relationship(back_populates="targets")
 
 
 class UbuntuKernelFeed(Base):
