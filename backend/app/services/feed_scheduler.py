@@ -48,12 +48,14 @@ def refresh_feeds_once(engine: Engine) -> list[str]:
     Opens its own session rather than taking one, because there is no request to
     borrow a session from -- ``Depends(get_session)`` has no meaning here.
 
-    The refreshed feeds are reapplied to the stored findings in the same
-    transaction (Req 10.15), so an unattended deployment picks up a newly
-    catalogued exploitation without anyone re-scanning for it.
+    The refreshed feeds are reapplied to the stored findings straight after
+    (Req 10.15), so an unattended deployment picks up a newly catalogued
+    exploitation without anyone re-scanning for it. Each feed and the reapply
+    are committed separately, so no one write holds the lock for long
+    (Req 13.7).
     """
     with Session(engine) as session:
-        outcomes, updated = refresh_feeds_and_reapply(Repository(session))
+        outcomes, updated = refresh_feeds_and_reapply(Repository(session), checkpoint=session.commit)
         session.commit()
     return [
         f"{o.feed_name}: {o.status}, {o.record_count} records"

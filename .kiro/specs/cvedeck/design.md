@@ -510,6 +510,14 @@ Before 0.8.15 only binary names were asked about, and the distributions publish 
 
 **Validates: Requirements 1.12, 2.8**
 
+### Property 18: Collapsing duplicate advisories ignores their order
+
+*For any* set of advisories for the same CVEs and packages, in any order, deduplication SHALL produce the same findings; each finding SHALL carry a fixed version if any of its records names one, and the most severe rating any of its records gives.
+
+Advisories arrive from a pool of worker threads in whatever order they finish. Before 0.10.4 a record with a fix was preferred, but a later record with a higher score and no fix replaced it, so a host's fixable findings varied between scans of unchanged data -- four to eight openssh fixes on one Ubuntu host, caught by comparing two end-to-end scans field by field.
+
+**Validates: Requirements 2.10**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).
@@ -846,13 +854,21 @@ network** (Req 13.6, 13.7).
   therefore reads `NEVER_SCANNED` while its first scan is in flight.
 - **Feed refreshes download, then write.** `FeedRefreshService` splits each feed
   into a fetch (network, reads only) returning a pending apply (writes).
-  `refresh_all` runs every fetch first and every apply after, in the caller's
-  one transaction. A failed or empty download still never overwrites a good
-  cache.
+  `refresh_all` runs every fetch first and every apply after, calling the
+  caller's `checkpoint` (its session's commit) after each feed, so each feed
+  is its own transaction and the reapply another (0.10.4; one transaction
+  for all three held the lock 9.4 s). A failed or empty download still never
+  overwrites a good cache.
 - **Residual contention is a 503.** The engine waits 30 s for the lock
   (`SQLITE_BUSY_TIMEOUT`, also used by the CLI) rather than pysqlite's 5. A
-  request that still cannot write gets HTTP 503 with `Retry-After`; any other
-  `OperationalError` stays a 500 (Req 13.8).
+  request that still cannot write gets HTTP 503 with `Retry-After` -- SQLite's
+  busy/locked errors, and PostgreSQL's SQLSTATEs 55P03, 40001 and 40P01; any
+  other `OperationalError` stays a 500 (Req 13.8).
+- **Sync flips only what it sent** (Req 5.6): a conditional UPDATE per row,
+  matching every column as it was read, so a row changed mid-sync stays
+  pending and one deleted mid-sync is not an error.
+- **One scan per host** (Req 13.9): an in-process claim in `POST /api/scans`,
+  409 for a host already being scanned, until background jobs replace it.
 
 Up to 0.10.2 a scan committed once per batch and a refresh held one transaction
 across its downloads, so either one made every other write fail with a 500 for

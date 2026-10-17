@@ -2688,3 +2688,40 @@ file, and check that a second connection can commit. Run against the old code,
 ten of the thirteen fail with the same message the container printed. The cost
 was measured rather than assumed: holding every feed until the writes raises the
 refresh's peak memory from 292 to 328 MiB, with Canonical's feed parsed in full.
+
+### What the fix let in (v0.10.4)
+
+Removing a lock removes what it was quietly preventing. While a scan held the
+database, a sync and a scan could never overlap, and neither could two scans of
+one host. 0.10.3 let both happen. The sync marked rows synced by setting a flag
+on the copies it had read, so a scan's change made in between was flagged done
+without being sent; and two scans of a host each read its findings before the
+other wrote, so its history counted the wrong changes. Neither was a guess for
+long: a test parked a sync between its online commit and its local flip, and
+failed. The sync now marks a row synced only if it still holds what was sent,
+and a host is scanned by one request at a time until scans move to a queue.
+
+The measurement that started this was redone with the disk slowed to 5 MB/s,
+roughly a homelab's SD card. A write that waited 9.4 seconds on a fast disk
+waited 26 there, four seconds from failing; saving each feed on its own brought
+both under one. It also showed something the fast disk had hidden: reads, too,
+wait up to twenty seconds while the Ubuntu feed commits, on this release and
+the one before. The probe that first measured it sent a write and then a read,
+so on the older release it was stuck in the write and never saw the read wait --
+a comparison that would have blamed the new release for an old cost, had it
+not been run again with reads alone.
+
+The release's own end-to-end run then failed: three Ubuntu findings had a fix
+in the previous version's scan and none in the new one's. Nothing in the
+release touched matching, so the obvious reading was a data change upstream
+between the two scans. Scanning the same host again with both images, in the
+other order, gave the same split -- and then a third image, built locally from
+the previous release's source, gave a third answer. The count of fixable
+openssh findings was four, six, seven or eight depending on the run. OSV can
+publish several records for one CVE and package; the code that collapsed them
+preferred one with a fix, but let a later, higher-scored record without one
+replace it, and the records arrive from twenty-five threads in whatever order
+they finish. The owner chose the merge -- keep the fix, keep the worst rating --
+and four scans of the host now agree to the byte, with nine fixable: more than
+any single run had ever kept. A comparison that checked counts alone would
+have passed every one of those runs; it took comparing every field.

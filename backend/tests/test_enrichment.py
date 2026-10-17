@@ -784,7 +784,7 @@ def test_demo_mode_refreshes_nothing_and_downloads_nothing(repo, demo, monkeypat
     monkeypatch.setattr(
         enrichment,
         "build_feed_refresh_service",
-        lambda repository: FeedRefreshService(
+        lambda repository, **_: FeedRefreshService(
             repository, kev_source=_ExplodingSource(), epss_source=_ExplodingSource()
         ),
     )
@@ -812,7 +812,7 @@ def test_a_demo_refresh_leaves_the_seeded_catalogue_intact(repo, demo, monkeypat
     monkeypatch.setattr(
         enrichment,
         "build_feed_refresh_service",
-        lambda repository: FeedRefreshService(
+        lambda repository, **_: FeedRefreshService(
             repository, kev_source=_ExplodingSource(), epss_source=_ExplodingSource()
         ),
     )
@@ -833,7 +833,7 @@ def test_a_demo_refresh_records_no_digest(repo, demo, monkeypatch):
     monkeypatch.setattr(
         enrichment,
         "build_feed_refresh_service",
-        lambda repository: FeedRefreshService(
+        lambda repository, **_: FeedRefreshService(
             repository, kev_source=_ExplodingSource(), epss_source=_ExplodingSource()
         ),
     )
@@ -853,7 +853,7 @@ def test_both_feeds_unchanged_skips_the_reapply(repo, monkeypatch):
     monkeypatch.setattr(
         enrichment,
         "build_feed_refresh_service",
-        lambda repository: FeedRefreshService(
+        lambda repository, **_: FeedRefreshService(
             repository, kev_source=kev, epss_source=epss
         ),
     )
@@ -882,7 +882,7 @@ def test_one_unchanged_feed_still_reapplies(repo, monkeypatch):
     monkeypatch.setattr(
         enrichment,
         "build_feed_refresh_service",
-        lambda repository: FeedRefreshService(
+        lambda repository, **_: FeedRefreshService(
             repository, kev_source=kev, epss_source=epss
         ),
     )

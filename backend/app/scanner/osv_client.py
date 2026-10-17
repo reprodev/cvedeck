@@ -172,6 +172,26 @@ def _severity_rank(advisory: RawAdvisory) -> tuple[int, float]:
     return SEVERITY_RANK[band], -(advisory.cvss_score or 0.0)
 
 
+def _merge_duplicates(group: list[RawAdvisory]) -> RawAdvisory:
+    """One finding from every record OSV gave for one CVE and package (Property 18).
+
+    The fix comes from a record that names one -- a patch exists, and saying
+    otherwise sends the finding to "pending vendor patch" -- and the rating from
+    whichever record rates it worst, so preferring the fix never understates
+    the risk. Ties go to the lowest identifier, so the result is the same in
+    any order.
+    """
+    def order(advisory: RawAdvisory) -> tuple[tuple[int, float], str]:
+        return _severity_rank(advisory), advisory.package_identifier
+
+    worst = min(group, key=order)
+    fixed = [a for a in group if "fixed in" in a.package_identifier]
+    kept = min(fixed, key=order) if fixed else worst
+    if kept is worst:
+        return kept
+    return kept.model_copy(update={"cvss_score": worst.cvss_score, "severity": worst.severity})
+
+
 def _resolve_cve_id(vuln: dict[str, Any]) -> str:
     """Extract standard CVE identifier from OSV vuln ID, aliases, or upstream."""
     vid = str(vuln.get("id", ""))
@@ -1047,26 +1067,24 @@ class OsvHttpClient:
         return advisories
 
     def _deduplicate_findings(self, advisories: list[RawAdvisory]) -> list[RawAdvisory]:
-        """Deduplicate findings by CVE and package, prioritizing records with fix versions.
+        """Deduplicate findings by CVE and package, keeping any fix and the worst rating.
 
         The package is :func:`finding_package`: its name, and for a kernel its
         version as well, so two installed ``kernel-core`` packages keep a
         finding each (Req 12.6).
+
+        **The answer must not depend on arrival order (Property 18, Req 2.10).**
+        Advisories come back from a pool of worker threads in whatever order
+        they finish. Up to 0.10.3 a record with a fix was preferred, but a later
+        record with a higher score and no fix replaced it -- so one host,
+        scanned repeatedly with the same code, showed four, six, seven or eight
+        openssh findings as fixable. Now, per CVE and package: a record with a
+        fix is kept if any has one, its rating is raised to the worst any record
+        gives, and every remaining tie is broken by the identifier, a fixed
+        order.
         """
-        dedup_map: dict[tuple[str, str], RawAdvisory] = {}
+        groups: dict[tuple[str, str], list[RawAdvisory]] = {}
         for adv in advisories:
             key = (adv.cve_id, finding_package(adv.package_identifier) or "")
-            if key not in dedup_map:
-                dedup_map[key] = adv
-            else:
-                existing = dedup_map[key]
-                if (
-                    adv.package_identifier
-                    and "fixed in" in adv.package_identifier
-                    and (not existing.package_identifier or "fixed in" not in existing.package_identifier)
-                ):
-                    dedup_map[key] = adv
-                elif _severity_rank(adv) < _severity_rank(existing):
-                    dedup_map[key] = adv
-
-        return list(dedup_map.values())
+            groups.setdefault(key, []).append(adv)
+        return [_merge_duplicates(group) for group in groups.values()]

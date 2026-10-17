@@ -64,6 +64,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 7. IF a CVE has neither a CVSS_Score that can be parsed nor a qualitative severity, THEN THE Scanner_Engine SHALL record its Severity_Level as Unscored and its CVSS_Score as absent, and SHALL NOT substitute a default score, so that an unmeasured finding is never presentable as a measured one.
 8. WHEN THE Scanner_Engine looks up a package's advisories, THE Scanner_Engine SHALL ask under the package's source name and source version as well as under the binary's own, since distributions publish advisories under either, and SHALL report each advisory once per source package however many of its binaries are installed and however many of the names asked found it.
 9. WHEN OSV_Source answers a query in pages, THE Scanner_Engine SHALL read every page before using the answer, and IF any page cannot be read or the answer exceeds a fixed page ceiling, THEN THE Scanner_Engine SHALL treat the whole query as unanswered rather than use the pages that arrived.
+10. WHEN OSV_Source returns more than one record for the same CVE and package, THE Scanner_Engine SHALL report one finding that carries a fixed version if any record names one and the most severe rating any record gives, and SHALL produce the same finding whatever order the records arrive in.
 
 ### Requirement 3: Machine List and Severity Filtering
 
@@ -100,6 +101,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 3. IF the Sync_Process cannot reach the Online_Database, THEN THE Sync_Process SHALL retain the unsynchronized data in the Local_Database and record a pending-sync status.
 4. WHEN the Online_Database becomes reachable after a pending-sync status, THE Sync_Process SHALL propagate the retained data to the Online_Database.
 5. THE Local_Database and Online_Database schemas SHALL store a data structure that associates a CVE with a Target_Machine and with a Dependency_Path.
+6. IF a row changes or is deleted in the Local_Database while THE Sync_Process is propagating it, THEN THE Sync_Process SHALL leave a changed row pending for the next run, SHALL NOT fail because a row was deleted, and SHALL mark synced only rows whose content it propagated.
 
 ### Requirement 6: Outward-Facing API
 
@@ -368,11 +370,16 @@ host.
    A target whose results cannot be written SHALL be reported as failed and
    SHALL NOT abort the batch.
 7. WHEN THE system refreshes its threat-intel feeds THEN it SHALL complete
-   every download before it writes anything, and SHALL hold no database write
-   transaction open during a download.
+   every download before it writes anything, SHALL hold no database write
+   transaction open during a download, and SHALL write each feed in its own
+   transaction.
 8. IF a request cannot write because the database is busy with another write
    THEN the system SHALL respond with HTTP 503 and a `Retry-After` header, not
    HTTP 500; any other database error SHALL NOT be reported as busy.
+9. IF a scan request names a host that is already being scanned THEN the system
+   SHALL refuse the request with HTTP 409, naming the busy hosts, and SHALL NOT
+   start any of its targets; a host's claim SHALL be released when its request
+   ends, however it ends.
 
 ### Requirement 14: Accurate and reachable remediation guidance
 

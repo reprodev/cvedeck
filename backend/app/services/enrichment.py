@@ -174,11 +174,18 @@ class FeedRefreshService:
         kev_source: _KevSource | None = None,
         epss_source: _EpssSource | None = None,
         ubuntu_kernel_source: Any = None,
+        checkpoint: Callable[[], None] | None = None,
     ) -> None:
         self._repository = repository
         self._kev_source = kev_source
         self._epss_source = epss_source
         self._ubuntu_kernel_source = ubuntu_kernel_source
+        #: Called after each feed's writes in :meth:`refresh_all` -- the caller's
+        #: commit -- so each feed is its own transaction (Req 13.7). Feeds were
+        #: always independent: one feed's failure never touched another's
+        #: cache. Writing them all in one transaction held the lock for 9.4 s
+        #: on a fast disk with an Ubuntu feed to rewrite.
+        self._checkpoint = checkpoint
 
     def refresh_all(self) -> list[FeedRefreshOutcome]:
         """Refresh every configured feed, returning one outcome per feed.
@@ -193,7 +200,12 @@ class FeedRefreshService:
             pending.append(self._fetch_epss())
         if self._ubuntu_kernel_source is not None:
             pending.extend(self._fetch_ubuntu_kernels())
-        return [apply() for apply in pending]
+        outcomes: list[FeedRefreshOutcome] = []
+        for apply in pending:
+            outcomes.append(apply())
+            if self._checkpoint is not None:
+                self._checkpoint()
+        return outcomes
 
     def refresh_ubuntu_kernels(self) -> list[FeedRefreshOutcome]:
         """Refresh Canonical's kernel feed for each Ubuntu release the fleet runs (Req 12.11).
@@ -644,7 +656,9 @@ class FindingEnricher:
         return age > timedelta(hours=self._max_age_hours)
 
 
-def build_feed_refresh_service(repository: Repository) -> FeedRefreshService:
+def build_feed_refresh_service(
+    repository: Repository, *, checkpoint: Callable[[], None] | None = None
+) -> FeedRefreshService:
     """A refresh service wired to the configured upstream feeds.
 
     One factory rather than three copies of the same construction. It was
@@ -675,11 +689,12 @@ def build_feed_refresh_service(repository: Repository) -> FeedRefreshService:
             if ubuntu_kernel_feed_enabled()
             else None
         ),
+        checkpoint=checkpoint,
     )
 
 
 def refresh_feeds_and_reapply(
-    repository: Repository,
+    repository: Repository, *, checkpoint: Callable[[], None] | None = None
 ) -> tuple[list[FeedRefreshOutcome], int]:
     """Refresh both feeds, then reapply them to the stored findings.
 
@@ -714,7 +729,9 @@ def refresh_feeds_and_reapply(
     after demo mode was switched off. A guard downstream of the side effect is
     not a guard.
 
-    Does not commit; the caller owns the transaction.
+    Commits only through ``checkpoint``, after each feed (Req 13.7); every
+    caller passes its session's commit, and commits again after the reapply,
+    which is therefore a transaction of its own.
 
     Returns:
         The per-feed outcomes, and how many stored findings changed.
@@ -732,7 +749,7 @@ def refresh_feeds_and_reapply(
             for feed in (KEV_FEED, EPSS_FEED)
         ], 0
 
-    outcomes = build_feed_refresh_service(repository).refresh_all()
+    outcomes = build_feed_refresh_service(repository, checkpoint=checkpoint).refresh_all()
     # Nothing a reapply could write would differ, so skip the fleet-wide scan
     # (Req 10.14). Only when every outcome says so: one feed unchanged and the
     # other rewritten still needs the pass.

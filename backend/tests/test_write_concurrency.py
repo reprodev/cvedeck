@@ -40,6 +40,7 @@ from app.scanner.kev_client import KevRecord
 from app.scanner.matcher import Finding, MatchResult, SourceStatus
 from app.scanner.ubuntu_kernel_feed import FetchResult
 from app.services.enrichment import FeedRefreshService
+from app.services.sync import SyncService
 from tests.auth_helpers import override_auth
 
 #: Long enough that a test never fails on a slow machine while waiting for the
@@ -410,6 +411,201 @@ def test_a_failed_download_still_keeps_the_previous_cache(db_path):
         assert repo.count_epss_scores() == 1
 
 
+def test_each_feed_is_committed_before_the_next_is_written(db_path, monkeypatch):
+    """Validates Req 13.7: each feed's write is its own transaction.
+
+    Downloading first (0.10.3) left one long write: every feed rewritten in a
+    single transaction, 9.4 s on a fast disk for KEV, EPSS and an Ubuntu feed.
+    With a checkpoint after each feed, the lock is released between them: while
+    EPSS is being written, KEV is already committed and visible, and another
+    writer gets in.
+    """
+    gate = _Gate()
+    original = Repository.replace_epss_scores
+
+    def parked(self, scores):
+        gate.park()
+        return original(self, scores)
+
+    monkeypatch.setattr(Repository, "replace_epss_scores", parked)
+
+    def run():
+        engine = _engine(db_path)
+        try:
+            with Session(engine) as session:
+                outcomes = FeedRefreshService(
+                    Repository(session),
+                    kev_source=_Source(_KEV),
+                    epss_source=_Source(_EPSS),
+                    checkpoint=session.commit,
+                ).refresh_all()
+                session.commit()
+                return outcomes
+        finally:
+            engine.dispose()
+
+    thread, box = _run(run)
+    gate.wait_reached()
+    try:
+        with Session(_engine(db_path)) as session:
+            assert Repository(session).count_kev_entries() == 1
+        assert _bystander_write(db_path) is None
+    finally:
+        gate.release.set()
+    outcomes = _finish(thread, box)
+
+    assert all(o.ok for o in outcomes)
+    with Session(_engine(db_path)) as session:
+        assert Repository(session).count_epss_scores() == 1
+
+
+def test_every_refresh_path_commits_feed_by_feed(db_path, monkeypatch):
+    """Validates Req 13.7 for the three ways a refresh starts.
+
+    The checkpoint is opt-in, so a path that forgot it would go back to one long
+    write without any test noticing. The route and the CLI import the function
+    when they run; the periodic refresher at import time.
+    """
+    from app.api.dependencies import get_session
+    from app.auth import cli
+    from app.services import enrichment, feed_scheduler
+
+    seen: list[str] = []
+
+    def fake(repository, *, checkpoint=None):
+        seen.append("checkpoint" if callable(checkpoint) else "none")
+        return [], 0
+
+    monkeypatch.setattr(enrichment, "refresh_feeds_and_reapply", fake)
+    monkeypatch.setattr(feed_scheduler, "refresh_feeds_and_reapply", fake)
+    # The CLI opens its own database through the migration runner; a fresh one.
+    monkeypatch.setenv("CVEDECK_DATA_DIR", str(db_path.parent / "cli-data"))
+    monkeypatch.delenv("CVEDECK_DB_URL", raising=False)
+    monkeypatch.delenv("CVEDECK_DEMO_MODE", raising=False)
+
+    feed_scheduler.refresh_feeds_once(_engine(db_path))
+    cli._refresh_feeds()
+    app = override_auth(create_app())
+    engine = _engine(db_path)
+    app.dependency_overrides[get_session] = lambda: Session(engine)
+    assert TestClient(app).post("/api/feeds/refresh").status_code == 200
+
+    assert seen == ["checkpoint"] * 3
+
+
+# --------------------------------------------------------------------------- #
+# Sync: a row that changes while it is being synced stays pending
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def online_path(tmp_path):
+    path = tmp_path / "online.db"
+    engine = create_engine(f"sqlite:///{path.as_posix()}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    return path
+
+
+def _sync_parked_after_online_commit(db_path, online_path, gate: _Gate):
+    """Run a sync that parks between its online commit and its local flip --
+    the window in which the local rows it read can change under it."""
+    online_engine = _engine(online_path)
+
+    class _ParkingSession(Session):
+        def commit(self) -> None:
+            super().commit()
+            gate.park()
+
+    def run():
+        engine = _engine(db_path)
+        try:
+            with Session(engine) as local:
+                return SyncService(local, lambda: _ParkingSession(online_engine)).sync()
+        finally:
+            engine.dispose()
+            online_engine.dispose()
+
+    return _run(run)
+
+
+def _sync_once(db_path, online_path):
+    engine, online_engine = _engine(db_path), _engine(online_path)
+    try:
+        with Session(engine) as local:
+            return SyncService(local, lambda: Session(online_engine)).sync()
+    finally:
+        engine.dispose()
+        online_engine.dispose()
+
+
+def _machine(path, machine_id: str):
+    with Session(_engine(path)) as session:
+        return session.get(TargetMachineRow, machine_id)
+
+
+def test_a_row_changed_during_a_sync_stays_pending_and_syncs_next_time(db_path, online_path):
+    """Validates Req 5.6: a sync never marks synced a row it did not send.
+
+    Until 0.10.3 nothing could write while a scan or a sync held the lock, so
+    this could not happen. Now a scan can record a host's new status between
+    the moment the sync read the row and the moment it marks it synced; the
+    flip used to overwrite the scan's PENDING_SYNC, and the new status never
+    reached the online store.
+    """
+    with Session(_engine(db_path)) as session:
+        Repository(session).upsert_target_machine("m1", "m1.lan", Platform.LINUX)
+        session.commit()
+
+    gate = _Gate()
+    thread, box = _sync_parked_after_online_commit(db_path, online_path, gate)
+    gate.wait_reached()
+    try:
+        with Session(_engine(db_path)) as session:  # a scan, recording its outcome
+            row = session.get(TargetMachineRow, "m1")
+            row.last_scan_status = ScanStatus.SUCCESS
+            row.sync_status = SyncStatus.PENDING_SYNC
+            session.commit()
+    finally:
+        gate.release.set()
+    _finish(thread, box)
+
+    assert _machine(db_path, "m1").sync_status is SyncStatus.PENDING_SYNC
+    assert _machine(online_path, "m1").last_scan_status is ScanStatus.NEVER_SCANNED
+
+    _sync_once(db_path, online_path)
+
+    assert _machine(db_path, "m1").sync_status is SyncStatus.SYNCED
+    assert _machine(online_path, "m1").last_scan_status is ScanStatus.SUCCESS
+
+
+def test_a_row_deleted_during_a_sync_does_not_fail_the_sync(db_path, online_path):
+    """Validates Req 5.6: a scan replacing findings mid-sync is not an error.
+
+    ``save_findings`` deletes and reinserts a host's findings, so a row the sync
+    read can be gone by the time it is flipped. Flipping it through the ORM
+    expected one row and found none, and the whole sync failed.
+    """
+    with Session(_engine(db_path)) as session:
+        repo = Repository(session)
+        repo.upsert_target_machine("m1", "m1.lan", Platform.LINUX)
+        repo.upsert_target_machine("m2", "m2.lan", Platform.LINUX)
+        session.commit()
+
+    gate = _Gate()
+    thread, box = _sync_parked_after_online_commit(db_path, online_path, gate)
+    gate.wait_reached()
+    try:
+        with Session(_engine(db_path)) as session:
+            session.delete(session.get(TargetMachineRow, "m2"))
+            session.commit()
+    finally:
+        gate.release.set()
+    report = _finish(thread, box)
+
+    assert report.online_reachable
+    assert _machine(db_path, "m1").sync_status is SyncStatus.SYNCED
+    assert _machine(db_path, "m2") is None
+
+
 # --------------------------------------------------------------------------- #
 # Whatever contention is left is a 503, never a 500
 # --------------------------------------------------------------------------- #
@@ -434,6 +630,30 @@ def test_a_locked_database_is_reported_as_busy_not_as_a_server_error():
     assert response.status_code == 503
     assert response.headers.get("Retry-After")
     assert "busy" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("name", ["LockNotAvailable", "SerializationFailure", "DeadlockDetected"])
+def test_postgresql_contention_is_reported_as_busy_too(name):
+    """Validates Req 13.8 on PostgreSQL, the documented way past one SQLite writer."""
+    import psycopg.errors
+
+    error = getattr(psycopg.errors, name)("could not obtain lock")
+    client = _app_whose_reads_raise(OperationalError("UPDATE target_machines", {}, error))
+
+    response = client.get("/api/machines")
+
+    assert response.status_code == 503
+    assert response.headers.get("Retry-After")
+
+
+def test_a_postgresql_defect_is_still_a_server_error():
+    import psycopg.errors
+
+    client = _app_whose_reads_raise(
+        OperationalError("SELECT 1", {}, psycopg.errors.QueryCanceled("canceling statement"))
+    )
+
+    assert client.get("/api/machines").status_code == 500
 
 
 def test_any_other_database_error_is_still_a_server_error():

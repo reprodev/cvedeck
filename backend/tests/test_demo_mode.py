@@ -202,7 +202,7 @@ def test_a_normal_instance_may_refresh_intel(normal, monkeypatch):
             ]
 
     monkeypatch.setattr(
-        enrichment, "build_feed_refresh_service", lambda repo: _Service()
+        enrichment, "build_feed_refresh_service", lambda repo, **_: _Service()
     )
 
     response = normal.post("/api/feeds/refresh")

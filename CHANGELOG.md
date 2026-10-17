@@ -8,6 +8,55 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.10.4] - 2026-10-17
+
+0.10.3 let writes overlap instead of failing. This release fixes the two
+things that could then go wrong, shortens the longest write that was left, and
+fixes a long-standing bug its own testing turned up.
+
+### Fixed
+
+- **Whether a finding shows a fix no longer changes from scan to scan.** When
+  OSV published more than one record for a CVE and package, which one CveDeck
+  kept depended on the order the answers came back in -- and they come back
+  from many threads at once. Scanning one unchanged Ubuntu host repeatedly
+  showed between four and eight of its openssh findings as fixable, and their
+  severities moved too, so findings jumped between *Ready to fix* and *Pending
+  vendor patch* for no reason. This has been the case for many releases. Now a
+  finding keeps a fix if any record names one, and the most severe rating any
+  record gives; four scans of that host now agree exactly, with nine fixable.
+
+- **A sync no longer loses a change made while it runs.** With an online
+  database configured, a scan that recorded a host's new status during a sync
+  had it marked synced without it ever being sent, so the online copy kept the
+  old one; and a scan that replaced a host's findings during a sync made the
+  sync fail. A row that changes mid-sync now stays pending for the next run,
+  and one that disappears is not an error.
+- **A host is scanned by one request at a time.** Two overlapping scans of the
+  same host -- a double-click, or a fleet rescan started while that host was
+  still being scanned -- could record the wrong new and resolved counts in its
+  scan history. A scan that names a host already being scanned is refused with
+  a message naming it; other hosts are not held up.
+- **Each threat-intel feed is saved on its own.** A full refresh wrote all its
+  feeds in one transaction, and anything else that wrote meanwhile waited for
+  it: 9.4 seconds on a fast disk, and 26 seconds -- four short of a 503 -- with
+  the disk slowed to 5 MB/s. Saving each feed separately cut the longest wait
+  to under a second in both.
+- **A busy PostgreSQL database is reported as busy** -- 503 with `Retry-After`,
+  as SQLite already was -- for lock timeouts, serialization failures and
+  deadlocks.
+
+### Known
+
+- On slow storage, the dashboard can still pause for up to about 20 seconds
+  while the daily Ubuntu kernel feed is saved: SQLite holds readers back while a
+  large write commits. Nothing fails, and 0.10.3 behaved the same. SQLite's
+  write-ahead log would remove the pause, but it does not work on a network
+  share, which is where some homelabs keep `/data`; it is being looked at on its
+  own.
+
+---
+
 ## [0.10.3] - 2026-10-15
 
 ### Fixed

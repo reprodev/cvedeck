@@ -314,7 +314,11 @@ environment the app reads, so no alembic.ini edit is needed.
   every other write (a second scan, an enrollment, a remediation note, the
   periodic refresh, a session touch) failed as an HTTP 500. Scans now commit per
   target, host keys commit at the handshake, and `_scan_one` writes only after its
-  last network call; `FeedRefreshService` fetches every feed before applying any.
+  last network call; `FeedRefreshService` fetches every feed before applying any,
+  and commits after each one through the `checkpoint` every refresh path passes.
+  Overlapping writes are now possible, so anything that reads, does slow work,
+  then writes must cope with the row having changed: the sync flip is
+  conditional (Req 5.6), and a host is scanned by one request at a time (Req 13.9).
   Do not add a write before a network call in either path, and do not go back to
   one commit per batch. `tests/test_write_concurrency.py` parks each path
   mid-download on a real database file and checks another connection can commit;

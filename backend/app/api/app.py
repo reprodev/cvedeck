@@ -36,7 +36,7 @@ from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.10.3"
+_VERSION = "0.10.4"
 
 
 async def _validation_error_without_input(
@@ -62,6 +62,16 @@ logger = logging.getLogger(__name__)
 
 #: SQLite's two contention errors: SQLITE_BUSY and SQLITE_LOCKED.
 _CONTENTION = ("database is locked", "database table is locked")
+#: PostgreSQL's, by SQLSTATE: lock_not_available, serialization_failure,
+#: deadlock_detected. PostgreSQL is the documented way to scale past one
+#: SQLite writer, so its contention must not fall through to a 500 either.
+_PG_CONTENTION = frozenset({"55P03", "40001", "40P01"})
+
+
+def _is_contention(orig: BaseException | None) -> bool:
+    if getattr(orig, "sqlstate", None) in _PG_CONTENTION:
+        return True
+    return any(marker in str(orig) for marker in _CONTENTION)
 
 
 async def _database_busy(request: Request, exc: OperationalError) -> JSONResponse:
@@ -75,7 +85,7 @@ async def _database_busy(request: Request, exc: OperationalError) -> JSONRespons
     database error is re-raised: a missing table is a defect, and "busy, try
     again" would send the operator round in circles.
     """
-    if not any(marker in str(exc.orig) for marker in _CONTENTION):
+    if not _is_contention(exc.orig):
         raise exc
     logger.warning("Database busy on %s %s: %s", request.method, request.url.path, exc.orig)
     return JSONResponse(

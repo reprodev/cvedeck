@@ -24,8 +24,10 @@ that never touch real hosts or an online database.
 
 import logging
 import socket
+import threading
 import time
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import paramiko
@@ -226,6 +228,45 @@ def update_remediation(
     return _to_remediation_out(record)
 
 
+#: Machines with a scan in flight in this process (Req 13.9). One process is
+#: enough: the deployment runs a single uvicorn worker over SQLite (AGENTS §5).
+_scanning: set[str] = set()
+_scanning_lock = threading.Lock()
+
+
+@contextmanager
+def _one_scan_per_host(machine_ids: list[str]) -> Iterator[None]:
+    """Refuse to start a scan of a host that is already being scanned (Req 13.9).
+
+    Up to 0.10.2 a second scan could not run beside the first: the first held
+    SQLite's write lock throughout, and the second failed on it. 0.10.3 removed
+    that (Req 13.6), and two scans of one host can now overlap -- each reading
+    the host's previous findings before the other writes, so the scan history
+    records the wrong new and resolved counts. The whole request is refused,
+    naming the hosts, for the reason Windows targets are: a batch reported done
+    with part of it silently skipped is the worse answer. A queue that runs
+    scans one at a time replaces this when scans move to background jobs.
+    """
+    wanted = set(machine_ids)
+    with _scanning_lock:
+        busy = sorted(wanted & _scanning)
+        if busy:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Already being scanned; try again when that scan finishes: "
+                    + ", ".join(busy[:10])
+                    + (" ..." if len(busy) > 10 else "")
+                ),
+            )
+        _scanning.update(wanted)
+    try:
+        yield
+    finally:
+        with _scanning_lock:
+            _scanning.difference_update(wanted)
+
+
 def _refuse_unsupported_platforms(body: ScanRequest) -> None:
     """Refuse a scan that includes a platform CveDeck cannot yet assess (Req 10.8).
 
@@ -277,7 +318,13 @@ def initiate_scan(
     the credentials to the injected engine via a per-request lookup, and returns
     the per-target scan outcomes. Per-target connection/auth failures are
     recorded as statuses by the engine and never abort the batch (Req 11.9).
+    A host already being scanned refuses the request with 409 (Req 13.9).
     """
+    with _one_scan_per_host([t.id for t in body.targets]):
+        return _scan(body, request, engine)
+
+
+def _scan(body: ScanRequest, request: Request, engine: ScannerEngine) -> ScanResponse:
     targets = [
         TargetMachine(id=t.id, hostname=t.hostname, platform=t.platform)
         for t in body.targets
@@ -440,7 +487,9 @@ def refresh_feeds(
     """
     from ..services.enrichment import refresh_feeds_and_reapply
 
-    outcomes, findings_updated = refresh_feeds_and_reapply(Repository(session))
+    outcomes, findings_updated = refresh_feeds_and_reapply(
+        Repository(session), checkpoint=session.commit
+    )
     session.commit()
 
     return FeedRefreshResponse(

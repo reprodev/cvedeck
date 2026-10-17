@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, update
 from sqlalchemy.orm import Session
 
 from ..data.schema import (
@@ -99,6 +99,17 @@ def _copy_row(source: Base) -> Base:
     return type(source)(**values)
 
 
+def _column_values(row: Base) -> dict[str, object]:
+    """Every column of a row, by column name, as it was read."""
+    mapper = inspect(type(row))
+    return {attr.columns[0].name: getattr(row, attr.key) for attr in mapper.column_attrs}
+
+
+def _equals(column, value):
+    """``column = value``, or ``IS NULL`` -- SQL's ``= NULL`` matches nothing."""
+    return column.is_(None) if value is None else column == value
+
+
 class SyncService:
     """Propagate ``PENDING_SYNC`` rows from the Local_Database to the online one.
 
@@ -166,6 +177,9 @@ class SyncService:
             for model, rows in pending.items()
             if rows
         }
+        # What is about to be sent, captured now: the flip below marks a row
+        # synced only if it still holds exactly this (Req 5.6).
+        sent = {model: [_column_values(row) for row in rows] for model, rows in pending.items()}
 
         try:
             online = self._online_session_factory()
@@ -193,15 +207,30 @@ class SyncService:
                 online_reachable=False,
             )
 
-        # Online converged; flip local rows to SYNCED and commit locally.
+        # Online converged; flip local rows to SYNCED and commit locally --
+        # each only if it is still the row that was sent (Req 5.6). Writes are
+        # no longer serialised behind a scan (Req 13.6), so a scan can record a
+        # host's new status, or replace its findings, between the read above and
+        # this flip. Setting SYNCED on the stale objects overwrote the scan's
+        # PENDING_SYNC, and that change never reached the online store; a row
+        # deleted meanwhile failed the whole sync. A changed row now stays
+        # pending for the next sync, and a deleted one is simply gone.
+        still_pending: dict[str, int] = {}
         for model in _SYNC_ORDER:
-            for row in pending[model]:
-                row.sync_status = SyncStatus.SYNCED
+            table = model.__table__
+            for values in sent[model]:
+                matched = self._local.execute(
+                    update(table)
+                    .where(*(_equals(table.c[name], value) for name, value in values.items()))
+                    .values(sync_status=SyncStatus.SYNCED)
+                ).rowcount
+                if not matched:
+                    still_pending[table.name] = still_pending.get(table.name, 0) + 1
         self._local.commit()
 
         return SyncReport(
             propagated=dict(attempted),
-            pending={},
+            pending=still_pending,
             online_reachable=True,
         )
 

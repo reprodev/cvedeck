@@ -166,7 +166,7 @@ def test_refresh_feeds_once_uses_its_own_session(monkeypatch):
     monkeypatch.setattr(
         feed_scheduler,
         "refresh_feeds_and_reapply",
-        lambda repo: (_Service().refresh_all(), 0),
+        lambda repo, **_: (_Service().refresh_all(), 0),
     )
 
     lines = refresh_feeds_once(engine)

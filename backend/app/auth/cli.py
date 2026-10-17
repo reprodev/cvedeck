@@ -124,7 +124,7 @@ def _refresh_feeds() -> int:
     from ..services.enrichment import refresh_feeds_and_reapply
 
     with _session() as session:
-        outcomes, updated = refresh_feeds_and_reapply(Repository(session))
+        outcomes, updated = refresh_feeds_and_reapply(Repository(session), checkpoint=session.commit)
         session.commit()
 
     if outcomes and all(outcome.status is FeedStatus.SKIPPED for outcome in outcomes):
