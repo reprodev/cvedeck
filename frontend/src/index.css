@@ -1274,6 +1274,17 @@ label {
   letter-spacing: 0.04em;
 }
 
+/* A checkbox and its sentence on one line (the scheduled-scan switch). The
+   uppercase micro-label above suits a field name, not a sentence. */
+.field-group label.inline-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 .field-group input,
 .field-group select {
   width: 100%;

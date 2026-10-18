@@ -44,7 +44,7 @@ from ..scanner.collectors import (
 from ..scanner.engine import ScannerEngine
 from ..scanner.exceptions import AuthError, HostKeyError, HostKeyMismatchError
 from ..scanner.host_keys import connect_pinned
-from ..services import scan_jobs
+from ..services import scan_jobs, scan_schedule
 from ..services.remediation import (
     RemediationRecordNotFoundError,
     RemediationService,
@@ -52,7 +52,7 @@ from ..services.remediation import (
 from ..services.sync import SyncService
 from .credentials import CredentialResolutionError, resolve_credentials
 from .dependencies import get_scanner_engine, get_session, get_sync_service
-from .routes import machine_scan_out
+from .routes import machine_scan_out, scan_schedule_out
 from .wiring import RepositoryHostKeyStore
 from .schemas import (
     DiscoveredHostOut,
@@ -70,6 +70,8 @@ from .schemas import (
     RemediationOut,
     ScanJobCreated,
     ScanRequest,
+    ScanScheduleIn,
+    ScanScheduleOut,
     ScanResponse,
     SeverityCounts,
     SyncResponse,
@@ -305,6 +307,8 @@ def _queue_scan(body: ScanRequest, request: Request, session: Session) -> ScanJo
         credentials_by_id=credentials_by_id,
         unresolved=unresolved,
         requested_by=_requested_by(request),
+        # Which hosts fall back to the server key: those the schedule may reach.
+        server_key_ids={w.id for w in body.targets if not (w.password or w.private_key)},
     )
 
 
@@ -366,6 +370,40 @@ def start_scan_job(
     if job.status is ScanJobStatus.QUEUED:
         scan_jobs.submit(job.id)
     return ScanJobCreated(job_id=job.id)
+
+
+@router.put(
+    "/scan-schedule",
+    response_model=ScanScheduleOut,
+    dependencies=[Depends(_demo_guard("Scheduling scans"))],
+)
+def set_scan_schedule(
+    body: ScanScheduleIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> ScanScheduleOut:
+    """Switch the daily scheduled scan on or off and set its time (Req 20.1, 20.2).
+
+    Switching it on with no server-managed key is refused: an unattended scan
+    has no other credential, so it could never run (Req 20.3). Refused in demo
+    mode, which never scans (Req 20.7).
+    """
+    if body.enabled and config.default_ssh_key_path() is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Scheduled scans need a server-managed SSH key "
+                "(CVEDECK_DEFAULT_SSH_KEY_PATH): an unattended scan has no other "
+                "credential."
+            ),
+        )
+    scan_schedule.update(session, enabled=body.enabled, time_of_day=body.time_of_day)
+    _audit(
+        request,
+        "Scan schedule",
+        f"{'on' if body.enabled else 'off'}, daily at {body.time_of_day}",
+    )
+    return scan_schedule_out(session)
 
 
 @router.delete(

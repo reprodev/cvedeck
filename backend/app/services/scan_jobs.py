@@ -31,7 +31,7 @@ from typing import Callable
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from ..data.schema import ScanJob, ScanJobTarget
+from ..data.schema import ScanJob, ScanJobTarget, TargetMachine as TargetMachineRow
 from ..enums import ScanJobStatus, ScanJobTargetState, ScanStatus
 from ..models import Credentials, TargetMachine
 from ..scanner.engine import MachineScan, ScannerEngine
@@ -66,7 +66,16 @@ def diff_counts(scan: MachineScan) -> dict[str, object]:
     }
 
 
-def _record_outcome(row: ScanJobTarget, scan: MachineScan) -> None:
+def _record_outcome(session: Session, row: ScanJobTarget, scan: MachineScan) -> None:
+    """Write a host's outcome, and on success whether the server key reached it (Req 20.3).
+
+    A failure leaves the machine's flag alone: a host the key used to reach,
+    whose key access broke, stays scheduled and keeps reporting the failure.
+    """
+    if scan.status is ScanStatus.SUCCESS:
+        machine = session.get(TargetMachineRow, row.machine_id)
+        if machine is not None:
+            machine.last_scan_server_key = row.server_key
     row.state = ScanJobTargetState.DONE
     row.status = scan.status
     row.finding_count = len(scan.findings)
@@ -84,6 +93,7 @@ def create_job(
     credentials_by_id: dict[str, Credentials],
     unresolved: list[tuple[TargetMachine, str]],
     requested_by: str,
+    server_key_ids: set[str] | frozenset[str] = frozenset(),
 ) -> ScanJob:
     """Write a job down, queued, and hold its credentials in memory (Req 19.1, 19.3).
 
@@ -123,6 +133,7 @@ def create_job(
                 hostname=target.hostname,
                 platform=target.platform,
                 state=ScanJobTargetState.QUEUED,
+                server_key=target.id in server_key_ids,
             )
         )
         position += 1
@@ -203,7 +214,7 @@ def run_job(session: Session, job_id: str, engine: ScannerEngine) -> ScanJob | N
         def done(target: TargetMachine, scan: MachineScan) -> None:
             row = row_for(target.id)
             if row is not None:
-                _record_outcome(row, scan)
+                _record_outcome(session, row, scan)
                 session.commit()
 
         engine.set_credentials(credentials)
@@ -222,7 +233,7 @@ def run_job(session: Session, job_id: str, engine: ScannerEngine) -> ScanJob | N
         for scan in result.machine_scans:
             row = row_for(scan.machine_id)
             if row is not None:
-                _record_outcome(row, scan)
+                _record_outcome(session, row, scan)
         job.status = ScanJobStatus.FINISHED
         job.finished_at = _now()
         session.commit()

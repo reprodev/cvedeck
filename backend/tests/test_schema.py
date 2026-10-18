@@ -69,6 +69,9 @@ def test_create_all_creates_every_table(engine):
         # this instance, and the queue for scans it has not run yet.
         "scan_jobs",
         "scan_job_targets",
+        # The daily scan schedule (Req 20). Not syncable: this instance's own
+        # configuration.
+        "scan_schedule",
     }
 
 

@@ -16,6 +16,8 @@ import type { ScanJob, ScanTargetInput } from "../types";
 
 /** How often a running job is polled. */
 export const POLL_MS = 2000;
+/** How often an idle page asks whether a scan it did not start is running. */
+export const IDLE_POLL_MS = 30000;
 
 const ENDED = new Set(["finished", "interrupted"]);
 
@@ -68,24 +70,31 @@ export function useScanJob(
     [api, follow],
   );
 
-  // A scan started before a reload is still running on the server.
+  const jobId = job?.id ?? null;
+
+  // A scan this page did not start -- one running before a reload, or one the
+  // schedule started (Req 20.6) -- is found by asking now and then while idle.
   useEffect(() => {
+    if (jobId !== null) return;
     let cancelled = false;
-    api
-      .listActiveScanJobs()
-      .then((active) => {
-        if (!cancelled && active.length > 0) setJob((current) => current ?? active[0]);
-      })
-      .catch(() => {
-        // Not knowing about an older scan is not worth an error: its results
-        // reach the fleet view whether or not this page follows it.
-      });
+    const look = () => {
+      api
+        .listActiveScanJobs()
+        .then((active) => {
+          if (!cancelled && active.length > 0) setJob((current) => current ?? active[0]);
+        })
+        .catch(() => {
+          // Not knowing about another scan is not worth an error: its results
+          // reach the fleet view whether or not this page follows it.
+        });
+    };
+    look();
+    const timer = window.setInterval(look, IDLE_POLL_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
-  }, [api]);
-
-  const jobId = job?.id ?? null;
+  }, [api, jobId]);
   useEffect(() => {
     if (jobId === null) return;
     let busy = false;

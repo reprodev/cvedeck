@@ -9,6 +9,7 @@ import type {
   CveFinding,
   MachineSummary,
   ScanJob,
+  ScanSchedule,
   ScanOutcome,
   SeverityCounts,
 } from "../types";
@@ -73,6 +74,22 @@ export function makeScanJob(overrides: Partial<ScanJob> = {}): ScanJob {
     finishedAt: "2026-10-18T10:00:05Z",
     errorDetail: null,
     targets: [{ machineId: "m1", hostname: "web-01", state: "done", outcome: makeScanOutcome() }],
+    ...overrides,
+  };
+}
+
+/** The daily scheduled scan (Req 20): off, with a server key and two hosts, by default. */
+export function makeScanSchedule(overrides: Partial<ScanSchedule> = {}): ScanSchedule {
+  return {
+    enabled: false,
+    timeOfDay: "03:00",
+    timezone: "UTC",
+    nextRunAt: null,
+    lastRunAt: null,
+    lastJobId: null,
+    lastNote: null,
+    eligibleHosts: 2,
+    serverKeyConfigured: true,
     ...overrides,
   };
 }

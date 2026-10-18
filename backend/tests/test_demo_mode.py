@@ -97,6 +97,14 @@ def test_scanning_is_refused(demo):
     assert "demo mode" in response.json()["detail"].lower()
 
 
+def test_scheduling_scans_is_refused(demo):
+    """Validates Req 20.7: an unattended scan dials out as surely as a clicked one."""
+    response = demo.put("/api/scan-schedule", json={"enabled": True, "time_of_day": "03:00"})
+
+    assert response.status_code == 403
+    assert "demo mode" in response.json()["detail"].lower()
+
+
 def test_queueing_a_scan_job_is_refused(demo):
     """Validates Req 19.6: the background route dials out just as surely (Req 15)."""
     response = demo.post(

@@ -518,6 +518,14 @@ Advisories arrive from a pool of worker threads in whatever order they finish. B
 
 **Validates: Requirements 2.10**
 
+### Property 19: A scheduled slot runs at most once and is not missed
+
+*For any* daily time and any sequence of moments at which the schedule is checked, the schedule SHALL run each daily slot at most once; SHALL run every slot after it was armed for which some check falls between that slot and the next; and SHALL NOT run a slot at or before the moment it was armed or last ran.
+
+Only the most recent slot is ever considered, so a slot the process slept through entirely is replaced by a newer one rather than run late.
+
+**Validates: Requirements 20.1, 20.4**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).
@@ -898,3 +906,23 @@ scope, since the deployment runs a single uvicorn worker.
   jobs are kept, plus any still active.
 - **Dashboard.** Starts jobs and polls them, so a scan survives navigation and
   a reload (it resumes through `GET /api/scans/jobs?active=true`).
+
+### Scheduled scanning (0.12.0)
+
+One daily schedule, stored in `scan_schedule` and set from the dashboard
+(Req 20). `services/scan_schedule.py` holds the pure `next_due(now,
+time_of_day, since)` -- naive local wall-clock time, so 03:00 means 03:00
+through daylight-saving changes, and only the latest slot is ever due
+(Property 19) -- and a ticker started with the app that checks once a minute.
+
+- **Which hosts.** Every successful scan records on the machine whether it used
+  the server key (`target_machines.last_scan_server_key`, from
+  `scan_job_targets.server_key`). Only those hosts are scheduled; a failed scan
+  leaves the flag alone, so a host whose key access broke keeps reporting it.
+- **How it runs.** A due slot queues an ordinary job with `requested_by =
+  "schedule"` through `scan_jobs.create_job` and `submit` -- the one queue and
+  scan slot (Req 20.6). A slot that cannot run is recorded with the reason and
+  not retried (Req 20.5).
+- **Arming.** Switching on or changing the time sets `armed_at`, so a slot
+  already past that day is not run on the spot.
+

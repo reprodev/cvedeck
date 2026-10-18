@@ -1,4 +1,5 @@
-// Account settings: password and API tokens (Req 16.6, 16.7).
+// Settings: password and API tokens (Req 16.6, 16.7), pinned host keys
+// (Req 17.10) and the daily scheduled scan (Req 20.2).
 //
 // Reached at #/settings from the header. A token is shown once, straight after
 // it is created, with a copy button and a plain statement that it cannot be
@@ -11,11 +12,16 @@ import type { FormEvent } from "react";
 import { Icon } from "../components/Icon";
 import { useToast } from "../components/Toast";
 import { useClipboard } from "../lib/useClipboard";
-import type { ApiToken, CreatedApiToken, HostKeyPin } from "../types";
+import type { ApiToken, CreatedApiToken, HostKeyPin, ScanSchedule } from "../types";
 import { MIN_PASSWORD_LENGTH } from "./SetupView";
 
 export interface SettingsViewProps {
-  username: string;
+  /**
+   * The signed-in account, or null when sign-in is off. The password and token
+   * panels need an account; the rest of the page does not, so an instance run
+   * without sign-in can still set its schedule (Req 20.2).
+   */
+  username: string | null;
   onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   onListTokens: () => Promise<ApiToken[]>;
   onCreateToken: (name: string) => Promise<CreatedApiToken>;
@@ -26,6 +32,9 @@ export interface SettingsViewProps {
   onListHostKeys?: () => Promise<HostKeyPin[]>;
   /** Forget one pin. The port is part of the address it is pinned under. */
   onForgetHostKey?: (hostname: string, port: number) => Promise<void>;
+  /** The daily scheduled scan (Req 20.2). */
+  onGetScanSchedule?: () => Promise<ScanSchedule>;
+  onSetScanSchedule?: (enabled: boolean, timeOfDay: string) => Promise<ScanSchedule>;
   onBack: () => void;
 }
 
@@ -48,6 +57,8 @@ export function SettingsView({
   onRevokeAllTokens,
   onListHostKeys,
   onForgetHostKey,
+  onGetScanSchedule,
+  onSetScanSchedule,
   onBack,
 }: SettingsViewProps) {
   const toast = useToast();
@@ -59,19 +70,28 @@ export function SettingsView({
           <Icon name="arrow-left" /> Back
         </button>
         <div>
-          <h2>Account</h2>
-          <p className="hint settings-subtitle">
-            Signed in as <strong>{username}</strong>
-          </p>
+          <h2>{username ? "Account" : "Settings"}</h2>
+          {username && (
+            <p className="hint settings-subtitle">
+              Signed in as <strong>{username}</strong>
+            </p>
+          )}
         </div>
       </div>
-      <PasswordPanel onChangePassword={onChangePassword} onChanged={toast.success} />
-      <TokensPanel
-        onListTokens={onListTokens}
-        onCreateToken={onCreateToken}
-        onRevokeToken={onRevokeToken}
-        onRevokeAllTokens={onRevokeAllTokens}
-      />
+      {onGetScanSchedule && onSetScanSchedule && (
+        <ScanSchedulePanel onGet={onGetScanSchedule} onSet={onSetScanSchedule} />
+      )}
+      {username && (
+        <>
+          <PasswordPanel onChangePassword={onChangePassword} onChanged={toast.success} />
+          <TokensPanel
+            onListTokens={onListTokens}
+            onCreateToken={onCreateToken}
+            onRevokeToken={onRevokeToken}
+            onRevokeAllTokens={onRevokeAllTokens}
+          />
+        </>
+      )}
       {onListHostKeys && onForgetHostKey && (
         <HostKeysPanel
           onListHostKeys={onListHostKeys}
@@ -79,6 +99,138 @@ export function SettingsView({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The daily scheduled scan (Req 20).
+ *
+ * Only hosts a scan has reached with the server-managed key are included --
+ * credentials are never stored, so that key is all an unattended scan has.
+ * Without one the switch is disabled and the panel says why, the way fleet
+ * re-scan hides its buttons.
+ */
+function ScanSchedulePanel({
+  onGet,
+  onSet,
+}: {
+  onGet: NonNullable<SettingsViewProps["onGetScanSchedule"]>;
+  onSet: NonNullable<SettingsViewProps["onSetScanSchedule"]>;
+}) {
+  const toast = useToast();
+  const [schedule, setSchedule] = useState<ScanSchedule | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [timeOfDay, setTimeOfDay] = useState("03:00");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const show = useCallback((next: ScanSchedule) => {
+    setSchedule(next);
+    setEnabled(next.enabled);
+    setTimeOfDay(next.timeOfDay);
+  }, []);
+
+  useEffect(() => {
+    onGet()
+      .then(show)
+      .catch((err: unknown) => setError(errorText(err, "The schedule could not be loaded.")));
+  }, [onGet, show]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await onSet(enabled, timeOfDay);
+      show(saved);
+      toast.success(
+        saved.enabled
+          ? `Scheduled scans on: every day at ${saved.timeOfDay} (${saved.timezone}).`
+          : "Scheduled scans off.",
+      );
+    } catch (err) {
+      setError(errorText(err, "The schedule could not be saved."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const noKey = schedule !== null && !schedule.serverKeyConfigured;
+  const unchanged =
+    schedule !== null && enabled === schedule.enabled && timeOfDay === schedule.timeOfDay;
+
+  return (
+    <section className="card settings-panel" aria-labelledby="schedule-heading">
+      <h3 id="schedule-heading">
+        <Icon name="clock" /> Scheduled scans
+      </h3>
+      <p className="hint">
+        Rescan every day, unattended. Only hosts a scan has reached with the
+        server-managed SSH key are included: credentials are never stored, so that
+        key is the only one an unattended scan has.
+      </p>
+
+      {error && (
+        <p role="alert" className="error-banner">
+          {error}
+        </p>
+      )}
+
+      {schedule === null ? (
+        !error && <p className="hint">Loading the schedule…</p>
+      ) : (
+        <form className="settings-form" onSubmit={submit}>
+          {noKey && (
+            <p className="hint" data-testid="schedule-no-key">
+              No server-managed SSH key is configured
+              (<code>CVEDECK_DEFAULT_SSH_KEY_PATH</code>), so there is nothing an
+              unattended scan could sign in with.
+            </p>
+          )}
+          <div className="field-group">
+            <label className="inline-check" htmlFor="schedule-enabled">
+              <input
+                id="schedule-enabled"
+                type="checkbox"
+                checked={enabled}
+                disabled={noKey && !schedule.enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />{" "}
+              Scan every day
+            </label>
+          </div>
+          <div className="field-group">
+            <label htmlFor="schedule-time">At</label>
+            <input
+              id="schedule-time"
+              type="time"
+              required
+              value={timeOfDay}
+              onChange={(e) => setTimeOfDay(e.target.value)}
+            />
+            <span className="field-hint">Server time ({schedule.timezone}).</span>
+          </div>
+          <p className="hint" data-testid="schedule-status">
+            {schedule.eligibleHosts === 1 ? "1 host" : `${schedule.eligibleHosts} hosts`} included
+            — a host joins once a scan reaches it with the server key.
+            {schedule.enabled && schedule.nextRunAt && (
+              <> Next run: {formatDate(schedule.nextRunAt)}.</>
+            )}
+            {schedule.lastRunAt && (
+              <>
+                {" "}Last run: {formatDate(schedule.lastRunAt)}
+                {schedule.lastNote ? ` — ${schedule.lastNote}` : "."}
+              </>
+            )}
+          </p>
+          <div>
+            <button type="submit" disabled={busy || unchanged}>
+              {busy ? "Saving…" : "Save schedule"}
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
   );
 }
 

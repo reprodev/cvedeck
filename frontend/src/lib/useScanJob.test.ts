@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/client";
 import { makeScanJob, makeScanOutcome } from "../test-utils/factories";
 import type { ScanJob } from "../types";
-import { POLL_MS, progressLabel, useScanJob } from "./useScanJob";
+import { IDLE_POLL_MS, POLL_MS, progressLabel, useScanJob } from "./useScanJob";
 
 const running = (index: number): ScanJob =>
   makeScanJob({
@@ -150,5 +150,30 @@ describe("useScanJob", () => {
     await tick();
 
     expect(api.getScanJob.mock.calls.length).toBe(calls);
+  });
+
+  it("notices a scan it did not start -- a scheduled one -- while idle (Req 20.6)", async () => {
+    const api = fakeApi({
+      listActiveScanJobs: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([makeScanJob({ requestedBy: "schedule", status: "running", finishedAt: null })]),
+    });
+    api.getScanJob.mockResolvedValue(makeScanJob({ requestedBy: "schedule" }));
+    const onFinished = vi.fn();
+    const { result } = renderHook(() => useScanJob(api, onFinished, vi.fn()));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.job).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS);
+    });
+    expect(result.current.job?.requestedBy).toBe("schedule");
+
+    await tick();
+    expect(onFinished).toHaveBeenCalledTimes(1);
   });
 });

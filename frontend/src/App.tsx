@@ -518,6 +518,11 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
   // is not a licence to offer the action.
   const offerIntelRefresh = capabilities !== null && !capabilities.demoMode;
 
+  // Settings holds the schedule (Req 20.2) and the pinned host keys as well as
+  // the account panels, so an instance run without sign-in needs it too. Not in
+  // a public demo, which changes nothing.
+  const settingsAvailable = account !== null || (capabilities !== null && !capabilities.demoMode);
+
   return (
     <main>
       <div className="app-header">
@@ -569,6 +574,16 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
                 <Icon name="log-out" /> Sign out
               </button>
             </nav>
+          )}
+          {!account && settingsAvailable && (
+            <button
+              type="button"
+              className={`secondary account-btn ${activeNav === "settings" ? "active" : ""}`}
+              onClick={() => handleNavigate("settings")}
+              aria-current={activeNav === "settings" ? "page" : undefined}
+            >
+              <Icon name="key" /> Settings
+            </button>
           )}
           <button
             type="button"
@@ -682,9 +697,11 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onLoadScanRuns={(limit) => api.listScanRuns(selectedMachineId, limit)}
           onLoadScanChanges={(runId) => api.listScanChanges(selectedMachineId, runId)}
         />
-      ) : activeNav === "settings" && account ? (
+      ) : activeNav === "settings" && settingsAvailable ? (
         <SettingsView
-          username={account.username}
+          username={account?.username ?? null}
+          onGetScanSchedule={() => api.getScanSchedule()}
+          onSetScanSchedule={(enabled, timeOfDay) => api.setScanSchedule(enabled, timeOfDay)}
           onChangePassword={(current, next) => api.changePassword(current, next)}
           onListTokens={() => api.listApiTokens()}
           onListHostKeys={() => api.listHostKeys()}

@@ -82,6 +82,12 @@ class TargetMachine(Base):
     sync_status: Mapped[SyncStatus] = mapped_column(
         SqlEnum(SyncStatus, name="sync_status"), nullable=False
     )
+    #: Whether the last *successful* scan reached this host with the
+    #: server-managed key (Req 20.3). Only such hosts are scanned on schedule:
+    #: an unattended scan has no other credential, and a host that needs a
+    #: password would otherwise fail every night. NULL is "not known yet" -- a
+    #: host not scanned successfully since 0.12.0 -- and is not scheduled.
+    last_scan_server_key: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     inventories: Mapped[list[Inventory]] = relationship(
         back_populates="machine", cascade="all, delete-orphan"
@@ -394,6 +400,11 @@ class ScanJobTarget(Base):
     state: Mapped[ScanJobTargetState] = mapped_column(
         SqlEnum(ScanJobTargetState, name="scan_job_target_state"), nullable=False
     )
+    #: True when this host is scanned with the server-managed key, not with
+    #: credentials from the request; copied to the machine on success (Req 20.3).
+    server_key: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
     status: Mapped[ScanStatus | None] = mapped_column(
         SqlEnum(ScanStatus, name="scan_status"), nullable=True
     )
@@ -407,6 +418,29 @@ class ScanJobTarget(Base):
     baseline: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     job: Mapped[ScanJob] = relationship(back_populates="targets")
+
+
+class ScanSchedule(Base):
+    """The daily scheduled scan, configured from the dashboard (Req 20). One row.
+
+    Off by default (Req 20.1). ``armed_at`` is when it was last switched on or
+    its time changed: only slots after it (or after the last run) are due, so
+    turning it on at 10:00 for 03:00 does not scan straight away.
+    """
+
+    __tablename__ = "scan_schedule"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    #: "HH:MM", in the server's local time.
+    time_of_day: Mapped[str] = mapped_column(String, nullable=False, default="03:00")
+    armed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_job_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: Why the last due slot did or did not start a scan (Req 20.5).
+    last_note: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class UbuntuKernelFeed(Base):

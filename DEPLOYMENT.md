@@ -496,6 +496,30 @@ pipelines rather than a single fixed command.
 Windows targets have no equivalent fallback: WinRM has no SSH-key analogue, so a
 Windows target without credentials is rejected rather than attempted.
 
+### Scheduled scans
+
+Since 0.12.0 CveDeck can rescan every day on its own. It is off until you switch
+it on in **Settings → Scheduled scans** and pick a time; Settings is there with
+or without sign-in, except in demo mode.
+
+- **It needs the server-managed key and user** above: credentials are never
+  stored, so that key is the only one an unattended scan has. Without
+  `CVEDECK_DEFAULT_SSH_KEY_PATH` the schedule cannot be switched on, and without
+  `CVEDECK_DEFAULT_SSH_USER` each host fails with an authentication error.
+- **It scans only hosts the key has reached.** Each successful scan records
+  whether it used the server key; a host scanned with a password is left out,
+  rather than failing every night. A host joins the schedule the first time a
+  scan reaches it with the key -- a fleet re-scan, or a scan with the credential
+  fields left empty.
+- **The time is the server's local time.** The image runs in UTC unless you set
+  `TZ` (for example `TZ=Europe/London`); Settings names the zone it is using.
+- **A missed slot runs once.** If CveDeck was down at the scheduled time, it
+  scans once when it next starts that day -- never twice for one day, and never
+  a day it was down for entirely.
+- A scheduled scan is an ordinary scan job: it runs in its turn with any other
+  scan, and an open dashboard shows its progress. Settings shows the last run and,
+  when a run did not start a scan, why.
+
 ## Demo mode
 
 `CVEDECK_DEMO_MODE=true` turns an instance into a showcase:

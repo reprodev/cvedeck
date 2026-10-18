@@ -385,6 +385,22 @@ export interface ScanJob {
   targets: ScanJobTarget[];
 }
 
+/** The daily scheduled scan (Req 20). */
+export interface ScanSchedule {
+  enabled: boolean;
+  /** "HH:MM" in the server's local time, named by `timezone`. */
+  timeOfDay: string;
+  timezone: string;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastJobId: string | null;
+  /** Why the last due slot did or did not start a scan. */
+  lastNote: string | null;
+  /** Hosts whose last successful scan used the server key. */
+  eligibleHosts: number;
+  serverKeyConfigured: boolean;
+}
+
 /** Deployment capabilities reported by the backend. */
 export interface ServerCapabilities {
   /** Whether a server-managed SSH key is configured, enabling fleet re-scan. */

@@ -511,6 +511,30 @@ class ScanJobOut(BaseModel):
     targets: list[ScanJobTargetOut]
 
 
+class ScanScheduleOut(BaseModel):
+    """The daily scheduled scan, and what it will do next (Req 20)."""
+
+    enabled: bool
+    #: "HH:MM" in the server's local time, named by ``timezone``.
+    time_of_day: str
+    timezone: str
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    last_job_id: str | None = None
+    #: Why the last due slot did or did not start a scan (Req 20.5).
+    last_note: str | None = None
+    #: Hosts whose last successful scan used the server key (Req 20.3).
+    eligible_hosts: int
+    server_key_configured: bool
+
+
+class ScanScheduleIn(BaseModel):
+    """Switch the scheduled scan on or off and set its time (Req 20.1, 20.2)."""
+
+    enabled: bool
+    time_of_day: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$", max_length=5)
+
+
 class SyncResponse(BaseModel):
     """Outcome of a manually triggered synchronization run (Req 5.2).
 

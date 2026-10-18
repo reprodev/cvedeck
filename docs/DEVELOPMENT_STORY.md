@@ -2771,3 +2771,38 @@ uvicorn worker had been a consequence of SQLite; with jobs it is a requirement,
 because a second process would run scans side by side and, on starting, mark
 the first's running scans interrupted. PostgreSQL removes the one-writer limit
 but not this one, and the deployment guide now says so.
+
+## Chapter 30 — While nobody is looking (v0.12.0)
+
+The job queue of 0.11.0 was built so that a scan could start without a person
+behind it. This release is that scan: once a day, at a time the owner picks,
+off until they pick one.
+
+### The credential nobody typed
+
+An unattended scan has no one to type a password, and CveDeck never stores one,
+so it has only the server-managed key. Scheduling every host would have turned
+every password-scanned host red each morning -- a scheduled scan teaching the
+owner to ignore red, the opposite of its point. So each successful scan now
+records whether the key reached the host, and only those hosts are scheduled.
+A host joins the first time the key gets in; a failed scan leaves the record
+alone, so a host whose key access breaks keeps saying so every night, which is
+the one alarm worth raising.
+
+### Once per slot, through a restart
+
+When to run is a small pure function, kept pure so it could be tested over
+every sequence of moments Hypothesis could think of: the most recent 03:00 that
+has not yet been run, and none at all if the schedule was switched on after it.
+Only the latest slot ever counts, which settles the awkward cases without
+special code: down at 03:00 and back at 07:00 runs once; down for three days
+runs once, not three times; 03:00 on the morning the clocks change is still
+03:00, because the comparison is in the server's own wall-clock time.
+
+### A page nobody could open
+
+The schedule belongs in Settings, and Settings, it turned out, existed only for
+a signed-in account. An instance run without sign-in -- a common way to run a
+homelab tool -- had never been able to see its pinned host keys either. Settings
+now opens whenever there is an account or sign-in is off, outside a demo, and
+keeps its password and token panels for an account.

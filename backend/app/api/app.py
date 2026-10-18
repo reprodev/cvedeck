@@ -36,7 +36,7 @@ from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.11.0"
+_VERSION = "0.12.0"
 
 
 async def _validation_error_without_input(
@@ -238,7 +238,7 @@ async def _open_database_at_startup(_: FastAPI):
     """
     from sqlalchemy.orm import Session
 
-    from ..services import scan_jobs
+    from ..services import scan_jobs, scan_schedule
     from ..services.feed_scheduler import (
         start_periodic_refresh,
         stop_periodic_refresh,
@@ -258,9 +258,13 @@ async def _open_database_at_startup(_: FastAPI):
     # test app has no lifespan and so no background thread (Req 19.1).
     scan_jobs.start_worker(lambda: Session(engine), DeploymentScannerEngine)
     refresher = start_periodic_refresh(engine, config.feed_refresh_hours_in_effect())
+    # The daily scheduled scan (Req 20): a ticker that queues jobs for the
+    # worker above, never a second way to scan. Not started in demo mode.
+    schedule = scan_schedule.start_scan_schedule(engine)
     try:
         yield
     finally:
+        await scan_schedule.stop_scan_schedule(schedule)
         await stop_periodic_refresh(refresher)
         scan_jobs.stop_worker()
 

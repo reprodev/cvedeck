@@ -54,7 +54,7 @@ from ..package_identifier import (
     parse_package_name,
     parse_package_version,
 )
-from ..services import scan_jobs
+from ..services import scan_jobs, scan_schedule
 from ..services.enrichment import FindingEnricher
 from ..services.kernel import KernelView, decode_unfixed, kernel_view
 from .dependencies import get_session
@@ -69,6 +69,7 @@ from .schemas import (
     MachineSummary,
     ScanJobOut,
     ScanJobTargetOut,
+    ScanScheduleOut,
     ScanRunOut,
     SeverityCounts,
 )
@@ -695,3 +696,15 @@ def get_scan_job(job_id: str, session: Session = Depends(get_session)) -> ScanJo
     if job is None:
         raise HTTPException(status_code=404, detail="No such scan job")
     return scan_job_out(job)
+
+
+def scan_schedule_out(session: Session) -> ScanScheduleOut:
+    view = scan_schedule.describe(session)
+    session.commit()  # the row is created, off, on first read
+    return ScanScheduleOut(**view.__dict__)
+
+
+@router.get("/scan-schedule", response_model=ScanScheduleOut)
+def get_scan_schedule(session: Session = Depends(get_session)) -> ScanScheduleOut:
+    """The daily scheduled scan: on or off, when, for how many hosts (Req 20.2)."""
+    return scan_schedule_out(session)

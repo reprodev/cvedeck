@@ -676,3 +676,34 @@ can leave the page, and can see which host is being scanned.
    turn like any other.
 6. IN demo mode THE system SHALL refuse to queue a scan job (extends Req 15).
 
+### Requirement 20: Scheduled scanning
+
+**User story:** As an operator, I want my fleet rescanned every night without
+anyone clicking, so that new and newly exploited vulnerabilities show up on
+their own.
+
+#### Acceptance criteria
+
+1. THE system SHALL offer one daily scheduled scan, switched off until the
+   operator switches it on; WHEN it is switched on or its time changed THEN a
+   slot that has already passed that day SHALL NOT be run at once.
+2. THE operator SHALL be able to switch the schedule on or off and set its time
+   of day from the dashboard, taking effect without a restart; the time SHALL be
+   the server's local time, and the dashboard SHALL name the server's time zone.
+3. A scheduled scan SHALL include only Linux hosts whose last successful scan
+   used the server-managed SSH key, recorded on every successful scan; a host
+   last scanned successfully with a password or a private key from the request
+   SHALL NOT be included; AND THE system SHALL NOT allow the schedule to be
+   switched on while no server-managed key is configured.
+4. THE system SHALL run each daily slot at most once; IF the process was not
+   running at a slot's time THEN it SHALL run that slot once when it next starts
+   within the day, and SHALL NOT run a slot that a later slot has replaced.
+5. IF a due slot cannot start a scan -- no server-managed key, demo mode, the
+   previous scheduled scan still running, or no eligible hosts -- THEN THE system
+   SHALL record the slot as handled, with the reason shown in the dashboard, and
+   SHALL NOT retry it.
+6. A scheduled scan SHALL be queued as an ordinary scan job (Requirement 19),
+   run in its turn with every other scan, and reported like one.
+7. IN demo mode THE system SHALL NOT run scheduled scans and SHALL refuse to
+   change the schedule (extends Req 15).
+

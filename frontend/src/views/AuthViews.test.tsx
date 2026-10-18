@@ -7,6 +7,7 @@ import { ApiError } from "../api/client";
 import type { ApiToken, CreatedApiToken, HostKeyPin } from "../types";
 import { LoginView } from "./LoginView";
 import { SettingsView } from "./SettingsView";
+import { makeScanSchedule } from "../test-utils/factories";
 import { SetupView } from "./SetupView";
 
 describe("LoginView", () => {
@@ -323,5 +324,80 @@ describe("SettingsView pinned host keys (Req 17.10)", () => {
     );
 
     expect(screen.queryByText("Pinned SSH host keys")).not.toBeInTheDocument();
+  });
+});
+
+describe("SettingsView scheduled scans (Req 20.2)", () => {
+  function renderSchedule(
+    schedule = makeScanSchedule(),
+    overrides: Partial<Parameters<typeof SettingsView>[0]> = {},
+  ) {
+    const props = {
+      username: "admin" as string | null,
+      onChangePassword: vi.fn().mockResolvedValue(undefined),
+      onListTokens: vi.fn().mockResolvedValue([]),
+      onCreateToken: vi.fn(),
+      onRevokeToken: vi.fn().mockResolvedValue(undefined),
+      onGetScanSchedule: vi.fn().mockResolvedValue(schedule),
+      onSetScanSchedule: vi
+        .fn()
+        .mockImplementation(async (enabled: boolean, timeOfDay: string) =>
+          makeScanSchedule({ ...schedule, enabled, timeOfDay, nextRunAt: "2026-10-19T04:30:00Z" }),
+        ),
+      onBack: vi.fn(),
+      ...overrides,
+    };
+    render(<SettingsView {...props} />);
+    return props;
+  }
+
+  it("shows the schedule, off, with how many hosts it would include", async () => {
+    renderSchedule();
+
+    const checkbox = await screen.findByLabelText("Scan every day");
+    expect(checkbox).not.toBeChecked();
+    expect(screen.getByLabelText("At")).toHaveValue("03:00");
+    expect(screen.getByText("Server time (UTC).")).toBeInTheDocument();
+    expect(screen.getByTestId("schedule-status")).toHaveTextContent("2 hosts included");
+  });
+
+  it("switches it on at a chosen time", async () => {
+    const props = renderSchedule();
+
+    await userEvent.click(await screen.findByLabelText("Scan every day"));
+    const time = screen.getByLabelText("At");
+    await userEvent.clear(time);
+    await userEvent.type(time, "04:30");
+    await userEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    await waitFor(() => expect(props.onSetScanSchedule).toHaveBeenCalledWith(true, "04:30"));
+    expect(await screen.findByTestId("schedule-status")).toHaveTextContent("Next run:");
+  });
+
+  it("explains, and will not switch on, without a server key (Req 20.3)", async () => {
+    renderSchedule(makeScanSchedule({ serverKeyConfigured: false, eligibleHosts: 0 }));
+
+    expect(await screen.findByTestId("schedule-no-key")).toHaveTextContent("CVEDECK_DEFAULT_SSH_KEY_PATH");
+    expect(screen.getByLabelText("Scan every day")).toBeDisabled();
+  });
+
+  it("says why the last slot did not scan", async () => {
+    renderSchedule(
+      makeScanSchedule({
+        enabled: true,
+        lastRunAt: "2026-10-18T03:00:30Z",
+        lastNote: "Skipped: no hosts yet -- a host joins once a scan reaches it with the server key.",
+      }),
+    );
+
+    expect(await screen.findByTestId("schedule-status")).toHaveTextContent("Skipped: no hosts yet");
+  });
+
+  it("works without sign-in, leaving out the account panels", async () => {
+    renderSchedule(makeScanSchedule(), { username: null });
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Scan every day")).toBeInTheDocument();
+    expect(screen.queryByText("Change password")).not.toBeInTheDocument();
   });
 });

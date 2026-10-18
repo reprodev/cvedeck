@@ -319,6 +319,15 @@ environment the app reads, so no alembic.ini edit is needed.
   Overlapping writes are now possible, so anything that reads, does slow work,
   then writes must cope with the row having changed: the sync flip is
   conditional (Req 5.6), and scans run one at a time (Req 13.9).
+- **Scheduled scans queue jobs; they are not a second way to scan** (Req 20,
+  `services/scan_schedule.py`). Daily, off by default, set from the dashboard. Only
+  hosts whose last *successful* scan used the server key are included
+  (`target_machines.last_scan_server_key`) -- credentials are never stored, and a
+  password host would otherwise fail every night. Do not schedule every host, do
+  not set the flag on a failed scan, and do not grow `feed_scheduler` into this:
+  the refresher is idempotent and owns no scan. `next_due` is pure and naive-local
+  by design (Property 19); keep DST and catch-up reasoning there. No remediation
+  is ever automatic.
 - **Scans are jobs, and run through one slot** (Req 19, `services/scan_jobs.py`).
   Every scan -- from the dashboard's `POST /api/scans/jobs` or a script's
   `POST /api/scans` -- is a `scan_jobs` row run while holding `_scan_slot`. Do not
@@ -625,12 +634,6 @@ change; what has not is context.
 
 ### 5.2 Not built yet
 
-- **Scheduled scanning.** Background execution shipped in 0.11.0 (see 5.1), so
-  the prerequisite is in place; no *scan* is scheduled yet, and no remediation is
-  automatic. Scheduled scans can only reach hosts the server-managed key opens,
-  because credentials are never stored. The feed refresh keeps its own task
-  (`services/feed_scheduler.py`): it is idempotent, owns no transaction and keeps
-  the previous cache on failure. Do not grow it into the scan scheduler.
 - **Windows Research & Engineering Roadmap**:
   - *Track 1 (WinRM Inbound & Remote Auth)*: WinRM over HTTPS (port 5986), Kerberos SPN auth, and non-domain UAC token filter research (`LocalAccountTokenFilterPolicy`) without altering client host configurations.
   - *Track 2 (Push-Based Outbound Collector)*: Lightweight standalone PowerShell/Go collector running locally with zero inbound open ports required, pushing WMI/CIM/Registry inventory outbound to `POST /api/scans/ingest`.

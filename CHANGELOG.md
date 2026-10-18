@@ -8,6 +8,30 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.12.0] - 2026-10-18
+
+### Added
+
+- **Scheduled scans.** CveDeck can rescan your hosts every day on its own, so
+  new vulnerabilities -- and newly exploited ones -- show up without anyone
+  clicking. Switch it on in **Settings → Scheduled scans** and pick a time; it
+  is off until you do. It uses the server-managed SSH key, since credentials
+  are never stored, and scans only hosts that key has already reached: a host
+  you scan with a password is left out rather than failing every night. A host
+  joins the schedule the first time a scan reaches it with the key. The time is
+  the server's local time (set `TZ`; Settings shows the zone). If CveDeck is
+  down at the scheduled time it scans once when it is back that day. Settings
+  shows the next run, the last one, and why a run did not scan when it did not.
+  See DEPLOYMENT.md.
+- **Settings without sign-in.** Settings used to appear only for a signed-in
+  account, so an instance run with `CVEDECK_AUTH=off` could not reach it. It is
+  now there whenever sign-in is off too (not in demo mode), with the schedule
+  and the pinned host keys; the password and token panels still need an
+  account.
+- **For scripts:** `GET` and `PUT /api/scan-schedule`.
+
+---
+
 ## [0.11.0] - 2026-10-18
 
 **Upgrading:** keep a single uvicorn worker (the image's default). Scans are now

@@ -30,6 +30,7 @@ import type {
   HostKeyPin,
   ScanJob,
   ScanOutcome,
+  ScanSchedule,
   ScanRun,
   ScanTargetInput,
   Severity,
@@ -310,6 +311,19 @@ interface ScanResponseWire {
   machine_scans: MachineScanWire[];
 }
 
+/** Wire shape of GET and PUT /api/scan-schedule (Req 20). */
+interface ScanScheduleWire {
+  enabled: boolean;
+  time_of_day: string;
+  timezone: string;
+  next_run_at?: string | null;
+  last_run_at?: string | null;
+  last_job_id?: string | null;
+  last_note?: string | null;
+  eligible_hosts: number;
+  server_key_configured: boolean;
+}
+
 /** Wire shape of POST /api/scans/jobs (Req 19.1). */
 interface ScanJobCreatedWire {
   job_id: string;
@@ -502,6 +516,20 @@ function toScanOutcome(wire: MachineScanWire): ScanOutcome {
     newCount: wire.new_count ?? null,
     resolvedCount: wire.resolved_count ?? null,
     baseline: wire.baseline ?? false,
+  };
+}
+
+function toScanSchedule(wire: ScanScheduleWire): ScanSchedule {
+  return {
+    enabled: wire.enabled,
+    timeOfDay: wire.time_of_day,
+    timezone: wire.timezone,
+    nextRunAt: wire.next_run_at ?? null,
+    lastRunAt: wire.last_run_at ?? null,
+    lastJobId: wire.last_job_id ?? null,
+    lastNote: wire.last_note ?? null,
+    eligibleHosts: wire.eligible_hosts,
+    serverKeyConfigured: wire.server_key_configured,
   };
 }
 
@@ -925,6 +953,21 @@ export class CveScannerApiClient {
   async getScanJob(id: string): Promise<ScanJob> {
     return toScanJob(
       await this.request<ScanJobWire>("GET", `/api/scans/jobs/${encodeURIComponent(id)}`),
+    );
+  }
+
+  /** GET /api/scan-schedule -- the daily scheduled scan (Req 20.2). */
+  async getScanSchedule(): Promise<ScanSchedule> {
+    return toScanSchedule(await this.request<ScanScheduleWire>("GET", "/api/scan-schedule"));
+  }
+
+  /** PUT /api/scan-schedule -- switch it on or off and set its time (Req 20.1, 20.2). */
+  async setScanSchedule(enabled: boolean, timeOfDay: string): Promise<ScanSchedule> {
+    return toScanSchedule(
+      await this.request<ScanScheduleWire>("PUT", "/api/scan-schedule", {
+        enabled,
+        time_of_day: timeOfDay,
+      }),
     );
   }
 
