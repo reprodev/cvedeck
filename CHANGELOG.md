@@ -8,7 +8,24 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
-## [0.13.0] - 2026-10-24
+## [0.13.1] - 2026-10-24
+
+The 0.13.0 image was never published: the release's vulnerability scan stopped
+it, and this release carries the same changes with that fixed. See 0.13.0 below
+for what is new.
+
+### Security
+
+- **The image's copy of pip no longer bundles compromised root certificates.**
+  pip vendors its own copy of certifi, and the pinned pip 26.2.1 carried a
+  version that still trusted emSign root CAs whose intermediate keys were
+  compromised (GHSA-6q48-6c7w-9gw2, critical). The image now pins pip 26.2.2.
+  CveDeck's own certificate bundle, which its network requests use, was already
+  current, and pip is not used once the image is built.
+
+---
+
+## [0.13.0] - 2026-10-24 (not published as an image)
 
 **Upgrading:** a small database migration lets scan jobs be recorded as
 cancelled; it runs on start, as always.

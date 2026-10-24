@@ -56,7 +56,7 @@ WORKDIR /app
 # pip itself is pinned, like everything else in the image: the base image
 # ships whatever pip was current when it was built.
 COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir pip==26.2.1 \
+RUN pip install --no-cache-dir pip==26.2.2 \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY backend/pyproject.toml backend/README.md backend/alembic.ini ./
