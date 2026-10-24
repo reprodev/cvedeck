@@ -526,6 +526,14 @@ Only the most recent slot is ever considered, so a slot the process slept throug
 
 **Validates: Requirements 20.1, 20.4**
 
+### Property 20: The fix shown is the earliest the distribution orders first
+
+*For any* set of records for one CVE and package from ecosystems that share a version ordering (dpkg for Debian and Ubuntu, rpm for the RPM families), each naming a fixed version, in any order, deduplication SHALL keep a record whose fixed version no other record's precedes under that ordering, and SHALL keep the same record whatever the arrival order.
+
+From 0.10.4 to 0.12.0 the choice was stable but made by comparing identifiers as text, which picks `1.10-1.el9` over `1.9-1.el9`. The fixed version is display only -- remediation commands upgrade the package -- but the earliest is the one an operator can check an installed version against.
+
+**Validates: Requirements 2.10, 2.11**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).
@@ -906,6 +914,16 @@ scope, since the deployment runs a single uvicorn worker.
   jobs are kept, plus any still active.
 - **Dashboard.** Starts jobs and polls them, so a scan survives navigation and
   a reload (it resumes through `GET /api/scans/jobs?active=true`).
+- **Cancelling (0.13.0).** `POST /api/scans/jobs/{id}/cancel` (Req 19.7-19.9).
+  A queued job's owner is whoever takes its credentials under
+  `_credentials_lock`: if the canceller gets them, the job never starts and is
+  written down as cancelled; if `run_job` got them first, the job is running,
+  and the request is recorded in `_cancel_requested`. `ScannerEngine` asks
+  `should_stop` before each target, so the host in progress always finishes --
+  an SSH session is never cut mid-command -- and the hosts not reached are
+  `CANCELLED`, their machine rows untouched. A job a `POST /api/scans` request
+  is waiting on is listed in `_handoffs` and refused, so that route's response
+  never meets the new state.
 
 ### Scheduled scanning (0.12.0)
 

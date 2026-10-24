@@ -346,6 +346,8 @@ interface ScanJobWire {
   started_at?: string | null;
   finished_at?: string | null;
   error_detail?: string | null;
+  cancellable?: boolean;
+  cancel_requested?: boolean;
   targets: ScanJobTargetWire[];
 }
 
@@ -542,6 +544,8 @@ function toScanJob(wire: ScanJobWire): ScanJob {
     startedAt: wire.started_at ?? null,
     finishedAt: wire.finished_at ?? null,
     errorDetail: wire.error_detail ?? null,
+    cancellable: wire.cancellable ?? false,
+    cancelRequested: wire.cancel_requested ?? false,
     targets: wire.targets.map((target) => ({
       machineId: target.machine_id,
       hostname: target.hostname,
@@ -953,6 +957,16 @@ export class CveScannerApiClient {
   async getScanJob(id: string): Promise<ScanJob> {
     return toScanJob(
       await this.request<ScanJobWire>("GET", `/api/scans/jobs/${encodeURIComponent(id)}`),
+    );
+  }
+
+  /**
+   * POST /api/scans/jobs/{id}/cancel -- cancel a job (Req 19.7-19.9). A queued
+   * job ends at once; a running one stops after the host it is scanning.
+   */
+  async cancelScanJob(id: string): Promise<ScanJob> {
+    return toScanJob(
+      await this.request<ScanJobWire>("POST", `/api/scans/jobs/${encodeURIComponent(id)}/cancel`),
     );
   }
 

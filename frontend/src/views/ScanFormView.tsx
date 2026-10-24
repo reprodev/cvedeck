@@ -27,6 +27,10 @@ export interface ScanFormViewProps {
   scanning?: boolean;
   /** What the running scan is doing, e.g. "Scanning 2 of 5: web-01" (Req 19.2). */
   scanProgress?: string | null;
+  /** Cancel the running scan; absent when it cannot be cancelled (Req 19.7-19.9). */
+  onCancelScan?: () => void;
+  /** True while a cancel is being sent or the scan is already stopping. */
+  cancelScanDisabled?: boolean;
   /** Per-target results of the most recent scan, if any. */
   outcomes?: ScanOutcome[];
   /** Optional pre-filled target to scan (e.g. from discovery quick scan). */
@@ -49,6 +53,8 @@ export function ScanFormView({
   onTestConnection,
   scanning = false,
   scanProgress = null,
+  onCancelScan,
+  cancelScanDisabled = false,
   outcomes,
   initialTarget,
   knownHosts = [],
@@ -414,9 +420,22 @@ export function ScanFormView({
       </form>
 
       {scanProgress && (
-        <p className="scan-progress" role="status">
-          {scanProgress}
-        </p>
+        <div className="scan-progress-row">
+          <p className="scan-progress" role="status">
+            {scanProgress}
+          </p>
+          {onCancelScan && (
+            <button
+              type="button"
+              className="export-btn"
+              disabled={cancelScanDisabled}
+              onClick={onCancelScan}
+              title="Stop after the host being scanned; hosts not yet reached are left as they were"
+            >
+              Cancel scan
+            </button>
+          )}
+        </div>
       )}
 
       {outcomes && outcomes.length > 0 && (

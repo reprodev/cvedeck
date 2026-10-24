@@ -73,6 +73,8 @@ export function makeScanJob(overrides: Partial<ScanJob> = {}): ScanJob {
     startedAt: "2026-10-18T10:00:00Z",
     finishedAt: "2026-10-18T10:00:05Z",
     errorDetail: null,
+    cancellable: false,
+    cancelRequested: false,
     targets: [{ machineId: "m1", hostname: "web-01", state: "done", outcome: makeScanOutcome() }],
     ...overrides,
   };

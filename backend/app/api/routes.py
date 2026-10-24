@@ -665,6 +665,8 @@ def scan_job_out(job: ScanJob) -> ScanJobOut:
         started_at=job.started_at,
         finished_at=job.finished_at,
         error_detail=job.error_detail,
+        cancellable=scan_jobs.is_cancellable(job),
+        cancel_requested=scan_jobs.cancel_requested(job),
         targets=[
             ScanJobTargetOut(
                 machine_id=row.machine_id,

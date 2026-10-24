@@ -17,6 +17,13 @@ Credentials are never written down (Req 19.3). They wait for their job in
 ``_credentials``, in memory, and are dropped the moment it starts. A job a
 restart caught before it finished therefore cannot be resumed, and is marked
 ``INTERRUPTED`` at startup rather than left reading "running" forever (Req 19.4).
+
+A job can be cancelled (Req 19.7-19.9). A queued one never runs; a running one
+stops after the host it is scanning, which finishes and is recorded -- an SSH
+session is never cut mid-command. Who owns a queued job is settled by its
+credentials: cancelling takes them under ``_credentials_lock`` exactly as
+``run_job`` does, so whichever side gets them owns the job, and a cancelled job
+can neither start nor be marked interrupted.
 """
 
 from __future__ import annotations
@@ -25,8 +32,9 @@ import logging
 import queue
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, Iterator
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -48,6 +56,16 @@ _scan_slot = threading.Lock()
 #: Credentials of jobs not yet started, by job id -- the only place they exist.
 _credentials: dict[str, dict[str, Credentials]] = {}
 _credentials_lock = threading.Lock()
+#: Jobs someone asked to cancel, by job id, with who asked. Guarded by
+#: ``_credentials_lock``, which also settles who owns a queued job.
+_cancel_requested: dict[str, str] = {}
+#: Jobs a ``POST /api/scans`` request is waiting on. Its caller expects every
+#: host's outcome, so these cannot be cancelled (Req 19.9).
+_handoffs: set[str] = set()
+
+
+class JobNotCancellable(Exception):
+    """A job that cannot be cancelled; the message says why (Req 19.9)."""
 
 
 def _now() -> datetime:
@@ -189,7 +207,15 @@ def run_job(session: Session, job_id: str, engine: ScannerEngine) -> ScanJob | N
             return job
         with _credentials_lock:
             credentials = _credentials.pop(job_id, None)
+            cancelling = job_id in _cancel_requested
         if credentials is None:
+            if cancelling:
+                # Cancelled before it started: the canceller took the
+                # credentials and writes the job down itself (Req 19.7).
+                return job
+            session.refresh(job)
+            if job.status is not ScanJobStatus.QUEUED:
+                return job
             _interrupt(job, "This scan's credentials are no longer held; run it again.")
             session.commit()
             return job
@@ -220,24 +246,97 @@ def run_job(session: Session, job_id: str, engine: ScannerEngine) -> ScanJob | N
         engine.set_credentials(credentials)
         engine.on_target_start = started
         engine.on_target_done = done
+        engine.should_stop = lambda: job_id in _cancel_requested
         try:
-            result = engine.scan(
-                [TargetMachine(id=r.machine_id, hostname=r.hostname, platform=r.platform) for r in pending]
-            )
-        except Exception as exc:
-            session.rollback()
-            job = session.get(ScanJob, job_id)
-            _interrupt(job, f"The scan stopped unexpectedly: {exc}"[:500])
+            try:
+                result = engine.scan(
+                    [TargetMachine(id=r.machine_id, hostname=r.hostname, platform=r.platform) for r in pending]
+                )
+            except Exception as exc:
+                session.rollback()
+                job = session.get(ScanJob, job_id)
+                _interrupt(job, f"The scan stopped unexpectedly: {exc}"[:500])
+                session.commit()
+                raise
+            for scan in result.machine_scans:
+                row = row_for(scan.machine_id)
+                if row is not None:
+                    _record_outcome(session, row, scan)
+            with _credentials_lock:
+                cancelled_by = _cancel_requested.get(job_id)
+            skipped = [r for r in pending if r.state is not ScanJobTargetState.DONE]
+            if cancelled_by is not None and skipped:
+                # Hosts the cancel stopped it reaching. Their machines are
+                # untouched: they keep the outcome of their last scan (Req 19.8).
+                for row in skipped:
+                    row.state = ScanJobTargetState.CANCELLED
+                done_count = len(job.targets) - len(skipped)
+                job.status = ScanJobStatus.CANCELLED
+                job.error_detail = (
+                    f"Cancelled by {cancelled_by} after {done_count} of {len(job.targets)} hosts."
+                )[:500]
+            else:
+                job.status = ScanJobStatus.FINISHED
+            job.finished_at = _now()
             session.commit()
-            raise
-        for scan in result.machine_scans:
-            row = row_for(scan.machine_id)
-            if row is not None:
-                _record_outcome(session, row, scan)
-        job.status = ScanJobStatus.FINISHED
+            return job
+        finally:
+            with _credentials_lock:
+                _cancel_requested.pop(job_id, None)
+
+
+def cancel_job(session: Session, job_id: str, *, by: str) -> ScanJob | None:
+    """Cancel a job: at once if queued, after its current host if running (Req 19.7-19.9).
+
+    Returns ``None`` for an unknown job, and raises :class:`JobNotCancellable`
+    for one that has ended or that a ``POST /api/scans`` request is waiting on.
+    A queued job whose credentials are still held has not started and now never
+    will: it is written down as cancelled here. If ``run_job`` took them first,
+    the job is running, and it stops before its next host.
+    """
+    job = session.get(ScanJob, job_id)
+    if job is None:
+        return None
+    if job.status not in _ACTIVE:
+        raise JobNotCancellable("This scan has already ended.")
+    with _credentials_lock:
+        if job_id in _handoffs:
+            raise JobNotCancellable(
+                "This scan was started through POST /api/scans, and its caller is "
+                "waiting for every host's result, so it cannot be cancelled."
+            )
+        _cancel_requested[job_id] = by
+        held = _credentials.pop(job_id, None) is not None
+    if not held:
+        return job
+    try:
+        for row in job.targets:
+            if row.state is ScanJobTargetState.QUEUED:
+                row.state = ScanJobTargetState.CANCELLED
+        job.status = ScanJobStatus.CANCELLED
+        job.error_detail = f"Cancelled by {by} before it started."[:500]
         job.finished_at = _now()
         session.commit()
-        return job
+    finally:
+        with _credentials_lock:
+            _cancel_requested.pop(job_id, None)
+    return job
+
+
+def is_cancellable(job: ScanJob) -> bool:
+    """Whether :func:`cancel_job` would accept this job now."""
+    if job.status not in _ACTIVE:
+        return False
+    with _credentials_lock:
+        return job.id not in _handoffs
+
+
+def cancel_requested(job: ScanJob) -> bool:
+    """Whether a running job has been asked to stop and has not stopped yet."""
+    if job.status not in _ACTIVE:
+        return False
+    with _credentials_lock:
+        return job.id in _cancel_requested
 
 
 def _interrupt(job: ScanJob, detail: str) -> None:
@@ -254,6 +353,8 @@ def interrupt_unfinished(session: Session) -> int:
     session.commit()
     with _credentials_lock:
         _credentials.clear()
+        _cancel_requested.clear()
+        _handoffs.clear()
     return len(jobs)
 
 
@@ -266,6 +367,18 @@ def list_jobs(session: Session, *, active_only: bool = False, limit: int = 20) -
     if active_only:
         stmt = stmt.where(ScanJob.status.in_(_ACTIVE))
     return list(session.execute(stmt).scalars().all())
+
+
+@contextmanager
+def _waited_on(job_id: str) -> Iterator[None]:
+    """Mark a job as one a request is waiting on, so it cannot be cancelled (Req 19.9)."""
+    with _credentials_lock:
+        _handoffs.add(job_id)
+    try:
+        yield
+    finally:
+        with _credentials_lock:
+            _handoffs.discard(job_id)
 
 
 class _Handoff:
@@ -307,8 +420,9 @@ class ScanJobWorker:
     def run_in_turn(self, job_id: str, session: Session, engine: ScannerEngine) -> ScanJob | None:
         """Queue a request's job behind everything before it and wait for it."""
         handoff = _Handoff(job_id, session, engine)
-        self._queue.put(handoff)
-        handoff.done.wait()
+        with _waited_on(job_id):
+            self._queue.put(handoff)
+            handoff.done.wait()
         if handoff.error is not None:
             raise handoff.error
         return session.get(ScanJob, job_id)
@@ -371,7 +485,8 @@ def run_in_turn(session: Session, job_id: str, engine: ScannerEngine) -> ScanJob
     to take a place in, and the job runs here, still holding the scan slot.
     """
     if _worker is None:
-        return run_job(session, job_id, engine)
+        with _waited_on(job_id):
+            return run_job(session, job_id, engine)
     return _worker.run_in_turn(job_id, session, engine)
 
 

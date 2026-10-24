@@ -109,20 +109,28 @@ class ScanJobStatus(str, Enum):
     ``INTERRUPTED`` is a job the process stopped before it finished -- a
     restart. Its credentials lived only in memory and are gone, so it is never
     resumed; it says so instead of sitting at "running" forever.
+    ``CANCELLED`` is a job someone stopped (Req 19.7, 19.8): before it started,
+    or after the host it was scanning finished.
     """
 
     QUEUED = "queued"
     RUNNING = "running"
     FINISHED = "finished"
     INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
 
 
 class ScanJobTargetState(str, Enum):
-    """Where one host in a scan job is (Req 19.2). Its outcome is a ScanStatus."""
+    """Where one host in a scan job is (Req 19.2). Its outcome is a ScanStatus.
+
+    ``CANCELLED`` is a host its job was cancelled before reaching: never
+    scanned, so it has no outcome (Req 19.8).
+    """
 
     QUEUED = "queued"
     RUNNING = "running"
     DONE = "done"
+    CANCELLED = "cancelled"
 
 
 class SourceStatus(str, Enum):

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from concurrent.futures import Future, ThreadPoolExecutor
+from functools import cmp_to_key
 from typing import Any, Callable
 
 import httpx
@@ -22,8 +23,10 @@ from app.package_identifier import (
     is_kernel_image,
     is_kernel_package,
     kernel_is_matched,
+    parse_fix,
     parse_package_name,
 )
+from app.scanner import debian_version, rpm_version
 from app.enums import SEVERITY_RANK, Severity
 from app.scanner.cvss import (
     cvss_v3_base_score,
@@ -172,14 +175,58 @@ def _severity_rank(advisory: RawAdvisory) -> tuple[int, float]:
     return SEVERITY_RANK[band], -(advisory.cvss_score or 0.0)
 
 
+#: How each ecosystem orders its own versions, by the ecosystem's name -- the
+#: first part of a package identifier. Alpine and Wolfi are absent on purpose:
+#: their trackers publish one fix per release branch, so records rarely
+#: disagree, and they keep the stable text order.
+_VERSION_ORDER: dict[str, Callable[[str, str], int]] = {
+    "Debian": debian_version.compare,
+    "Ubuntu": debian_version.compare,
+    "Red Hat": rpm_version.compare,
+    "Rocky Linux": rpm_version.compare,
+    "AlmaLinux": rpm_version.compare,
+    "SUSE": rpm_version.compare,
+    "openSUSE": rpm_version.compare,
+}
+
+
+def _version_order(package_identifier: str) -> Callable[[str, str], int] | None:
+    return _VERSION_ORDER.get(package_identifier.split(":", 1)[0])
+
+
+def _earliest_fix(
+    fixed: list[RawAdvisory], order: Callable[[RawAdvisory], Any]
+) -> RawAdvisory:
+    """The record naming the earliest fix, by the distribution's own ordering (Req 2.11).
+
+    Every record must come from ecosystems ordered the same way; otherwise --
+    a mixture, or an ecosystem without an ordering here -- the records are
+    taken in ``order``, a fixed order of their own, as they were before. Two
+    fixes the ordering calls equal but spells differently (``1.0`` and
+    ``1.00``) fall to ``order`` too, so the choice stays total and the same
+    whatever order the records arrive in (Property 18).
+    """
+    compare = _version_order(fixed[0].package_identifier)
+    fixes = [parse_fix(a.package_identifier) for a in fixed]
+    if compare is None or any(
+        _version_order(a.package_identifier) is not compare or status != "available"
+        for a, (status, _release, _version) in zip(fixed, fixes)
+    ):
+        return min(fixed, key=order)
+    version = cmp_to_key(compare)
+    return min(zip(fixed, fixes), key=lambda pair: (version(pair[1][2]), order(pair[0])))[0]
+
+
 def _merge_duplicates(group: list[RawAdvisory]) -> RawAdvisory:
     """One finding from every record OSV gave for one CVE and package (Property 18).
 
     The fix comes from a record that names one -- a patch exists, and saying
-    otherwise sends the finding to "pending vendor patch" -- and the rating from
+    otherwise sends the finding to "pending vendor patch" -- and of those, the
+    one naming the earliest fix by the distribution's own version ordering:
+    the first version that clears the CVE (Req 2.11). The rating comes from
     whichever record rates it worst, so preferring the fix never understates
-    the risk. Ties go to the lowest identifier, so the result is the same in
-    any order.
+    the risk. Every remaining tie goes to a fixed order, so the result is the
+    same in any order.
     """
     def order(advisory: RawAdvisory) -> tuple[tuple[int, float], str, str, float]:
         # Every field, so no two different records ever tie: one naming its
@@ -194,7 +241,7 @@ def _merge_duplicates(group: list[RawAdvisory]) -> RawAdvisory:
 
     worst = min(group, key=order)
     fixed = [a for a in group if "fixed in" in a.package_identifier]
-    kept = min(fixed, key=order) if fixed else worst
+    kept = _earliest_fix(fixed, order) if fixed else worst
     if kept is worst:
         return kept
     return kept.model_copy(update={"cvss_score": worst.cvss_score, "severity": worst.severity})
@@ -1087,9 +1134,10 @@ class OsvHttpClient:
         record with a higher score and no fix replaced it -- so one host,
         scanned repeatedly with the same code, showed four, six, seven or eight
         openssh findings as fixable. Now, per CVE and package: a record with a
-        fix is kept if any has one, its rating is raised to the worst any record
-        gives, and every remaining tie is broken by the identifier, a fixed
-        order.
+        fix is kept if any has one -- the earliest fix, by the distribution's
+        version ordering (Req 2.11) -- its rating is raised to the worst any
+        record gives, and every remaining tie is broken by the identifier, a
+        fixed order.
         """
         groups: dict[tuple[str, str], list[RawAdvisory]] = {}
         for adv in advisories:

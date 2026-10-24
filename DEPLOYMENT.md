@@ -466,6 +466,9 @@ warns on start while login is off and it is unset.
 Since 0.11.0 the dashboard runs scans as background jobs: it queues one with
 `POST /api/scans/jobs`, which answers at once, and polls it for progress. A
 proxy's default timeouts are fine for that.
+A job still queued or running can be cancelled with
+`POST /api/scans/jobs/{id}/cancel` (since 0.13.0): a queued one never runs, and a
+running one stops after the host it is scanning.
 
 **If scripts call `POST /api/scans` through the proxy, raise its read timeout to
 several minutes.** That route keeps its original contract: it answers only once

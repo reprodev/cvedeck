@@ -337,6 +337,9 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
       setScanOutcomes(outcomes);
       if (job.status === "interrupted") {
         toast.error(`Scan interrupted: ${job.errorDetail ?? "it stopped before finishing."}`);
+      } else if (job.status === "cancelled") {
+        // Hosts finished before the cancel keep their new results (Req 19.8).
+        toast.notify(`Scan cancelled: ${outcomes.length} of ${job.targets.length} host(s) scanned.`);
       } else if (job.targets.length === 1 && outcomes.length === 1) {
         const [outcome] = outcomes;
         if (outcome.status === "success" && !outcome.sourcesOk) {
@@ -382,6 +385,12 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
   const scanJob = useScanJob(api, reportScan, toast.error);
   const scanning = startingScan || scanJob.job !== null;
   const scanProgress = scanJob.job ? progressLabel(scanJob.job) : null;
+  const cancelScan = scanJob.cancel;
+  const handleCancelScan = useCallback(() => {
+    cancelScan().catch((err: unknown) => toast.error(errorMessage(err)));
+  }, [cancelScan, toast]);
+  const onCancelScan = scanJob.job?.cancellable ? handleCancelScan : undefined;
+  const cancelScanDisabled = scanJob.cancelling || (scanJob.job?.cancelRequested ?? false);
 
   /** Queue a scan as a background job; its result arrives through reportScan. */
   const queueScan = useCallback(
@@ -728,6 +737,8 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onTestConnection={(input) => api.testConnection(input)}
           scanning={scanning}
           scanProgress={scanProgress}
+          onCancelScan={onCancelScan}
+          cancelScanDisabled={cancelScanDisabled}
           outcomes={scanOutcomes}
           initialTarget={quickScanTarget}
           knownHosts={knownHosts}
@@ -743,6 +754,8 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onRescan={capabilities?.serverSshKey ? handleRescan : undefined}
           scanning={scanning}
           scanProgress={scanProgress}
+          onCancelScan={onCancelScan}
+          cancelScanDisabled={cancelScanDisabled}
           feeds={feeds}
           onRefreshFeeds={offerIntelRefresh ? handleRefreshFeeds : undefined}
           refreshingFeeds={refreshingFeeds}

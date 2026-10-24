@@ -365,7 +365,7 @@ export interface ScanOutcome {
 export interface ScanJobTarget {
   machineId: string;
   hostname: string;
-  /** "queued", "running" or "done". */
+  /** "queued", "running", "done" or "cancelled" (never reached). */
   state: string;
   /** Null until the host is done; then what POST /api/scans reports for it. */
   outcome: ScanOutcome | null;
@@ -374,14 +374,18 @@ export interface ScanJobTarget {
 /** A background scan job (Req 19), as GET /api/scans/jobs/{id} reports it. */
 export interface ScanJob {
   id: string;
-  /** "queued", "running", "finished" or "interrupted". */
+  /** "queued", "running", "finished", "interrupted" or "cancelled". */
   status: string;
   requestedBy: string;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
-  /** Why the job did not finish normally -- a restart, say. */
+  /** Why the job did not finish normally -- a restart, or who cancelled it. */
   errorDetail: string | null;
+  /** Whether it can be cancelled now: active, and not a POST /api/scans job (Req 19.9). */
+  cancellable: boolean;
+  /** Asked to cancel; it stops once the host being scanned is done (Req 19.8). */
+  cancelRequested: boolean;
   targets: ScanJobTarget[];
 }
 

@@ -18,16 +18,18 @@ const running = (index: number): ScanJob =>
     })),
   });
 
-function fakeApi(overrides: Partial<Record<"startScanJob" | "getScanJob" | "listActiveScanJobs", unknown>> = {}) {
+function fakeApi(overrides: Partial<Record<"startScanJob" | "getScanJob" | "listActiveScanJobs" | "cancelScanJob", unknown>> = {}) {
   return {
     startScanJob: vi.fn().mockResolvedValue("job-1"),
     getScanJob: vi.fn(),
     listActiveScanJobs: vi.fn().mockResolvedValue([]),
+    cancelScanJob: vi.fn(),
     ...overrides,
   } as unknown as Parameters<typeof useScanJob>[0] & {
     startScanJob: ReturnType<typeof vi.fn>;
     getScanJob: ReturnType<typeof vi.fn>;
     listActiveScanJobs: ReturnType<typeof vi.fn>;
+    cancelScanJob: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -52,6 +54,10 @@ describe("progressLabel", () => {
 
   it("says a queued job is waiting for another scan", () => {
     expect(progressLabel(makeScanJob({ status: "queued" }))).toMatch(/waiting for another scan/i);
+  });
+
+  it("says a job asked to cancel stops after the host it is scanning (Req 19.8)", () => {
+    expect(progressLabel({ ...running(1), cancelRequested: true })).toBe("Stopping after web-02...");
   });
 });
 
@@ -175,5 +181,76 @@ describe("useScanJob", () => {
 
     await tick();
     expect(onFinished).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useScanJob cancel", () => {
+  it("follows a running job through a cancel until it ends cancelled (Req 19.8)", async () => {
+    const stopping = { ...running(0), cancellable: true, cancelRequested: true };
+    const cancelled = makeScanJob({
+      status: "cancelled",
+      errorDetail: "Cancelled by admin after 1 of 3 hosts.",
+      targets: running(1).targets.map((t, i) =>
+        i === 0 ? t : { ...t, state: "cancelled", outcome: null },
+      ),
+    });
+    const api = fakeApi({
+      listActiveScanJobs: vi.fn().mockResolvedValue([]).mockResolvedValueOnce([{ ...running(0), cancellable: true }]),
+      cancelScanJob: vi.fn().mockResolvedValue(stopping),
+    });
+    api.getScanJob.mockResolvedValue(cancelled);
+    const onFinished = vi.fn();
+    const { result } = renderHook(() => useScanJob(api, onFinished, vi.fn()));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.job?.cancellable).toBe(true);
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    expect(api.cancelScanJob).toHaveBeenCalledWith("job-1");
+    expect(result.current.job && progressLabel(result.current.job)).toBe("Stopping after web-01...");
+    expect(result.current.cancelling).toBe(false);
+
+    await tick();
+    expect(result.current.job).toBeNull();
+    expect(onFinished).toHaveBeenCalledWith(cancelled);
+  });
+
+  it("ends at once when a queued job is cancelled (Req 19.7)", async () => {
+    const queued = makeScanJob({ status: "queued", cancellable: true });
+    const api = fakeApi({
+      listActiveScanJobs: vi.fn().mockResolvedValue([]).mockResolvedValueOnce([queued]),
+      cancelScanJob: vi.fn().mockResolvedValue(makeScanJob({ status: "cancelled" })),
+    });
+    const onFinished = vi.fn();
+    const { result } = renderHook(() => useScanJob(api, onFinished, vi.fn()));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    expect(result.current.job).toBeNull();
+    expect(onFinished).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes a refusal back to the caller and keeps following the job (Req 19.9)", async () => {
+    const api = fakeApi({
+      listActiveScanJobs: vi.fn().mockResolvedValue([running(0)]),
+      cancelScanJob: vi.fn().mockRejectedValue(new ApiError(409, "This scan has already ended.")),
+    });
+    const { result } = renderHook(() => useScanJob(api, vi.fn(), vi.fn()));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      await expect(result.current.cancel()).rejects.toThrow(/already ended/);
+    });
+    expect(result.current.job?.id).toBe("job-1");
+    expect(result.current.cancelling).toBe(false);
   });
 });

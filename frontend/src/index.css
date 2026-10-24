@@ -1308,6 +1308,19 @@ label {
   font-variant-numeric: tabular-nums;
 }
 
+/* The scan form's progress line with its Cancel button beside it (Req 19.7). */
+.scan-progress-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.scan-progress-row .scan-progress {
+  margin: 0;
+}
+
 .scan-outcomes ul {
   margin: 0.4rem 0 0;
   padding-left: 1.1rem;

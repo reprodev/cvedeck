@@ -52,7 +52,7 @@ from ..services.remediation import (
 from ..services.sync import SyncService
 from .credentials import CredentialResolutionError, resolve_credentials
 from .dependencies import get_scanner_engine, get_session, get_sync_service
-from .routes import machine_scan_out, scan_schedule_out
+from .routes import machine_scan_out, scan_job_out, scan_schedule_out
 from .wiring import RepositoryHostKeyStore
 from .schemas import (
     DiscoveredHostOut,
@@ -69,6 +69,7 @@ from .schemas import (
     RemediationIn,
     RemediationOut,
     ScanJobCreated,
+    ScanJobOut,
     ScanRequest,
     ScanScheduleIn,
     ScanScheduleOut,
@@ -370,6 +371,31 @@ def start_scan_job(
     if job.status is ScanJobStatus.QUEUED:
         scan_jobs.submit(job.id)
     return ScanJobCreated(job_id=job.id)
+
+
+@router.post("/scans/jobs/{job_id}/cancel", response_model=ScanJobOut, status_code=202)
+def cancel_scan_job(
+    job_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> ScanJobOut:
+    """Cancel a scan job (Req 19.7-19.9).
+
+    A queued job is cancelled at once and never runs. A running one stops after
+    the host it is scanning, which finishes and is recorded; the response then
+    says ``cancel_requested`` until it has. Refused with 409 for a job that has
+    ended, or that a ``POST /api/scans`` request is waiting on. Demo mode
+    refuses it like every other write (Req 15.9).
+    """
+    by = _requested_by(request)
+    try:
+        job = scan_jobs.cancel_job(session, job_id, by=by)
+    except scan_jobs.JobNotCancellable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="No such scan job")
+    _audit(request, "Cancel scan", f"job {job_id}")
+    return scan_job_out(job)
 
 
 @router.put(

@@ -211,6 +211,10 @@ class ScannerEngine:
         #: which host is being scanned and what each one found (Req 19.2).
         self.on_target_start: Callable[[TargetMachine], None] | None = None
         self.on_target_done: Callable[[TargetMachine, MachineScan], None] | None = None
+        #: Asked before each target; true stops the batch there. The target in
+        #: progress always finishes -- a cancelled job never cuts an SSH
+        #: session mid-command (Req 19.8).
+        self.should_stop: Callable[[], bool] | None = None
 
     def set_credentials(self, credentials_by_id: dict[str, Credentials]) -> None:
         """Install a per-target credential lookup from an id -> credentials map.
@@ -230,10 +234,13 @@ class ScannerEngine:
 
         A per-target ``ConnectionError`` or ``AuthError`` is captured as a
         :class:`ScanStatus` and never aborts the remaining targets (Req 1.4,
-        1.5). Returns a :class:`ScanResult` aggregating every per-target outcome.
+        1.5). Returns a :class:`ScanResult` aggregating every per-target outcome
+        -- every target's, unless ``should_stop`` ended the batch early.
         """
         machine_scans: list[MachineScan] = []
         for target in targets:
+            if self.should_stop is not None and self.should_stop():
+                break
             if self.on_target_start is not None:
                 self.on_target_start(target)
             scan = self._scan_target(target)

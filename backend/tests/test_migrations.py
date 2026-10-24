@@ -450,3 +450,42 @@ def test_an_upgraded_database_keeps_its_feed_row_and_digests_nothing_yet(tmp_pat
         ).one()
     assert row[0] == 1687, "the existing cache state survives"
     assert row[1] is None, "nothing has been digested yet"
+
+
+def test_a_0_12_0_database_upgrades_to_cancellable_jobs_with_its_jobs(tmp_path):
+    """Validates Req 19.7, 19.8: an old job survives, and a cancelled one can be written."""
+    from sqlalchemy.orm import Session
+
+    from app.data.schema import ScanJob, ScanJobTarget
+    from app.enums import ScanJobStatus, ScanJobTargetState
+
+    engine = create_engine(f"sqlite:///{(tmp_path / 'v0120.db').as_posix()}")
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "c4e7d1a9b350")
+        connection.execute(
+            text(
+                "INSERT INTO scan_jobs (id, status, requested_by, created_at) "
+                "VALUES ('old', 'FINISHED', 'admin', '2026-10-20 03:00:00')"
+            )
+        )
+
+    upgrade_to_head(engine)
+
+    assert _revision(engine) == _head()
+    with Session(engine) as session:
+        assert session.get(ScanJob, "old").status is ScanJobStatus.FINISHED
+        job = session.get(ScanJob, "old")
+        job.status = ScanJobStatus.CANCELLED
+        job.targets.append(
+            ScanJobTarget(
+                position=0, machine_id="m1", hostname="m1", platform="linux",
+                state=ScanJobTargetState.CANCELLED,
+            )
+        )
+        session.commit()
+        session.expire_all()
+        job = session.get(ScanJob, "old")
+        assert job.status is ScanJobStatus.CANCELLED
+        assert job.targets[0].state is ScanJobTargetState.CANCELLED

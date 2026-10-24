@@ -8,6 +8,41 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.13.0] - 2026-10-24
+
+**Upgrading:** a small database migration lets scan jobs be recorded as
+cancelled; it runs on start, as always.
+
+### Added
+
+- **Cancel a scan.** A running scan's progress line -- on the fleet view and the
+  scan form, for a scan started from any page or by the nightly schedule -- now
+  has a **Cancel scan** button. A scan still waiting its turn is dropped at
+  once, with its credentials. A scan already running stops after the host it is
+  scanning: that host finishes and keeps its results, so nothing is cut off
+  mid-command, and the hosts it had not reached are left exactly as their last
+  scan left them. The line reads "Stopping after web-01..." until it has.
+- **For scripts:** `POST /api/scans/jobs/{id}/cancel` answers `202` with the
+  job; `GET /api/scans/jobs/{id}` now says whether a job can be cancelled
+  (`cancellable`) and whether it is stopping (`cancel_requested`), and hosts it
+  never reached read `cancelled`. A scan started through `POST /api/scans` can't
+  be cancelled (`409`): its caller is waiting for every host's result, and that
+  route's response is unchanged.
+
+### Fixed
+
+- **The fixed version shown is the earliest one, by the distribution's own
+  version rules.** When OSV's records for a CVE disagreed on the fix, CveDeck
+  picked one by comparing the text, which put `1.10` before `1.9`. It now
+  compares the way `dpkg` does on Debian and Ubuntu and the way `rpm` does on
+  Red Hat, Rocky Linux, AlmaLinux, SUSE and openSUSE. Some findings may show a
+  different, earlier fixed version after their next scan; they are the same
+  findings, so nothing is reported as new or resolved. The remediation command,
+  which upgrades the package, is unchanged. Alpine and Wolfi keep the previous
+  order.
+
+---
+
 ## [0.12.0] - 2026-10-18
 
 ### Added

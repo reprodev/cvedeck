@@ -338,6 +338,13 @@ environment the app reads, so no alembic.ini edit is needed.
   row or a log -- a test greps the database file for the password. A restart
   marks unfinished jobs `INTERRUPTED`; it never resumes them. The job tables are
   not synced. 0.10.4's 409 guard is gone: a second request now waits.
+  **Cancelling** (Req 19.7-19.9) never cuts a host mid-scan: `ScannerEngine`
+  checks `should_stop` only *between* targets. Who owns a queued job is decided
+  by who pops its credentials under `_credentials_lock` -- keep the canceller's
+  pop and `run_job`'s pop under that one lock, or a cancel can race the worker
+  into a job that runs anyway or reads "interrupted". A job a `POST /api/scans`
+  request waits on (`_handoffs`) is refused, so that route never meets
+  `CANCELLED`.
   Do not add a write before a network call in either path, and do not go back to
   one commit per batch. `tests/test_write_concurrency.py` parks each path
   mid-download on a real database file and checks another connection can commit;
@@ -347,7 +354,7 @@ environment the app reads, so no alembic.ini edit is needed.
   - Ubuntu targets query Ubuntu release trackers exclusively to eliminate Debian version suffix contamination (`+deb12u3`).
   - Multi-distribution ecosystems (Alpine `apk`, RHEL/CentOS/AlmaLinux/Rocky/Oracle/Amazon/Fedora `rpm`, Arch `pacman`, openSUSE/SLES `zypper`) use a 5-tier resolution pipeline with a universal fallback querying every ecosystem in `_ALL_LINUX_ECOSYSTEMS` in parallel.
   - Cross-distribution family normalization in `_extract_fixed_version` ensures Enterprise Linux derivatives (AlmaLinux, Rocky Linux, Oracle Linux) seamlessly inherit upstream Red Hat fixed versions.
-  - Findings are deduplicated per `(cve_id, package_name)`, prioritizing records with actionable `fixed in ...` versions.
+  - Findings are deduplicated per `(cve_id, package_name)`, prioritizing records with actionable `fixed in ...` versions -- the earliest fix by the distribution's own ordering (`debian_version` for Debian/Ubuntu, `rpm_version` for the RPM families; Property 20). Never go back to comparing fix versions as text, and keep any new ordering total: ties must fall to the fixed `order` key or Property 18 breaks.
   - **OSV ecosystem names must be ones OSV actually accepts.** `/querybatch` rejects the
     ENTIRE batch with HTTP 400 on a single invalid ecosystem, so one bad name in
     `_ALL_LINUX_ECOSYSTEMS` defeats batching for every package reaching the universal

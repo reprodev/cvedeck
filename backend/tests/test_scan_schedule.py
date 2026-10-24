@@ -343,3 +343,18 @@ def test_a_failing_check_does_not_stop_the_ticker(monkeypatch):
     asyncio.run(scan_schedule.run_schedule(object(), sleep=no_sleep, iterations=3))
 
     assert len(calls) == 3
+
+
+def test_a_cancelled_scheduled_scan_does_not_block_the_next_slot(db, key):
+    """Validates Req 19.7 with Req 20.5: a cancelled job is not "still running"."""
+    with Session(db) as session:
+        _host(session, "k1", server_key=True)
+        _arm(session, datetime(2026, 3, 1, 12, 0))
+        _running_scheduled_job(session)
+        (job,) = session.query(ScanJob).all()
+        scan_jobs.cancel_job(session, job.id, by="tester")
+
+        note = scan_schedule.tick(session, now=datetime(2026, 3, 2, 3, 0, 30))
+
+        assert "1 host" in note
+        assert session.query(ScanJob).count() == 2

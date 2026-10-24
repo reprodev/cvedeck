@@ -60,6 +60,10 @@ export interface MachineListViewProps {
   scanning?: boolean;
   /** What the running scan is doing, e.g. "Scanning 2 of 5: web-01" (Req 19.2). */
   scanProgress?: string | null;
+  /** Cancel the running scan; absent when it cannot be cancelled (Req 19.7-19.9). */
+  onCancelScan?: () => void;
+  /** True while a cancel is being sent or the scan is already stopping. */
+  cancelScanDisabled?: boolean;
   /**
    * Whether the first fleet fetch is still in flight.
    *
@@ -99,6 +103,8 @@ export function MachineListView({
   onRescan,
   scanning = false,
   scanProgress = null,
+  onCancelScan,
+  cancelScanDisabled = false,
   loading = false,
   feeds = [],
   onRefreshFeeds,
@@ -737,6 +743,17 @@ export function MachineListView({
                 <span className="scan-progress" role="status">
                   {scanProgress}
                 </span>
+              )}
+              {onCancelScan && (
+                <button
+                  type="button"
+                  className="pagination-btn"
+                  disabled={cancelScanDisabled}
+                  onClick={onCancelScan}
+                  title="Stop after the host being scanned; hosts not yet reached are left as they were"
+                >
+                  Cancel scan
+                </button>
               )}
               {unscannableInView > 0 && (
                 <span className="hint" title={WINDOWS_SCAN_UNSUPPORTED} data-testid="rescan-skipped">

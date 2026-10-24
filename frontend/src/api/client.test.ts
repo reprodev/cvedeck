@@ -230,5 +230,34 @@ describe("CveScannerApiClient", () => {
     expect(job.errorDetail).toBeNull();
     expect(job.targets[0].outcome).toMatchObject({ machineId: "m1", findingCount: 4, newCount: 1 });
     expect(job.targets[1]).toEqual({ machineId: "m2", hostname: "web-02", state: "running", outcome: null });
+    // A pre-0.13 server sends neither field: not cancellable, not stopping.
+    expect(job.cancellable).toBe(false);
+    expect(job.cancelRequested).toBe(false);
+  });
+
+  it("cancels a scan job and maps the stopping job back (Req 19.8)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          id: "job/7",
+          status: "running",
+          requested_by: "schedule",
+          created_at: "2026-10-24T03:00:00Z",
+          cancellable: true,
+          cancel_requested: true,
+          targets: [{ machine_id: "m2", hostname: "web-02", state: "cancelled", outcome: null }],
+        },
+        202,
+      ),
+    );
+    const client = new CveScannerApiClient({ fetchImpl });
+
+    const job = await client.cancelScanJob("job/7");
+
+    expect(fetchImpl.mock.calls[0][0]).toBe("/api/scans/jobs/job%2F7/cancel");
+    expect(fetchImpl.mock.calls[0][1]).toMatchObject({ method: "POST" });
+    expect(job.cancellable).toBe(true);
+    expect(job.cancelRequested).toBe(true);
+    expect(job.targets[0].state).toBe("cancelled");
   });
 });

@@ -506,8 +506,14 @@ class ScanJobOut(BaseModel):
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    #: Why the job did not finish normally -- a restart, say (Req 19.4).
+    #: Why the job did not finish normally -- a restart, say (Req 19.4), or
+    #: who cancelled it (Req 19.7, 19.8).
     error_detail: str | None = None
+    #: Whether ``POST /api/scans/jobs/{id}/cancel`` would accept it now: active,
+    #: and not a ``POST /api/scans`` request's job (Req 19.9).
+    cancellable: bool = False
+    #: Asked to cancel while scanning a host; it stops once that host is done.
+    cancel_requested: bool = False
     targets: list[ScanJobTargetOut]
 
 

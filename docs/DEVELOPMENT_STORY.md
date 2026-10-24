@@ -2806,3 +2806,56 @@ a signed-in account. An instance run without sign-in -- a common way to run a
 homelab tool -- had never been able to see its pinned host keys either. Settings
 now opens whenever there is an account or sign-in is off, outside a demo, and
 keeps its password and token panels for an account.
+
+## Chapter 31 — Stopping, and the first fix (v0.13.0)
+
+Two small things the job queue and the matcher had each left half done.
+
+### A scan you can stop
+
+Since 0.11.0 a scan has been a job, and since 0.12.0 one can start at three in
+the morning with nobody watching, but nothing could stop one. A forty-host
+re-scan aimed at the wrong filter, or a nightly scan still running when the
+working day began, had to run to the end.
+
+The owner settled the two real questions first. A host being scanned when the
+cancel arrives finishes and is recorded: cutting an SSH session mid-command
+buys a few seconds and leaves a half-read inventory to explain. And a scan
+started through `POST /api/scans` cannot be cancelled at all, because its caller
+is waiting for every host's outcome, and that route's response was promised
+unchanged in 0.11.0. Giving it a "cancelled" host would have broken the promise
+to save a script a wait.
+
+The engine now asks `should_stop` before each host, and only then. The awkward
+part was a cancel arriving at the moment the worker picks a job up: the database
+still says queued, but the worker already owns it. Ownership turned out to be
+something the code already had. A queued job's credentials sit in memory until
+it starts, and taking them is how the worker starts it, so the canceller takes
+them too, under the same lock. Whichever side gets them owns the job. Without
+that, a cancel could race the worker into running the job in full, or into
+recording it as interrupted, the state a restart leaves behind. The tests drive
+that window with a lock that runs the cancel the instant the worker lets go,
+and fail if either side takes its credentials outside it.
+
+### The first version that fixes it
+
+Property 18 made the fixed version a finding shows stable in 0.10.4, but it
+broke ties by comparing identifiers as text. On Rocky `1.21.1-1.el9` came before
+`1.21.1-10.el9_8`, which happened to be right; `1.9-1.el9` against
+`1.10-1.el9` would not have been. The fixed version is only shown, since the
+remediation command upgrades the package, but it is the number an operator
+checks an installed version against, so it should be the first one that clears
+the CVE.
+
+Debian ordering already existed for the Ubuntu kernel feed. RPM needed its own:
+`rpmvercmp`, which compares digit runs as numbers and letter runs as text,
+sorts `~` before everything and `^` just after the end. It is checked against
+rpm's own test vectors, and Hypothesis checks that it is reflexive,
+antisymmetric and transitive, because "the earliest" means nothing without a
+total order. Alpine and Wolfi keep the old order: their trackers publish one fix
+per release branch, so their records rarely disagree.
+
+The finding's identity was the thing to check before shipping. The scan diff
+keys on the CVE and the package name, not the identifier, so a finding whose
+shown fix moves earlier is still the same finding, and the next scan reports it
+as neither new nor resolved.

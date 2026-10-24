@@ -65,6 +65,7 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 8. WHEN THE Scanner_Engine looks up a package's advisories, THE Scanner_Engine SHALL ask under the package's source name and source version as well as under the binary's own, since distributions publish advisories under either, and SHALL report each advisory once per source package however many of its binaries are installed and however many of the names asked found it.
 9. WHEN OSV_Source answers a query in pages, THE Scanner_Engine SHALL read every page before using the answer, and IF any page cannot be read or the answer exceeds a fixed page ceiling, THEN THE Scanner_Engine SHALL treat the whole query as unanswered rather than use the pages that arrived.
 10. WHEN OSV_Source returns more than one record for the same CVE and package, THE Scanner_Engine SHALL report one finding that carries a fixed version if any record names one and the most severe rating any record gives, and SHALL produce the same finding whatever order the records arrive in.
+11. WHEN those records name different fixed versions THEN THE Scanner_Engine SHALL report the earliest by the distribution's own version ordering -- dpkg's for Debian and Ubuntu, rpm's for Red Hat, Rocky Linux, AlmaLinux, SUSE and openSUSE -- and, for any other ecosystem or a mixture of ecosystems, SHALL choose by a fixed order that does not depend on arrival order.
 
 ### Requirement 3: Machine List and Severity Filtering
 
@@ -675,6 +676,15 @@ can leave the page, and can see which host is being scanned.
    and SHALL answer when its scan is done, running that scan as a job in its
    turn like any other.
 6. IN demo mode THE system SHALL refuse to queue a scan job (extends Req 15).
+7. WHEN a queued job is cancelled THEN THE system SHALL NOT scan any of its
+   hosts, SHALL discard its credentials at once, and SHALL report the job and
+   each of its hosts as cancelled, with who cancelled it.
+8. WHEN a running job is cancelled THEN THE system SHALL let the host being
+   scanned finish and record its outcome, SHALL NOT scan any further host, and
+   SHALL report the hosts it did not reach as cancelled; THE records of hosts it
+   did not reach SHALL be left as their last scan left them.
+9. THE system SHALL refuse, with the reason, to cancel a job that has ended or
+   whose scan a `POST /api/scans` request is waiting on.
 
 ### Requirement 20: Scheduled scanning
 

@@ -7,7 +7,8 @@
  * {@link POLL_MS} for each host's progress, calling `onFinished` exactly once
  * when the job ends. The job runs server-side, so navigating away changes
  * nothing; and on mount the hook asks for any job still active, so a reload
- * picks up a scan started before it.
+ * picks up a scan started before it. A job can be cancelled (Req 19.7-19.9);
+ * a running one stops after the host it is scanning.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CveScannerApiClient } from "../api/client";
@@ -19,13 +20,16 @@ export const POLL_MS = 2000;
 /** How often an idle page asks whether a scan it did not start is running. */
 export const IDLE_POLL_MS = 30000;
 
-const ENDED = new Set(["finished", "interrupted"]);
+const ENDED = new Set(["finished", "interrupted", "cancelled"]);
 
 /** "Scanning 2 of 5: web-01", or "Waiting for another scan to finish". */
 export function progressLabel(job: ScanJob): string {
   if (job.status === "queued") return "Waiting for another scan to finish...";
   const total = job.targets.length;
   const running = job.targets.findIndex((target) => target.state === "running");
+  if (job.cancelRequested) {
+    return running >= 0 ? `Stopping after ${job.targets[running].hostname}...` : "Stopping...";
+  }
   if (running >= 0) {
     return `Scanning ${running + 1} of ${total}: ${job.targets[running].hostname}`;
   }
@@ -38,14 +42,22 @@ export interface ScanJobState {
   job: ScanJob | null;
   /** Queue a scan and start following it. Rejects if the backend refuses it. */
   start: (targets: ScanTargetInput[]) => Promise<void>;
+  /** Cancel the job being followed. Rejects if the backend refuses (409). */
+  cancel: () => Promise<void>;
+  /** True while a cancel request is in flight. */
+  cancelling: boolean;
 }
 
 export function useScanJob(
-  api: Pick<CveScannerApiClient, "startScanJob" | "getScanJob" | "listActiveScanJobs">,
+  api: Pick<
+    CveScannerApiClient,
+    "startScanJob" | "getScanJob" | "listActiveScanJobs" | "cancelScanJob"
+  >,
   onFinished: (job: ScanJob) => void,
   onLost: (message: string) => void,
 ): ScanJobState {
   const [job, setJob] = useState<ScanJob | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   // The latest callbacks, so the polling effect need not restart when a
   // parent re-renders with new closures.
   const finished = useRef(onFinished);
@@ -71,6 +83,16 @@ export function useScanJob(
   );
 
   const jobId = job?.id ?? null;
+
+  const cancel = useCallback(async () => {
+    if (jobId === null) return;
+    setCancelling(true);
+    try {
+      follow(await api.cancelScanJob(jobId));
+    } finally {
+      setCancelling(false);
+    }
+  }, [api, follow, jobId]);
 
   // A scan this page did not start -- one running before a reload, or one the
   // schedule started (Req 20.6) -- is found by asking now and then while idle.
@@ -119,5 +141,5 @@ export function useScanJob(
     return () => window.clearInterval(timer);
   }, [api, follow, jobId]);
 
-  return { job, start };
+  return { job, start, cancel, cancelling };
 }
