@@ -34,6 +34,7 @@ describe("parseHash", () => {
   it("parses each workspace", () => {
     expect(parseHash("#/fleet")).toEqual({ workspace: "fleet", machineId: null });
     expect(parseHash("#/scan")).toEqual({ workspace: "scan", machineId: null });
+    expect(parseHash("#/jobs")).toEqual({ workspace: "jobs", machineId: null });
     expect(parseHash("#/discovery")).toEqual({
       workspace: "discovery",
       machineId: null,

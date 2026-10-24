@@ -8,6 +8,35 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.14.0] - 2026-10-24
+
+### Added
+
+- **Scan history.** A new **Scan history** tab lists every scan CveDeck keeps
+  (the newest 100), newest first: when it ran, who started it -- you, the
+  nightly schedule, or an API token -- how many hosts it covered, how it went
+  ("4 succeeded · 1 failed", "Cancelled after 1 of 3") and how long it took.
+  Open a row to see each host's result, its findings and what changed, with a
+  link to the host. A scan still running can be cancelled from here too, and
+  the tab says "running" while one is under way.
+- **For scripts:** `GET /api/scans/jobs` takes `limit` (1-100, default 20).
+
+### Fixed
+
+- **Times are right if you are not on UTC.** CveDeck stores times in UTC but
+  sent them without saying so, and the browser read them as local time. Every
+  "3h ago" -- last scanned, feed age, first seen -- and the seven-day staleness
+  warning was off by your offset: an hour in UK summer time, five and a half in
+  India. They are now read as UTC and shown in your own time zone. The API's
+  output is unchanged.
+
+### Dependencies
+
+- react and react-dom 19.3.1; fastapi 0.143.2; and, for tests only, vitest
+  5.0.5, @testing-library/user-event 14.6.8 and hypothesis 6.170.0.
+
+---
+
 ## [0.13.1] - 2026-10-24
 
 The 0.13.0 image was never published: the release's vulnerability scan stopped

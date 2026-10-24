@@ -682,13 +682,18 @@ def scan_job_out(job: ScanJob) -> ScanJobOut:
 @router.get("/scans/jobs", response_model=list[ScanJobOut])
 def list_scan_jobs(
     active: bool = Query(default=False),
+    limit: int = Query(default=20, ge=1, le=scan_jobs.MAX_JOBS),
     session: Session = Depends(get_session),
 ) -> list[ScanJobOut]:
     """Recent scan jobs, newest first; ``active=true`` for queued and running ones (Req 19.2).
 
-    What the dashboard asks after a reload, to pick up a scan it started before.
+    What the dashboard asks after a reload, to pick up a scan it started before,
+    and -- with ``limit=100``, every job kept -- what Scan history lists (Req 19.10).
     """
-    return [scan_job_out(job) for job in scan_jobs.list_jobs(session, active_only=active)]
+    return [
+        scan_job_out(job)
+        for job in scan_jobs.list_jobs(session, active_only=active, limit=limit)
+    ]
 
 
 @router.get("/scans/jobs/{job_id}", response_model=ScanJobOut)

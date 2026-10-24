@@ -3576,3 +3576,32 @@ p.kernel-card-fix {
   font-size: var(--text-sm);
   padding: 0.35rem 0.5rem;
 }
+
+/* ===========================================================================
+   Scan history (Req 19.10)
+
+   Reuses the table, pagination and drawer patterns; tokens only. A row's hosts
+   open in a drawer row like the drill-down's package details.
+   =========================================================================== */
+
+.scan-history-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.scan-history-age {
+  display: block;
+}
+
+.scan-history-detail {
+  margin: 0 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.scan-history-hosts {
+  width: 100%;
+}

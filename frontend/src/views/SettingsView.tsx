@@ -14,6 +14,7 @@ import { useToast } from "../components/Toast";
 import { useClipboard } from "../lib/useClipboard";
 import type { ApiToken, CreatedApiToken, HostKeyPin, ScanSchedule } from "../types";
 import { MIN_PASSWORD_LENGTH } from "./SetupView";
+import { parseServerTime } from "../lib/labels";
 
 export interface SettingsViewProps {
   /**
@@ -44,7 +45,8 @@ function errorText(err: unknown, fallback: string): string {
 
 function formatDate(value: string | null): string {
   if (!value) return "Never";
-  const date = new Date(value);
+  // A server timestamp: UTC, though it carries no offset (Req 19.11).
+  const date = new Date(parseServerTime(value));
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 

@@ -11,6 +11,7 @@
 // two apart, and `isKnownExploited` is deliberately strict (`=== true`) so a
 // null can never sneak through a truthiness check.
 
+import { parseServerTime } from "./labels";
 import { compareBySeverity } from "./severity";
 import type { CveFinding, FeedHealth } from "../types";
 
@@ -254,7 +255,8 @@ export function formatFeedAge(
   now: Date = new Date(),
 ): string {
   if (!lastRefreshedAt) return "never";
-  const then = new Date(lastRefreshedAt);
+  // A server timestamp: UTC, though it carries no offset (Req 19.11).
+  const then = new Date(parseServerTime(lastRefreshedAt));
   if (Number.isNaN(then.getTime())) return "unknown";
 
   const minutes = Math.floor((now.getTime() - then.getTime()) / 60000);

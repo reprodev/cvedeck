@@ -32,6 +32,7 @@ import { useUrlState } from "./lib/useUrlState";
 import { progressLabel, useScanJob } from "./lib/useScanJob";
 import type { Workspace } from "./lib/useUrlState";
 import { ScanFormView } from "./views/ScanFormView";
+import { ScanHistoryView } from "./views/ScanHistoryView";
 import { SettingsView } from "./views/SettingsView";
 import { useToast } from "./components/Toast";
 import { buildKnownHostMap, isScannable } from "./lib/platform";
@@ -81,6 +82,8 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
   const toast = useToast();
   const [startingScan, setStartingScan] = useState(false);
   const [scanOutcomes, setScanOutcomes] = useState<ScanOutcome[] | undefined>();
+  // Bumped when a followed scan ends, so Scan history re-reads at once (Req 19.10).
+  const [historyKey, setHistoryKey] = useState(0);
   // Pre-populates the scan form when a Quick Scan is triggered from the
   // discovery or fleet view (Req 8.5).
   const [quickScanTarget, setQuickScanTarget] = useState<{
@@ -335,6 +338,7 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
     (job: ScanJob) => {
       const outcomes = job.targets.flatMap((target) => (target.outcome ? [target.outcome] : []));
       setScanOutcomes(outcomes);
+      setHistoryKey((key) => key + 1);
       if (job.status === "interrupted") {
         toast.error(`Scan interrupted: ${job.errorDetail ?? "it stopped before finishing."}`);
       } else if (job.status === "cancelled") {
@@ -658,6 +662,16 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
               <Icon name="search" /> Network Discovery
             </span>
           </button>
+          <button
+            type="button"
+            className={`workspace-tab-btn ${activeNav === "jobs" ? "active" : ""}`}
+            onClick={() => handleNavigate("jobs")}
+          >
+            <span>
+              <Icon name="clock" /> Scan history
+            </span>
+            {scanJob.job && <span className="tab-badge">running</span>}
+          </button>
         </div>
       )}
 
@@ -719,6 +733,13 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onRevokeToken={(tokenId) => api.revokeApiToken(tokenId)}
           onRevokeAllTokens={() => api.revokeAllApiTokens()}
           onBack={() => handleNavigate("fleet")}
+        />
+      ) : activeNav === "jobs" ? (
+        <ScanHistoryView
+          api={api}
+          onSelectMachine={handleSelectMachine}
+          onNavigateScan={() => handleNavigate("scan")}
+          refreshKey={historyKey}
         />
       ) : activeNav === "discovery" ? (
         <DiscoveryView

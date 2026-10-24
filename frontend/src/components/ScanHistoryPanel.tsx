@@ -6,7 +6,7 @@
 
 import { Fragment, useCallback, useState } from "react";
 import type { FindingChangeRow, ScanRun } from "../types";
-import { relativeTime, remediationStatusLabel, severityLabel, statusLabel, statusTone } from "../lib/labels";
+import { formatServerTime, relativeTime, remediationStatusLabel, severityLabel, statusLabel, statusTone } from "../lib/labels";
 import { Icon } from "./Icon";
 
 export interface ScanHistoryPanelProps {
@@ -130,7 +130,7 @@ export function ScanHistoryPanel({ onLoadRuns, onLoadChanges }: ScanHistoryPanel
                 return (
                   <Fragment key={run.runId}>
                     <tr>
-                      <td data-label="Scanned" title={new Date(run.scannedAt).toLocaleString()}>
+                      <td data-label="Scanned" title={formatServerTime(run.scannedAt)}>
                         {relativeTime(run.scannedAt)}
                       </td>
                       <td data-label="Result">

@@ -13,6 +13,7 @@ import type { FeedHealth, MachineSummary, Platform, Severity } from "../types";
 import { SEVERITIES } from "../types";
 import {
   isStale,
+  parseServerTime,
   relativeTime,
   severityLabel,
   statusLabel,
@@ -166,7 +167,7 @@ export function MachineListView({
       // Sorted on the parsed timestamp, not the rendered "3d ago" string, which
       // would order lexicographically and put "9d" before "10d".
       lastScanned: (m: MachineSummary) =>
-        m.lastScannedAt ? Date.parse(m.lastScannedAt) : null,
+        m.lastScannedAt ? parseServerTime(m.lastScannedAt) : null,
       exploited: (m: MachineSummary) => m.kevCount,
       // Default order. Observed exploitation first, then critical, then high --
       // the same ranking the findings table uses, applied to hosts. Alphabetical

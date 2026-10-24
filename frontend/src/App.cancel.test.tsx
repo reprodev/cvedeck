@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -148,5 +148,24 @@ describe("Cancelling a scan from the dashboard (Req 19.7-19.9)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Cancel scan" }));
 
     expect(await screen.findByText(/This scan has already ended\./)).toBeInTheDocument();
+  });
+});
+
+describe("The Scan history tab (Req 19.10)", () => {
+  beforeEach(() => {
+    window.location.hash = "";
+  });
+
+  it("opens Scan history at #/jobs, and marks a scan under way", async () => {
+    const { api, fetchImpl } = client(job(), () => jsonResponse({}, 500));
+    renderApp(api);
+
+    const tab = await screen.findByRole("button", { name: /Scan history/ });
+    await waitFor(() => expect(within(tab).getByText("running")).toBeInTheDocument());
+    await userEvent.click(tab);
+
+    expect(window.location.hash).toBe("#/jobs");
+    expect(await screen.findByRole("heading", { name: "Scan history" })).toBeInTheDocument();
+    expect(fetchImpl).toHaveBeenCalledWith("/api/scans/jobs?limit=100", expect.anything());
   });
 });

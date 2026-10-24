@@ -459,11 +459,12 @@ environment the app reads, so no alembic.ini edit is needed.
   the platform auto-detection indicator) render underneath the form control as a helper
   hint rather than inline with the `<label>` so input fields remain aligned across rows.
 - Top-Level Workspaces & Navigation Structure:
-  - Top navigation bar provides 3 dedicated workspaces (`📊 Fleet Overview`, `🚀 New Scan`, `🔍 Network Discovery`).
+  - Top navigation bar provides 4 dedicated workspaces (`📊 Fleet Overview`, `🚀 New Scan`, `🔍 Network Discovery`, `🕘 Scan history`). Scan history (`#/jobs`, since 0.14.0) lists every kept scan job; a row opens in place to its hosts (Req 19.10).
   - Scanning is isolated into its own dedicated view rather than pinned permanently on top of the fleet list.
   - Fleet Overview leads with 4 triage cards (`Actively exploited`, `Critical findings`, `High findings`, `Needs attention`), each a real `<button>` with `aria-pressed`. Every card counts HOSTS and states its unit; findings totals live in a separate strip below that doubles as the severity filter. Keeping those two units visually distinct is the point -- an earlier layout stacked two five-card rows of identical weight where one counted hosts and the other findings.
   - `Needs attention` groups stale, never-scanned and failed hosts. Separately they were separately ignorable; together they answer "whose data can I not trust right now".
-  - Navigation is URL-backed (`#/fleet`, `#/scan`, `#/machines/<id>`), so screens are linkable and browser back works. See the routing invariant in section 3.
+  - Navigation is URL-backed (`#/fleet`, `#/scan`, `#/discovery`, `#/jobs`, `#/machines/<id>`), so screens are linkable and browser back works. See the routing invariant in section 3.
+- **Server timestamps are UTC with no offset** (SQLite drops it). Read them through `parseServerTime` in `src/lib/labels.ts`, never a bare `Date.parse` / `new Date(iso)`, which reads them as the browser's local time -- every age in the dashboard was off by the viewer's UTC offset until 0.14.0 (Req 19.11). `labels.test.ts` sets `TZ` away from UTC so the test bites on a UTC CI runner too.
   - Quick-scan triggers (`⚡ Scan`) from Fleet or Discovery pre-fill `ScanFormView` and seamlessly switch to the `"scan"` workspace.
   - Drill-down sub-tabs (`🚀 Ready to Fix`, `⏳ Pending Vendor Patch`, `📋 All Findings`, `📦 By Package`, `🌳 Dependency Map`) maintain keyboard navigable tab semantics and preserve all accessibility contracts.
   - The drill-down header is a single `host-summary` strip -- exploitation state, severity chips, remediation progress -- sharing `.sev-chip` with the fleet view so the two screens read as one product. It replaced five KPI cards and a full-width progress card that cost ~250px and duplicated counts the sub-tabs already carry.

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/client";
 import { makeScanJob, makeScanOutcome } from "../test-utils/factories";
 import type { ScanJob } from "../types";
-import { IDLE_POLL_MS, POLL_MS, progressLabel, useScanJob } from "./useScanJob";
+import { IDLE_POLL_MS, POLL_MS, jobOutcomeLabel, progressLabel, useScanJob } from "./useScanJob";
 
 const running = (index: number): ScanJob =>
   makeScanJob({
@@ -252,5 +252,44 @@ describe("useScanJob cancel", () => {
     });
     expect(result.current.job?.id).toBe("job-1");
     expect(result.current.cancelling).toBe(false);
+  });
+});
+
+describe("jobOutcomeLabel (Req 19.10)", () => {
+  const outcome = (status: string, sourcesOk = true) =>
+    makeScanOutcome({ machineId: status, status, sourcesOk });
+  const finished = (...outcomes: ReturnType<typeof makeScanOutcome>[]) =>
+    makeScanJob({
+      targets: outcomes.map((o) => ({ machineId: o.machineId, hostname: o.machineId, state: "done", outcome: o })),
+    });
+
+  it("counts a finished job's hosts, with the worst tone", () => {
+    expect(jobOutcomeLabel(finished(outcome("success"), outcome("success")))).toEqual({
+      text: "2 succeeded",
+      tone: "success",
+    });
+    expect(jobOutcomeLabel(finished(outcome("success"), outcome("success", false)))).toEqual({
+      text: "2 succeeded · 1 partial",
+      tone: "warn",
+    });
+    expect(jobOutcomeLabel(finished(outcome("success"), outcome("auth_failure")))).toEqual({
+      text: "1 succeeded · 1 failed",
+      tone: "failure",
+    });
+  });
+
+  it("reads a running job as its progress line, and a queued one as waiting", () => {
+    expect(jobOutcomeLabel(running(1)).text).toBe("Scanning 2 of 3: web-02");
+    expect(jobOutcomeLabel({ ...running(1), cancelRequested: true }).text).toBe("Stopping after web-02...");
+    expect(jobOutcomeLabel(makeScanJob({ status: "queued" }))).toEqual({ text: "Waiting", tone: "neutral" });
+  });
+
+  it("says how far a cancelled job got, and that an interrupted one stopped", () => {
+    const cancelled = makeScanJob({
+      status: "cancelled",
+      targets: running(1).targets.map((t, i) => (i === 0 ? t : { ...t, state: "cancelled", outcome: null })),
+    });
+    expect(jobOutcomeLabel(cancelled).text).toBe("Cancelled after 1 of 3");
+    expect(jobOutcomeLabel(makeScanJob({ status: "interrupted" }))).toEqual({ text: "Interrupted", tone: "warn" });
   });
 });

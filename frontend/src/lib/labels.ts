@@ -76,10 +76,34 @@ export function remediationStatusLabel(status: string): string {
     .join(" ");
 }
 
+/**
+ * Milliseconds since the epoch for a timestamp the server sent (Req 19.11).
+ *
+ * The server stores UTC, but SQLite keeps no offset, so its timestamps arrive
+ * bare: "2026-10-24T00:01:33". `Date.parse` reads a bare date-time as the
+ * *browser's* local time, which put every age off by the viewer's UTC offset --
+ * a scan that had just finished read "1h ago" in UK summer time. A bare
+ * date-time is therefore read as UTC; one carrying `Z` or `+hh:mm` is taken as
+ * written. NaN for anything unparseable, as `Date.parse` gives.
+ */
+export function parseServerTime(iso: string): number {
+  const text = iso.trim();
+  const bare = /T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text);
+  return Date.parse(bare ? `${text}Z` : text);
+}
+
+/** A server timestamp in the viewer's own time zone and format, or "–". */
+export function formatServerTime(iso: string | null): string {
+  if (!iso) return "–";
+  const ms = parseServerTime(iso);
+  if (Number.isNaN(ms)) return "–";
+  return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
 /** Age in days of an ISO-8601 timestamp, or null when absent/unparseable. */
 export function ageInDays(iso: string | null, now: Date = new Date()): number | null {
   if (!iso) return null;
-  const then = Date.parse(iso);
+  const then = parseServerTime(iso);
   if (Number.isNaN(then)) return null;
   return (now.getTime() - then) / 86_400_000;
 }
@@ -112,4 +136,30 @@ export const STALE_AFTER_DAYS = 7;
 export function isStale(iso: string | null, now: Date = new Date()): boolean {
   const days = ageInDays(iso, now);
   return days !== null && days > STALE_AFTER_DAYS;
+}
+
+/** Who asked for a scan, as the job records it (Req 19.10). */
+export function requestedByLabel(requestedBy: string): string {
+  if (requestedBy === "schedule") return "Schedule";
+  if (requestedBy === "open") return "Sign-in off";
+  if (requestedBy === "unknown" || !requestedBy) return "Unknown";
+  if (requestedBy.startsWith("token:")) return `API token ${requestedBy.slice(6)}`;
+  return requestedBy;
+}
+
+/** How long a job ran: "12s", "2m 10s", "1h 5m"; "–" before it starts. */
+export function durationLabel(
+  startedAt: string | null,
+  finishedAt: string | null,
+  now: Date = new Date(),
+): string {
+  if (!startedAt) return "–";
+  const start = parseServerTime(startedAt);
+  const end = finishedAt ? parseServerTime(finishedAt) : now.getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) return "–";
+  const seconds = Math.max(0, Math.round((end - start) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }

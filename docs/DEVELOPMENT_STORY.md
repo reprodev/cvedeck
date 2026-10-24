@@ -2859,3 +2859,37 @@ The finding's identity was the thing to check before shipping. The scan diff
 keys on the CVE and the package name, not the identifier, so a finding whose
 shown fix moves earlier is still the same finding, and the next scan reports it
 as neither new nor resolved.
+
+## Chapter 32 — Looking back, and what time it was (v0.14.0)
+
+### A page for what already happened
+
+The server had been keeping the last hundred scans since 0.11.0, each with its
+hosts, who asked and how it ended, and the dashboard never showed any of them
+once they were over. That mattered more after 0.12.0, when a scan could run at
+three in the morning with nobody watching, and after 0.13.0, when one could be
+cancelled halfway. The owner chose a fourth tab rather than a corner of New
+Scan, and rows that open in place rather than a page per job. The page is built
+almost entirely from parts the dashboard already had: the table that turns into
+cards on a phone, the drill-down's drawer rows, its pagination, the status
+badges, and the progress line's own words for a scan still running.
+
+### An hour that only showed up off UTC
+
+Writing a page whose first column is a time meant looking hard at how times
+were read, and they were read wrong. The server stores UTC; SQLite keeps no
+offset; so the API sends `2026-10-24T00:01:33` with nothing after it, and a
+browser reads that as its own local time. Every age in the dashboard had been
+off by the viewer's offset since the first release, which in UK summer time
+made a scan that had just finished read "1h ago". On any machine whose clock
+agrees with UTC the ages are right, and CI's always does, so nothing had
+failed.
+
+The fix is a single parser that treats a bare server time as UTC. The test that
+guards it sets the time zone to India's before it parses anything, because a
+test of a time-zone bug that runs on a UTC machine cannot fail.
+
+### Three patches first
+
+The release began by taking the three open Dependabot pull requests -- React,
+the test runner, FastAPI -- each from its own diff, each committed on its own.

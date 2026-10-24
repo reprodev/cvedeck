@@ -685,6 +685,13 @@ can leave the page, and can see which host is being scanned.
    did not reach SHALL be left as their last scan left them.
 9. THE system SHALL refuse, with the reason, to cancel a job that has ended or
    whose scan a `POST /api/scans` request is waiting on.
+10. THE dashboard SHALL list the jobs the system keeps, newest first, each with
+    when it started, who or what requested it, its outcome and its duration, and
+    SHALL show on request each of its hosts with that host's outcome; it SHALL
+    offer to cancel a job only WHERE the job can be cancelled.
+11. THE dashboard SHALL show times in the viewer's own time zone, and SHALL read
+    a timestamp the server sends without a UTC offset as UTC, since that is what
+    the server stores (extends Req 10.5, whose staleness depends on it).
 
 ### Requirement 20: Scheduled scanning
 

@@ -37,6 +37,47 @@ export function progressLabel(job: ScanJob): string {
   return `Scanning... ${done} of ${total} done`;
 }
 
+/**
+ * A job's outcome in a few words, with the tone to show it in (Req 19.10).
+ *
+ * What Scan history shows per row. A running job reads as its progress line;
+ * a finished one counts its hosts. Tones are the scan-status tones: a failed
+ * host is a failure, a partial scan a caveat, and nothing here is red, which
+ * is for exploitation alone.
+ */
+export function jobOutcomeLabel(job: ScanJob): {
+  text: string;
+  tone: "success" | "neutral" | "warn" | "failure";
+} {
+  const total = job.targets.length;
+  const outcomes = job.targets.flatMap((target) => (target.outcome ? [target.outcome] : []));
+  switch (job.status) {
+    case "queued":
+      return { text: "Waiting", tone: "neutral" };
+    case "running":
+      return { text: progressLabel(job), tone: "neutral" };
+    case "interrupted":
+      return { text: "Interrupted", tone: "warn" };
+    case "cancelled": {
+      const done = job.targets.filter((target) => target.state === "done").length;
+      return { text: `Cancelled after ${done} of ${total}`, tone: "neutral" };
+    }
+    default: {
+      if (total === 0) return { text: "No hosts", tone: "neutral" };
+      const failed = outcomes.filter((o) => o.status !== "success").length;
+      const partial = outcomes.filter((o) => o.status === "success" && !o.sourcesOk).length;
+      const succeeded = outcomes.length - failed;
+      const parts = [`${succeeded} succeeded`];
+      if (partial > 0) parts.push(`${partial} partial`);
+      if (failed > 0) parts.push(`${failed} failed`);
+      return {
+        text: parts.join(" · "),
+        tone: failed > 0 ? "failure" : partial > 0 ? "warn" : "success",
+      };
+    }
+  }
+}
+
 export interface ScanJobState {
   /** The job being followed, or null when none is active. */
   job: ScanJob | null;

@@ -35,7 +35,7 @@ import {
   upgradeTargets,
 } from "../lib/remediation";
 import { useClipboard } from "../lib/useClipboard";
-import { isHostKeyStatus, relativeTime, remediationStatusLabel, severityLabel, statusLabel } from "../lib/labels";
+import { formatServerTime, isHostKeyStatus, relativeTime, remediationStatusLabel, severityLabel, statusLabel } from "../lib/labels";
 import { scanDelta } from "../lib/scanDelta";
 import { ScanHistoryPanel } from "../components/ScanHistoryPanel";
 import { RemediationCell } from "../components/RemediationCell";
@@ -1752,7 +1752,7 @@ export function MachineDrillDownView({
                           <td
                             data-label="First seen"
                             className="scan-age"
-                            title={finding.firstSeenAt ? new Date(finding.firstSeenAt).toLocaleString() : undefined}
+                            title={finding.firstSeenAt ? formatServerTime(finding.firstSeenAt) : undefined}
                           >
                             {finding.firstSeenAt ? relativeTime(finding.firstSeenAt) : "--"}
                           </td>

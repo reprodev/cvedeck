@@ -985,6 +985,15 @@ export class CveScannerApiClient {
     );
   }
 
+  /**
+   * GET /api/scans/jobs?limit=N -- recent jobs, newest first; 100 is every job
+   * the server keeps (Req 19.10).
+   */
+  async listScanJobs(limit = 20): Promise<ScanJob[]> {
+    const wire = await this.request<ScanJobWire[]>("GET", `/api/scans/jobs?limit=${limit}`);
+    return wire.map(toScanJob);
+  }
+
   /** GET /api/scans/jobs?active=true -- jobs still queued or running, newest first. */
   async listActiveScanJobs(): Promise<ScanJob[]> {
     const wire = await this.request<ScanJobWire[]>("GET", "/api/scans/jobs?active=true");

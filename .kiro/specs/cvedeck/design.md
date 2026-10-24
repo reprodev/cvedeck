@@ -924,6 +924,12 @@ scope, since the deployment runs a single uvicorn worker.
   `CANCELLED`, their machine rows untouched. A job a `POST /api/scans` request
   is waiting on is listed in `_handoffs` and refused, so that route's response
   never meets the new state.
+- **Scan history (0.14.0).** A fourth workspace, `#/jobs`, lists
+  `GET /api/scans/jobs?limit=100` -- every job kept -- newest first, each row
+  opening in place to its hosts (Req 19.10). It polls only while a job is queued
+  or running. Server timestamps carry no offset (SQLite drops it) but are UTC,
+  so the dashboard reads them through `parseServerTime`, which appends `Z` to a
+  bare date-time; `Date.parse` alone reads them as local time (Req 19.11).
 
 ### Scheduled scanning (0.12.0)
 

@@ -34,5 +34,13 @@ export default defineConfig({
     // below this number so a missing element fails with the DOM printed rather
     // than as a bare timeout. Change the two together.
     testTimeout: 20_000,
+    // Off on purpose. Vitest caches transformed modules on disk keyed on each
+    // file's own contents, and Vite expands `import.meta.glob` at transform
+    // time -- so a guard that globs the sources (designLanguage.test.ts) kept
+    // the file list from its last edit and never saw a file added since. That
+    // let 0.14.0's Scan history ship unlabelled table cells past the very test
+    // written to catch them, on every warm machine; only a cold checkout
+    // failed. A guard that skips new files is worse than none.
+    fsModuleCache: false,
   },
 });

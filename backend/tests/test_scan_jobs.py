@@ -353,3 +353,25 @@ def test_old_jobs_are_pruned_but_never_an_active_one(db):
         assert session.query(ScanJob).count() == scan_jobs.MAX_JOBS + 1
         assert session.get(ScanJob, active_id).status is ScanJobStatus.QUEUED
     scan_jobs._credentials.clear()
+
+
+def test_the_job_list_takes_a_limit_up_to_every_job_kept(client, db):
+    """Validates Req 19.10: Scan history asks for all 100; the default stays 20."""
+    with Session(db) as session:
+        for i in range(25):
+            job = scan_jobs.create_job(
+                session,
+                targets=[],
+                credentials_by_id={},
+                unresolved=[],
+                requested_by=f"user{i}",
+            )
+            job.created_at = job.created_at.replace(year=2020, minute=i)
+        session.commit()
+
+    assert len(client.get("/api/scans/jobs").json()) == 20
+    listed = client.get("/api/scans/jobs?limit=100").json()
+    assert len(listed) == 25
+    assert [j["requested_by"] for j in listed[:2]] == ["user24", "user23"]
+    for bad in (0, scan_jobs.MAX_JOBS + 1):
+        assert client.get(f"/api/scans/jobs?limit={bad}").status_code == 422
