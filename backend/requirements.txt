@@ -1,10 +1,10 @@
 # Runtime dependencies, pinned for reproducible container and server builds.
 # Development and test dependencies live in requirements-dev.txt.
-fastapi==0.143.2
+fastapi==0.156.4
 pydantic==2.14.1
-sqlalchemy==2.1.4
+sqlalchemy==2.1.5
 alembic==1.20.0
-paramiko==5.0.0
+paramiko==5.1.0
 pywinrm==0.5.0
 uvicorn==0.54.0
 httpx==0.28.1
