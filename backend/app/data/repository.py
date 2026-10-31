@@ -343,16 +343,24 @@ class Repository:
         """Installed kernel packages not checked, per machine, from each latest inventory (Req 12.5).
 
         A kernel is looked up only where its advisories can be fetched at a
-        practical cost (:func:`kernel_is_matched`); elsewhere -- Ubuntu, and
-        hosts matched against a borrowed tracker -- the dashboard has to say
-        how many went unchecked rather than let a kernel with no findings read
-        as a clean one. A machine with an inventory and no unchecked kernel
-        package maps to 0; one with no inventory is absent.
+        practical cost (:func:`kernel_is_matched`); elsewhere -- hosts matched
+        against a borrowed tracker -- the dashboard has to say how many went
+        unchecked rather than let a kernel with no findings read as a clean
+        one. A machine with an inventory and no unchecked kernel package maps
+        to 0; one with no inventory is absent.
+
+        Ubuntu is checked against Canonical's feed instead, and only its
+        running kernel (Req 12.11): a package belonging to a kernel that scan
+        assessed -- recorded by image and version in ``kernel_unfixed`` -- is
+        checked, and so is a metapackage, which carries no code, once any
+        kernel was. Up to 0.14.0 every Ubuntu kernel package was counted here,
+        checked or not.
 
         One query for the fleet: SQL narrows the rows to names that could be a
         kernel, and :func:`is_kernel_package` decides.
         """
-        from ..package_identifier import is_kernel_package, kernel_is_matched
+        from ..package_identifier import is_kernel_metapackage, is_kernel_package, kernel_is_matched
+        from ..services.kernel import decode_unfixed
 
         latest = (
             select(Inventory.machine_id, func.max(Inventory.collected_at).label("at"))
@@ -362,7 +370,7 @@ class Repository:
             latest = latest.where(Inventory.machine_id.in_(machine_ids))
         latest = latest.subquery()
         inventories = (
-            select(Inventory.id, Inventory.machine_id)
+            select(Inventory.id, Inventory.machine_id, Inventory.kernel_unfixed)
             .join(
                 latest,
                 (Inventory.machine_id == latest.c.machine_id)
@@ -376,7 +384,12 @@ class Repository:
             ).scalars()
         }
         candidates = select(
-            inventories.c.machine_id, Package.name, Package.source_name, Package.ecosystem
+            inventories.c.machine_id,
+            inventories.c.kernel_unfixed,
+            Package.name,
+            Package.source_name,
+            Package.ecosystem,
+            Package.version,
         ).join(
             inventories, Package.inventory_id == inventories.c.id
         ).where(
@@ -385,9 +398,21 @@ class Repository:
             | Package.source_name.like("linux%")
             | Package.source_name.like("kernel%")
         )
-        for machine_id, name, source_name, ecosystem in self._session.execute(candidates):
-            if is_kernel_package(name, source_name) and not kernel_is_matched(ecosystem):
-                counts[machine_id] = counts.get(machine_id, 0) + 1
+        assessed: dict[str, set[str]] = {}
+        for machine_id, unfixed, name, source_name, ecosystem, version in self._session.execute(
+            candidates
+        ):
+            if not is_kernel_package(name, source_name) or kernel_is_matched(ecosystem):
+                continue
+            if (ecosystem or "").startswith("Ubuntu"):
+                if machine_id not in assessed:
+                    assessed[machine_id] = {
+                        key.rsplit("@", 1)[-1] for key in (decode_unfixed(unfixed) or {})
+                    }
+                versions = assessed[machine_id]
+                if version in versions or (versions and is_kernel_metapackage(name)):
+                    continue
+            counts[machine_id] = counts.get(machine_id, 0) + 1
         return counts
 
     def _latest_inventory_row(self, machine_id: str) -> Inventory | None:

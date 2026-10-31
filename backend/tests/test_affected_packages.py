@@ -138,3 +138,37 @@ def test_only_the_latest_inventory_counts(client, session):
     session.commit()
 
     assert client.get("/api/machines/m1").json()["kernel_packages_unchecked"] == 0
+
+
+def _kernel_pkg(name, version, source="linux"):
+    return Package(name=name, version=version, ecosystem="Ubuntu:24.04:LTS", source_name=source,
+                   source_version=version, dependencies=[])
+
+
+def test_an_ubuntu_kernel_the_feed_checked_is_not_counted_unchecked(client, session):
+    """Validates Req 12.5, 12.11: only the kernels Canonical's feed did not assess count.
+
+    The feed checks the running kernel alone. Up to 0.14.0 every Ubuntu kernel
+    package was counted unchecked, so GET /api/machines reported the running,
+    checked kernel's packages as unchecked on every Ubuntu host.
+    """
+    packages = [
+        _kernel_pkg("linux-image-6.8.0-40-generic", "6.8.0-40.40", "linux-signed"),
+        _kernel_pkg("linux-modules-6.8.0-40-generic", "6.8.0-40.40"),
+        _kernel_pkg("linux-headers-6.8.0-40", "6.8.0-40.40"),
+        _kernel_pkg("linux-image-generic", "6.8.0.40.40", "linux-meta"),
+        # An older kernel, still installed, that nothing booted and so nothing checked.
+        _kernel_pkg("linux-image-6.8.0-31-generic", "6.8.0-31.31", "linux-signed"),
+        _kernel_pkg("linux-modules-6.8.0-31-generic", "6.8.0-31.31"),
+    ]
+    _host(session, "checked", packages)
+    _host(session, "feed-off", packages)
+    Repository(session).record_kernel_unfixed(
+        "checked", '{"linux-image-6.8.0-40-generic@6.8.0-40.40": {"no_fix": 3, "elsewhere": {}}}'
+    )
+    session.commit()
+
+    by_id = {m["machine_id"]: m for m in client.get("/api/machines").json()}
+
+    assert by_id["checked"]["kernel_packages_unchecked"] == 2  # the 6.8.0-31 kernel
+    assert by_id["feed-off"]["kernel_packages_unchecked"] == 6

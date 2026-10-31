@@ -8,6 +8,24 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.14.1] - 2026-10-31
+
+### Fixed
+
+- **Ubuntu hosts no longer report their checked kernel as unchecked.** Since
+  0.10.0 Ubuntu's running kernel is checked against Canonical's feed, but the
+  fleet's "kernel packages not checked" count still included it, so
+  `GET /api/machines` overstated it on every Ubuntu host. The count now leaves
+  out the packages of the kernel the feed checked; an older kernel still
+  installed but not running is still counted, because nothing checked it.
+
+### Dependencies
+
+- fastapi 0.161.0, sqlalchemy 2.1.6, alembic 1.20.1, paramiko 5.1.0; and, for
+  builds and tests only, vite 8.3.5 and hypothesis 6.170.6.
+
+---
+
 ## [0.14.0] - 2026-10-24
 
 ### Added
