@@ -216,6 +216,66 @@ def ubuntu_kernel_feed_url() -> str:
     )
 
 
+def _switched_on(variable: str) -> bool:
+    return os.environ.get(variable, "").strip().lower() not in ("off", "0", "false", "no")
+
+
+def upstream_kernel_feed_enabled() -> bool:
+    """Whether Fedora and Arch kernels are checked against the kernel CNA's records (Req 12.12).
+
+    On unless ``CVEDECK_UPSTREAM_KERNEL_FEED`` is ``off`` (or ``0``, ``false``,
+    ``no``). Fetched from OSV, which every scan already asks, and only while
+    the fleet has a Fedora or Arch host; the request names nothing about it.
+    Off, those kernels say they were not checked, as they did before 0.15.0.
+    """
+    return _switched_on("CVEDECK_UPSTREAM_KERNEL_FEED")
+
+
+def oracle_kernel_feed_enabled() -> bool:
+    """Whether Oracle Linux kernels are checked against Oracle's OVAL (Req 12.13).
+
+    On unless ``CVEDECK_ORACLE_KERNEL_FEED`` is ``off``. Fetched from
+    linux.oracle.com only for Oracle releases the fleet runs; the file name
+    names the release -- the one thing it tells Oracle.
+    """
+    return _switched_on("CVEDECK_ORACLE_KERNEL_FEED")
+
+
+def oracle_kernel_feed_url() -> str:
+    """URL template of Oracle's per-release ELSA OVAL; ``{release}`` is filled in (``9``)."""
+    return os.environ.get(
+        "CVEDECK_ORACLE_KERNEL_FEED_URL",
+        "https://linux.oracle.com/security/oval/com.oracle.elsa-ol{release}.xml.bz2",
+    )
+
+
+def amazon_kernel_feed_enabled() -> bool:
+    """Whether Amazon Linux 2023 kernels are checked against its advisories (Req 12.14).
+
+    On unless ``CVEDECK_AMAZON_KERNEL_FEED`` is ``off``. Fetched from
+    cdn.amazonlinux.com -- the CDN those hosts update from -- only while the
+    fleet has one; the path names the release.
+    """
+    return _switched_on("CVEDECK_AMAZON_KERNEL_FEED")
+
+
+def amazon_kernel_feed_url() -> str:
+    """URL template of Amazon Linux's repository mirror list; ``{release}`` is filled in (``2023``)."""
+    return os.environ.get(
+        "CVEDECK_AMAZON_KERNEL_FEED_URL",
+        "https://cdn.amazonlinux.com/al{release}/core/mirrors/latest/x86_64/mirror.list",
+    )
+
+
+def kernel_feed_enabled(source: str) -> bool:
+    """Whether the 0.15.0 kernel feed ``source`` (``upstream``, ``oracle``, ``amazon``) is on."""
+    return {
+        "upstream": upstream_kernel_feed_enabled,
+        "oracle": oracle_kernel_feed_enabled,
+        "amazon": amazon_kernel_feed_enabled,
+    }[source]()
+
+
 def nvd_api_url() -> str:
     """Base URL for the NVD 2.0 CVE API."""
     return os.environ.get(

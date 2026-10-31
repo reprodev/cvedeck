@@ -321,6 +321,13 @@ describe("feedLabel", () => {
     expect(feedLabel("epss")).toBe("EPSS");
   });
 
+  it("names each kernel feed after the distributions it covers (Req 12.12-12.14)", () => {
+    expect(feedLabel("kernel-feed:upstream")).toBe("Upstream kernel (Fedora, Arch)");
+    expect(feedLabel("kernel-feed:oracle:ol9")).toBe("Oracle Linux 9 kernel");
+    expect(feedLabel("kernel-feed:amazon:al2023")).toBe("Amazon Linux 2023 kernel");
+    expect(feedLabel("kernel-feed:other")).toBe("kernel-feed:other");
+  });
+
   it("passes an unknown name through unchanged", () => {
     expect(feedLabel("something-new")).toBe("something-new");
   });

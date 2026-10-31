@@ -226,6 +226,19 @@ def _ubuntu_kernel_source():
     return UbuntuKernelFeedClient(config.ubuntu_kernel_feed_url(), timeout=config.feed_timeout())
 
 
+def _kernel_feed_sources():
+    """The Fedora/Arch, Oracle and Amazon kernel feed clients a scan may fetch with.
+
+    Empty in demo mode, where nothing is ever fetched (Req 15.6); a feed
+    switched off has no client (Req 12.12-12.14).
+    """
+    if config.demo_mode():
+        return {}
+    from ..scanner.kernel_feeds import build_kernel_feed_sources
+
+    return build_kernel_feed_sources(config.feed_timeout())
+
+
 class DeploymentScannerEngine(ScannerEngine):
     """Scanner engine that owns target registration and the transactions.
 
@@ -268,6 +281,7 @@ class DeploymentScannerEngine(ScannerEngine):
                 repository, max_age_hours=config.feed_max_age_hours()
             ),
             ubuntu_kernel_source=_ubuntu_kernel_source(),
+            kernel_feed_sources=_kernel_feed_sources(),
         )
         self._session = session
         self._repo = repository

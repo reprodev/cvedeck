@@ -126,9 +126,21 @@ _KERNEL_BINARY_PREFIXES = (
     "linux-kbuild-",
     "kernel-core",
     "kernel-modules",
+    # Oracle's Unbreakable Enterprise Kernel, beside the Red Hat compatible one.
+    "kernel-uek-core",
+    "kernel-uek-modules",
 )
-_KERNEL_BINARIES = frozenset({"kernel", "kernel-default", "linux-lts", "linux-virt", "linux"})
-_KERNEL_SOURCES = frozenset({"linux", "kernel", "kernel-default", "linux-lts", "linux-virt"})
+_KERNEL_BINARIES = frozenset({
+    "kernel", "kernel-default", "linux-lts", "linux-virt", "linux",
+    "kernel-uek", "linux-zen", "linux-hardened",
+})
+_KERNEL_SOURCES = frozenset({
+    "linux", "kernel", "kernel-default", "linux-lts", "linux-virt",
+    "kernel-uek", "linux-zen", "linux-hardened",
+})
+#: Amazon Linux 2023 ships each kernel series beside the default one under its
+#: own name: ``kernel6.12``, ``kernel6.18``, and their modules.
+_VERSIONED_KERNEL = re.compile(r"kernel\d+\.\d+(-modules[\w.-]*)?")
 
 
 def is_kernel_package(name: str, source_name: str | None = None) -> bool:
@@ -143,6 +155,8 @@ def is_kernel_package(name: str, source_name: str | None = None) -> bool:
     source = (source_name or "").lower()
     if lowered in _KERNEL_BINARIES or lowered.startswith(_KERNEL_BINARY_PREFIXES):
         return True
+    if _VERSIONED_KERNEL.fullmatch(lowered) or _VERSIONED_KERNEL.fullmatch(source):
+        return True
     return source in _KERNEL_SOURCES or source.startswith(("linux-signed", "linux-rpi"))
 
 
@@ -153,6 +167,7 @@ _KERNEL_IMAGES = frozenset({
     "kernel", "kernel-core", "kernel-rt-core", "kernel-64k-core",
     "kernel-default", "kernel-preempt", "kernel-rt", "kernel-azure",
     "linux", "linux-lts", "linux-virt", "linux-edge", "linux-rpi",
+    "kernel-uek", "kernel-uek-core", "linux-zen", "linux-hardened",
 })
 
 
@@ -168,7 +183,7 @@ def is_kernel_image(name: str) -> bool:
             # A real image names its release (linux-image-6.1.0-53-amd64); a
             # metapackage names a flavour (linux-image-amd64, -686-pae).
             return _NAMES_A_RELEASE.match(name[len(prefix) :]) is not None
-    return name in _KERNEL_IMAGES
+    return name in _KERNEL_IMAGES or re.fullmatch(r"kernel\d+\.\d+", name) is not None
 
 
 _NAMES_A_RELEASE = re.compile(r"\d+\.\d+")
@@ -210,6 +225,24 @@ def kernel_is_matched(ecosystem: str | None) -> bool:
     return any(eco == f or eco.startswith(f + ":") for f in _KERNEL_MATCHED_FAMILIES)
 
 
+#: Which feed checks a kernel the OSV lookup does not (Req 12.11, 12.12-12.14):
+#: Canonical's for Ubuntu; the kernel CNA's own records, through OSV, for the
+#: distributions that ship near-upstream stable kernels; Oracle's OVAL; Amazon
+#: Linux 2023's advisories. Amazon Linux 2 is past its end of support and has
+#: no feed here.
+def kernel_feed_for(ecosystem: str | None) -> str | None:
+    eco = (ecosystem or "").strip()
+    if eco == "Ubuntu" or eco.startswith("Ubuntu:"):
+        return "ubuntu"
+    if eco in ("Fedora", "Arch Linux") or eco.startswith(("Fedora:", "Arch Linux:")):
+        return "upstream"
+    if eco == "Oracle Linux" or eco.startswith("Oracle Linux:"):
+        return "oracle"
+    if eco == "Amazon Linux:2023" or eco.startswith("Amazon Linux:2023."):
+        return "amazon"
+    return None
+
+
 def _without_epoch(version: str) -> str:
     return version.split(":", 1)[1] if ":" in version else version
 
@@ -227,7 +260,11 @@ def kernel_image_release(name: str, version: str, release: str) -> bool:
     - rpm (SUSE): ``kernel-default`` 5.14.21-150500.55.39.1 reports
       ``5.14.21-150500.55.39-default``.
     - apk: ``linux-lts`` 6.1.27-r0 reports ``6.1.27-0-lts``.
-    - pacman: ``linux`` 6.9.7.arch1-1 reports ``6.9.7-arch1-1``.
+    - pacman: ``linux`` 6.9.7.arch1-1 reports ``6.9.7-arch1-1``; another
+      flavour adds its name: ``linux-lts`` 6.18.60-1 reports ``6.18.60-1-lts``,
+      ``linux-zen`` 7.2.11.zen1-1 reports ``7.2.11-zen1-1-zen``.
+    - rpm (Oracle UEK, Amazon Linux 2023's ``kernel6.12``): like ``kernel-core``,
+      ``5.15.0-325.221.6.6.el9uek.x86_64``, ``6.12.111-136.204.amzn2023.x86_64``.
 
     A metapackage (``linux-image-amd64``) is no kernel and matches nothing.
     """
@@ -238,7 +275,9 @@ def kernel_image_release(name: str, version: str, release: str) -> bool:
         if name.startswith(prefix):
             return name[len(prefix) :] == release
     bare = _without_epoch(version)
-    if name in ("kernel-core", "kernel"):
+    if name in ("kernel-core", "kernel", "kernel-uek", "kernel-uek-core") or re.fullmatch(
+        r"kernel\d+\.\d+", name
+    ):
         return release == bare or release.startswith(bare + ".")
     if name.startswith("kernel-") and release.endswith("-" + name[len("kernel-") :]):
         stem = release[: -len(name[len("kernel-") :]) - 1]
@@ -248,6 +287,10 @@ def kernel_image_release(name: str, version: str, release: str) -> bool:
         return release == f"{upstream}-{rev}-{name[len('linux-'):]}"
     if name == "linux":
         return release == bare.replace(".arch", "-arch")
+    if name in ("linux-lts", "linux-zen", "linux-hardened"):
+        # pacman: a dot where uname has a dash before the flavour's own tag.
+        upstream = re.sub(r"^(\d+\.\d+(?:\.\d+)?)\.(?=[a-z])", r"\1-", bare)
+        return release == f"{upstream}-{name[len('linux-'):]}"
     return False
 
 

@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { CveFinding, KernelInfo } from "../types";
 import { makeFinding } from "../test-utils/factories";
 import { buildBulkFixScript } from "./remediation";
-import { filterByKernel, inRunningKernel, kernelPlan, kernelUpgradeCommand, unfixedSummary } from "./kernel";
+import { filterByKernel, inRunningKernel, kernelPlan, kernelUpgradeCommand, uncheckedReasonText, unfixedSummary } from "./kernel";
 import { sortByRisk } from "./intel";
 
 const OLD = "linux-image-6.1.0-52-amd64";
@@ -273,5 +273,23 @@ describe("oldKernelsCommand", () => {
   ])("%s", async (osName, expected) => {
     const { oldKernelsCommand } = await import("./kernel");
     expect(oldKernelsCommand("linux", osName, null)).toBe(expected);
+  });
+});
+
+describe("why a Fedora, Arch, Oracle or Amazon kernel was not checked (Req 12.12-12.14)", () => {
+  it("has words for every reason the server gives", () => {
+    const fallback = uncheckedReasonText("something-else");
+    for (const reason of [
+      "kernel_feed_off",
+      "kernel_feed_unavailable",
+      "kernel_release_unknown",
+      "kernel_not_in_feed",
+      "kernel_flavour_unsupported",
+      "kernel_release_end_of_support",
+      "kernel_not_yet_scanned",
+    ]) {
+      expect(uncheckedReasonText(reason)).not.toBe(fallback);
+    }
+    expect(uncheckedReasonText("kernel_flavour_unsupported")).toMatch(/linux-zen/);
   });
 });

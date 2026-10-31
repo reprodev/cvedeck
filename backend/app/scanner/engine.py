@@ -109,6 +109,12 @@ class MachineScan:
     #: How the findings differ from the machine's previous ones (Req 18), when
     #: the repository reports it. ``None`` on a failed scan.
     diff: FindingDiff | None = None
+    #: How many findings the scan stored for the host: what the scan found,
+    #: as the dashboard lists it. Differs from ``findings`` -- the matcher's
+    #: own answer -- by the kernel CVEs counted rather than listed (Req 12.9)
+    #: and by every kernel feed's findings (Req 12.11-12.14). ``None`` when the
+    #: repository cannot say (a test double) or the scan failed.
+    stored_findings: int | None = None
 
     @property
     def findings(self) -> list[Finding]:
@@ -194,6 +200,7 @@ class ScannerEngine:
         record_status: Callable[[TargetMachine, "MachineScan"], None] | None = None,
         enricher: _Enricher | None = None,
         ubuntu_kernel_source: object | None = None,
+        kernel_feed_sources: dict[str, object] | None = None,
     ) -> None:
         self._repository = repository
         self._credentials_for = credentials_for
@@ -207,6 +214,10 @@ class ScannerEngine:
         # it (Req 12.11); None leaves it to the scheduled refresh.
         self._ubuntu_kernel_source = ubuntu_kernel_source
         self._ubuntu_feeds_tried: set[str] = set()
+        # The same for the Fedora/Arch, Oracle and Amazon kernel feeds
+        # (Req 12.12-12.14), by source; None leaves them to the refresh.
+        self._kernel_feed_sources = dict(kernel_feed_sources or {})
+        self._kernel_feeds_tried: set[str] = set()
         #: Called before and after each target, so a background job can show
         #: which host is being scanned and what each one found (Req 19.2).
         self.on_target_start: Callable[[TargetMachine], None] | None = None
@@ -325,9 +336,14 @@ class ScannerEngine:
         # its findings join the others before enrichment, so a known-exploited
         # one is marked like any other.
         ubuntu = self._check_ubuntu_kernel(inventory)
+        # Fedora, Arch, Oracle Linux and Amazon Linux 2023 kernels, likewise
+        # from their own feeds (Req 12.12-12.14).
+        feeds = self._check_feed_kernels(inventory)
         inputs = [_finding_to_input(f) for f in match_result.findings]
         if ubuntu is not None and ubuntu.reason is None:
             inputs.extend(ubuntu.findings)
+        if feeds is not None and feeds.reason is None:
+            inputs.extend(feeds.findings)
         # Kernel CVEs the host's release cannot fix are counted, not listed
         # (Req 12.9). After enrichment, because a known-exploited one is always
         # listed, and an unchecked one might be.
@@ -356,11 +372,14 @@ class ScannerEngine:
                 )
             if ubuntu is not None and ubuntu.assessed:
                 assessed.append(ubuntu.assessed)
+            if feeds is not None and feeds.reason is None:
+                assessed.extend(feeds.assessed)
             if assessed:
                 for key in assessed:
                     unfixed.setdefault(key, UnfixedCount())
                 record(target.id, encode_unfixed(unfixed))
 
+        count = getattr(self._repository, "count_findings_for_machine", None)
         return MachineScan(
             machine_id=target.id,
             status=ScanStatus.SUCCESS,
@@ -368,6 +387,7 @@ class ScannerEngine:
             match_result=match_result,
             unavailable_sources=unavailable,
             diff=saved if isinstance(saved, FindingDiff) else None,
+            stored_findings=count(target.id) if count is not None else None,
         )
 
     def _check_ubuntu_kernel(self, inventory: Inventory):
@@ -435,6 +455,61 @@ class ScannerEngine:
         _LOGGER.info(
             "Fetched the %s kernel feed for a scan: %s", codename, outcome.status.value
         )
+
+    def _check_feed_kernels(self, inventory: Inventory):
+        """Check a Fedora, Arch, Oracle or Amazon host's kernels against its feed (Req 12.12-12.14).
+
+        ``None`` when the repository cannot hold the feeds (a test double), or
+        no such feed covers the host. A stale table is not used, as for Ubuntu:
+        it lacks every CVE published since and would read cleaner than it is.
+        """
+        repository = self._repository
+        if not hasattr(repository, "kernel_feed"):
+            return None
+        from app.config import feed_max_age_hours, kernel_feed_enabled
+        from app.services.enrichment import FindingEnricher, kernel_feed_name
+        from app.services.kernel_feeds import check_feed_kernels
+
+        health = FindingEnricher(repository, max_age_hours=feed_max_age_hours())
+
+        def usable(feed: str) -> bool:
+            state = health.feed_health(kernel_feed_name(feed))
+            return state.usable and not state.stale and repository.count_kernel_feed_entries(feed) > 0
+
+        self._fetch_kernel_feed_if_needed(inventory, usable)
+        return check_feed_kernels(inventory, repository, enabled=kernel_feed_enabled, feed_usable=usable)
+
+    def _fetch_kernel_feed_if_needed(self, inventory: Inventory, usable) -> None:
+        """Fetch a host's kernel feed now, if a scan needs it and has none.
+
+        As for Ubuntu: the first host of a distribution would otherwise wait for
+        the next scheduled refresh. Tried once per feed per batch, whether or
+        not it works.
+        """
+        if not self._kernel_feed_sources:
+            return
+        from app.config import kernel_feed_enabled
+        from app.package_identifier import kernel_feed_for
+        from app.scanner.kernel_feeds import feed_key
+        from app.services.enrichment import FeedRefreshService
+        from app.services.kernel_feeds import feed_kernel_images
+
+        images = feed_kernel_images(inventory)
+        source = kernel_feed_for(images[0].ecosystem) if images else None
+        feed = feed_key(source, images[0].ecosystem) if source else None
+        if (
+            feed is None
+            or source not in self._kernel_feed_sources
+            or not kernel_feed_enabled(source)
+            or feed in self._kernel_feeds_tried
+            or usable(feed)
+        ):
+            return
+        self._kernel_feeds_tried.add(feed)
+        outcome = FeedRefreshService(
+            self._repository, kernel_feed_sources=self._kernel_feed_sources
+        ).refresh_kernel_feed(source, feed)
+        _LOGGER.info("Fetched the %s kernel feed for a scan: %s", feed, outcome.status.value)
 
     def _enrich(self, findings: list[FindingInput]) -> list[FindingInput]:
         """Attach cached threat-intel signals, if an enricher is configured.

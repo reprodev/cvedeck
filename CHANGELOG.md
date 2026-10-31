@@ -8,6 +8,58 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.15.0] - 2026-11-01
+
+**Upgrading:** a database migration adds a table for the new kernel feeds; it
+runs on start, as always. Three new outbound hosts may be contacted, each only
+when your fleet runs that distribution -- see below and DEPLOYMENT.md.
+
+### Added
+
+- **Fedora, Arch, Oracle Linux and Amazon Linux 2023 kernels are checked.**
+  These four used to say "CveDeck does not look up the kernel on this
+  distribution". Each is now checked against the source that describes the
+  kernel it actually ships, and every installed kernel is assessed, not just
+  the running one:
+  - **Fedora and Arch** against the Linux kernel's own CVE records (from the
+    kernel CNA, as OSV publishes them), by upstream kernel version. A fix in
+    your kernel's own stable series is listed; a fix only a newer series has
+    is counted as "fixed only in Linux 7.2". Arch's `linux-zen` and
+    `linux-hardened` carry patch sets of their own and say they are not
+    checked.
+  - **Oracle Linux** against Oracle's published advisories for your release,
+    for the Unbreakable Enterprise Kernel and the Red Hat compatible kernel
+    alike.
+  - **Amazon Linux 2023** against the advisories its own repositories
+    publish, for each kernel series (`kernel`, `kernel6.12`, `kernel6.18`).
+    Amazon Linux 2 is past its end of support and says so.
+- **New outbound hosts, each with an off switch.** Fedora and Arch use OSV,
+  which CveDeck already contacts (`CVEDECK_UPSTREAM_KERNEL_FEED`, about
+  165 MB a day while you have such a host). Oracle Linux fetches from
+  `linux.oracle.com` (`CVEDECK_ORACLE_KERNEL_FEED`) and Amazon Linux 2023 from
+  `cdn.amazonlinux.com` (`CVEDECK_AMAZON_KERNEL_FEED`); both requests name
+  the release you run, and nothing about a host. SECURITY.md says what each
+  reveals.
+
+### Fixed
+
+- **A scan reports the findings it stored.** The per-host count a scan
+  returned -- in the toast, Scan history and `POST /api/scans` -- was the
+  matcher's raw answer. It left out findings from Ubuntu's kernel feed (since
+  0.10.0) and now the new feeds, and included kernel CVEs that are counted
+  rather than listed. An Oracle Linux host with 2,065 stored findings was
+  reported as having 2. The count is now what the host's page lists.
+- **Oracle's UEK, Amazon's `kernel6.12`/`kernel6.18` and Arch's other kernel
+  flavours are recognised as kernels.** They were matched as ordinary
+  packages, so an Oracle host's UEK could read as clean instead of as not
+  checked. Arch's `linux-lts` is now found as the running kernel too.
+
+### Dependencies
+
+- fastapi 0.162.0; and, for tests only, pytest 9.2.0 and hypothesis 6.170.13.
+
+---
+
 ## [0.14.1] - 2026-10-31
 
 ### Fixed

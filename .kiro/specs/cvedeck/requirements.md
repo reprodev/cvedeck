@@ -346,6 +346,31 @@ as clean.
     older than the feed age limit, does not cover the release or the flavour,
     or when the release has left Canonical's support, or the running kernel is
     unknown or comes from no installed package.
+12. WHERE a host runs Fedora or Arch Linux, THE system SHALL check each
+    installed kernel against the Linux kernel CNA's own CVE records, fetched
+    whole from OSV while the fleet has such a host, unless the operator
+    switches the feed off; SHALL compare by upstream kernel version, deciding
+    by the fix the kernel's own stable series lists when it lists one and by
+    the published ranges otherwise; SHALL report a fix only a newer series has
+    as fixed only in that series; and SHALL NOT present as checked a kernel
+    flavour carrying its own patch set (Arch's ``linux-zen``,
+    ``linux-hardened``), stating why instead, as it SHALL whenever the feed is
+    off, has not been fetched or is older than the feed age limit.
+13. WHERE a host runs Oracle Linux, THE system SHALL check each installed
+    kernel -- the Unbreakable Enterprise Kernel and the Red Hat compatible
+    kernel alike -- against Oracle's published advisories for that release,
+    fetched only for releases the fleet runs, unless the operator switches the
+    feed off; SHALL hold it only to fixed builds for its own release, compared
+    in rpm order; and SHALL NOT present the kernel as checked -- stating why
+    instead -- when the feed is off, has not been fetched, is older than the
+    feed age limit, has nothing for that kernel, or the release is unknown.
+14. WHERE a host runs Amazon Linux 2023, THE system SHALL check each installed
+    kernel series against the advisories its repositories publish, fetched
+    while the fleet has such a host, unless the operator switches the feed
+    off, compared in rpm order and stating why when it cannot; and WHERE a
+    host runs a release past its end of support for which no feed exists
+    (Amazon Linux 2), THE system SHALL say so rather than present the kernel
+    as checked.
 
 ### Requirement 13: Fleet-scale operation
 

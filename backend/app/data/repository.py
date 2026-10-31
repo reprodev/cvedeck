@@ -59,6 +59,7 @@ from .schema import (
     SshHostKey,
     TargetMachine,
     UbuntuKernelFeed,
+    KernelFeed,
 )
 
 
@@ -349,17 +350,22 @@ class Repository:
         one. A machine with an inventory and no unchecked kernel package maps
         to 0; one with no inventory is absent.
 
-        Ubuntu is checked against Canonical's feed instead, and only its
-        running kernel (Req 12.11): a package belonging to a kernel that scan
-        assessed -- recorded by image and version in ``kernel_unfixed`` -- is
-        checked, and so is a metapackage, which carries no code, once any
-        kernel was. Up to 0.14.0 every Ubuntu kernel package was counted here,
-        checked or not.
+        Ubuntu (Req 12.11), Fedora, Arch, Oracle Linux and Amazon Linux 2023
+        (Req 12.12-12.14) are checked against feeds instead: a package
+        belonging to a kernel that scan assessed -- recorded by image and
+        version in ``kernel_unfixed`` -- is checked, and so is a metapackage,
+        which carries no code, once any kernel was. Up to 0.14.0 every Ubuntu
+        kernel package was counted here, checked or not.
 
         One query for the fleet: SQL narrows the rows to names that could be a
         kernel, and :func:`is_kernel_package` decides.
         """
-        from ..package_identifier import is_kernel_metapackage, is_kernel_package, kernel_is_matched
+        from ..package_identifier import (
+            is_kernel_metapackage,
+            is_kernel_package,
+            kernel_feed_for,
+            kernel_is_matched,
+        )
         from ..services.kernel import decode_unfixed
 
         latest = (
@@ -404,7 +410,7 @@ class Repository:
         ):
             if not is_kernel_package(name, source_name) or kernel_is_matched(ecosystem):
                 continue
-            if (ecosystem or "").startswith("Ubuntu"):
+            if kernel_feed_for(ecosystem) is not None:
                 if machine_id not in assessed:
                     assessed[machine_id] = {
                         key.rsplit("@", 1)[-1] for key in (decode_unfixed(unfixed) or {})
@@ -1015,6 +1021,64 @@ class Repository:
                 )
             ).scalar_one()
         )
+
+    def replace_kernel_feed(self, feed: str, payloads: dict[str, tuple[int, bytes]]) -> int:
+        """Replace one kernel feed's stored streams wholesale (Req 12.12-12.14).
+
+        ``payloads`` maps stream to (entry count, compressed payload). Returns
+        the total entry count. Wholesale, like the Ubuntu feed: advisories are
+        withdrawn too.
+        """
+        from sqlalchemy import delete
+
+        self._session.execute(delete(KernelFeed).where(KernelFeed.feed == feed))
+        for stream, (entries, payload) in payloads.items():
+            self._session.add(KernelFeed(feed=feed, stream=stream, entries=entries, payload=payload))
+        self._session.flush()
+        return sum(entries for entries, _payload in payloads.values())
+
+    def kernel_feed(self, feed: str, stream: str) -> bytes | None:
+        """One stream's stored payload, or ``None`` if the feed has none for it."""
+        row = self._session.get(KernelFeed, (feed, stream))
+        return row.payload if row is not None else None
+
+    def count_kernel_feed_entries(self, feed: str) -> int:
+        """Entries actually stored for a feed, for the same reason as count_kev_entries."""
+        return int(
+            self._session.execute(
+                select(func.coalesce(func.sum(KernelFeed.entries), 0)).where(KernelFeed.feed == feed)
+            ).scalar_one()
+        )
+
+    def fleet_kernel_feed_ecosystems(self) -> set[str]:
+        """The ecosystems of every latest inventory whose kernel a 0.15.0 feed checks.
+
+        What those feeds are fetched for: a fleet with no Fedora, Arch, Oracle
+        Linux or Amazon Linux 2023 host fetches none of them.
+        """
+        latest = (
+            select(Inventory.machine_id, func.max(Inventory.collected_at).label("at"))
+            .group_by(Inventory.machine_id)
+            .subquery()
+        )
+        stmt = (
+            select(Package.ecosystem)
+            .join(Inventory, Package.inventory_id == Inventory.id)
+            .join(
+                latest,
+                (Inventory.machine_id == latest.c.machine_id)
+                & (Inventory.collected_at == latest.c.at),
+            )
+            .where(
+                (Package.ecosystem == "Fedora")
+                | Package.ecosystem.like("Fedora:%")
+                | Package.ecosystem.like("Arch Linux%")
+                | Package.ecosystem.like("Oracle Linux%")
+                | Package.ecosystem.like("Amazon Linux:2023%")
+            )
+            .distinct()
+        )
+        return {eco for eco in self._session.execute(stmt).scalars() if eco}
 
     def fleet_ubuntu_ecosystems(self) -> set[str]:
         """The Ubuntu ecosystems of every machine's latest inventory (Req 12.11).

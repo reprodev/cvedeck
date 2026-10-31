@@ -57,6 +57,15 @@ UBUNTU_KERNEL_FEED_PREFIX = "ubuntu-kernel:"
 
 def ubuntu_kernel_feed_name(codename: str) -> str:
     return f"{UBUNTU_KERNEL_FEED_PREFIX}{codename}"
+
+
+#: One feed row per 0.15.0 kernel feed: ``kernel-feed:upstream``,
+#: ``kernel-feed:oracle:ol9``, ``kernel-feed:amazon:al2023`` (Req 12.12-12.14).
+KERNEL_FEED_PREFIX = "kernel-feed:"
+
+
+def kernel_feed_name(feed: str) -> str:
+    return f"{KERNEL_FEED_PREFIX}{feed}"
 EPSS_FEED = "epss"
 
 # Exceptions that mean "this code is broken", not "this feed is down". Mirrors
@@ -174,12 +183,16 @@ class FeedRefreshService:
         kev_source: _KevSource | None = None,
         epss_source: _EpssSource | None = None,
         ubuntu_kernel_source: Any = None,
+        kernel_feed_sources: dict[str, Any] | None = None,
         checkpoint: Callable[[], None] | None = None,
     ) -> None:
         self._repository = repository
         self._kev_source = kev_source
         self._epss_source = epss_source
         self._ubuntu_kernel_source = ubuntu_kernel_source
+        #: The 0.15.0 kernel feed clients by source (``upstream``, ``oracle``,
+        #: ``amazon``); a source switched off is simply absent (Req 12.12-12.14).
+        self._kernel_feed_sources = dict(kernel_feed_sources or {})
         #: Called after each feed's writes in :meth:`refresh_all` -- the caller's
         #: commit -- so each feed is its own transaction (Req 13.7). Feeds were
         #: always independent: one feed's failure never touched another's
@@ -200,6 +213,8 @@ class FeedRefreshService:
             pending.append(self._fetch_epss())
         if self._ubuntu_kernel_source is not None:
             pending.extend(self._fetch_ubuntu_kernels())
+        if self._kernel_feed_sources:
+            pending.extend(self._fetch_kernel_feeds())
         outcomes: list[FeedRefreshOutcome] = []
         for apply in pending:
             outcomes.append(apply())
@@ -263,6 +278,63 @@ class FeedRefreshService:
             feed, status=FeedStatus.OK, record_count=count, payload_digest=result.etag or ""
         )
         return FeedRefreshOutcome(feed, FeedStatus.OK, record_count=count)
+
+    def _fetch_kernel_feeds(self) -> list[Callable[[], FeedRefreshOutcome]]:
+        """One fetch per kernel feed the fleet needs, each on its own (Req 12.12-12.14)."""
+        from ..package_identifier import kernel_feed_for
+        from ..scanner.kernel_feeds import feed_key
+
+        feeds: set[tuple[str, str]] = set()
+        for ecosystem in self._repository.fleet_kernel_feed_ecosystems():
+            source = kernel_feed_for(ecosystem)
+            key = feed_key(source, ecosystem) if source else None
+            if source in self._kernel_feed_sources and key:
+                feeds.add((source, key))
+        return [self._fetch_kernel_feed(source, key) for source, key in sorted(feeds)]
+
+    def refresh_kernel_feed(self, source: str, feed: str) -> FeedRefreshOutcome:
+        """Download one kernel feed and replace the stored copy, keeping it on any failure."""
+        return self._fetch_kernel_feed(source, feed)()
+
+    def _fetch_kernel_feed(self, source: str, feed: str) -> Callable[[], FeedRefreshOutcome]:
+        from ..scanner.kernel_feeds import UPSTREAM, feed_release
+
+        name = kernel_feed_name(feed)
+        client = self._kernel_feed_sources.get(source)
+        if client is None:
+            return partial(self._record_unconfigured, name)
+        row = self._repository.get_feed_refresh(name)
+        cached = self._repository.count_kernel_feed_entries(feed)
+        # Ask "has it changed?" only when there is a table to keep.
+        digest = row.payload_digest if row is not None and cached > 0 else None
+        try:
+            if source == UPSTREAM:
+                result = client.fetch(digest=digest)
+            else:
+                result = client.fetch(feed_release(feed), digest=digest)
+        except _PROGRAMMING_ERRORS:
+            _LOGGER.exception("%s refresh failed due to a defect, not an outage", name)
+            raise
+        except Exception as exc:
+            return partial(self._record_failure, name, exc)
+        return partial(self._apply_kernel_feed, feed, result, digest, cached)
+
+    def _apply_kernel_feed(
+        self, feed: str, result: Any, digest: str | None, cached: int
+    ) -> FeedRefreshOutcome:
+        from ..scanner.kernel_feeds import encode_streams
+
+        name = kernel_feed_name(feed)
+        if result.table is None:
+            self._repository.record_feed_refresh(
+                name, status=FeedStatus.OK, record_count=cached, payload_digest=digest
+            )
+            return FeedRefreshOutcome(name, FeedStatus.OK, record_count=cached, unchanged=True)
+        count = self._repository.replace_kernel_feed(feed, encode_streams(result.table))
+        self._repository.record_feed_refresh(
+            name, status=FeedStatus.OK, record_count=count, payload_digest=result.digest or ""
+        )
+        return FeedRefreshOutcome(name, FeedStatus.OK, record_count=count)
 
     def refresh_kev(self) -> FeedRefreshOutcome:
         """Download the KEV catalogue and replace the cached copy."""
@@ -641,6 +713,19 @@ class FindingEnricher:
                 {c for c in map(codename_for, self._repository.fleet_ubuntu_ecosystems()) if c}
             )
             health.extend(self.feed_health(ubuntu_kernel_feed_name(c)) for c in codenames)
+        # And one per Fedora/Arch, Oracle or Amazon kernel feed the fleet needs
+        # (Req 12.12-12.14).
+        from ..config import kernel_feed_enabled
+        from ..package_identifier import kernel_feed_for
+        from ..scanner.kernel_feeds import feed_key
+
+        feeds = set()
+        for ecosystem in self._repository.fleet_kernel_feed_ecosystems():
+            source = kernel_feed_for(ecosystem)
+            key = feed_key(source, ecosystem) if source else None
+            if key and kernel_feed_enabled(source):
+                feeds.add(key)
+        health.extend(self.feed_health(kernel_feed_name(f)) for f in sorted(feeds))
         return health
 
     def _is_stale(self, last_refreshed_at: datetime | None) -> bool:
@@ -675,6 +760,7 @@ def build_feed_refresh_service(
         ubuntu_kernel_feed_url,
     )
     from ..scanner.epss_client import EpssHttpClient
+    from ..scanner.kernel_feeds import build_kernel_feed_sources
     from ..scanner.kev_client import KevHttpClient
     from ..scanner.ubuntu_kernel_feed import UbuntuKernelFeedClient
 
@@ -689,6 +775,7 @@ def build_feed_refresh_service(
             if ubuntu_kernel_feed_enabled()
             else None
         ),
+        kernel_feed_sources=build_kernel_feed_sources(timeout),
         checkpoint=checkpoint,
     )
 

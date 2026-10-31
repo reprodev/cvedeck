@@ -328,6 +328,17 @@ environment the app reads, so no alembic.ini edit is needed.
   the refresher is idempotent and owns no scan. `next_due` is pure and naive-local
   by design (Property 19); keep DST and catch-up reasoning there. No remediation
   is ever automatic.
+- **Kernel feeds (0.15.0, Req 12.12-12.14).** Fedora and Arch kernels are checked
+  against the kernel CNA's records via OSV, Oracle Linux against Oracle's OVAL,
+  Amazon Linux 2023 against its repo updateinfo (`scanner/kernel_feeds.py`,
+  `services/kernel_feeds.py`). OSV's per-version query returns NOTHING for the
+  `Linux` ecosystem -- do not "simplify" to it; the whole set is fetched and
+  evaluated locally. The CNA's ranges overlap across stable series: a kernel's own
+  series decides when it lists a fix (Property 21); do not evaluate the ranges as
+  written. Oracle's per-release file carries other releases' builds -- keep the
+  dist-tag filter. `linux-zen`/`linux-hardened` and Amazon Linux 2 stay unchecked
+  with a stated reason. `linux.oracle.com` and `cdn.amazonlinux.com` are outbound
+  hosts the owner approved after review; a new feed host needs the same review.
 - **Scans are jobs, and run through one slot** (Req 19, `services/scan_jobs.py`).
   Every scan -- from the dashboard's `POST /api/scans/jobs` or a script's
   `POST /api/scans` -- is a `scan_jobs` row run while holding `_scan_slot`. Do not

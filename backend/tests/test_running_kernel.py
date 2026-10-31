@@ -45,6 +45,14 @@ def _running(name: str, ecosystem: str, release: str) -> list[str]:
         ("alpine_3.18_kernel", "Alpine:v3.18", "6.1.175-0-virt", ["linux-virt"]),
         ("opensuse_leap_15.5_kernel", "openSUSE:Leap 15.5", "5.14.21-150500.55.88-default", ["kernel-default"]),
         ("archlinux_kernel", "Arch Linux", "7.2.7-arch1-1", ["linux"]),
+        # Kernels with a feed of their own since 0.15.0 (Req 12.12-12.14).
+        ("oraclelinux_9_kernel", "Oracle Linux:9", "5.15.0-325.221.6.6.el9uek.x86_64", ["kernel-uek-core"]),
+        ("oraclelinux_9_kernel", "Oracle Linux:9", "5.14.0-687.61.1.el9_8.x86_64", ["kernel-core"]),
+        ("amazonlinux_2023_kernel", "Amazon Linux:2023", "6.1.188-233.393.amzn2023.x86_64", ["kernel"]),
+        ("amazonlinux_2023_kernel", "Amazon Linux:2023", "6.12.111-136.204.amzn2023.x86_64", ["kernel6.12"]),
+        ("fedora_44_kernel", "Fedora", "7.2.13-200.fc44.x86_64", ["kernel-core"]),
+        ("archlinux_lts_zen_kernel", "Arch Linux", "6.18.60-1-lts", ["linux-lts"]),
+        ("archlinux_lts_zen_kernel", "Arch Linux", "7.2.11-zen1-1-zen", ["linux-zen"]),
     ],
 )
 def test_the_running_kernel_is_the_image_that_reports_its_release(fixture, ecosystem, release, expected):
@@ -60,6 +68,10 @@ def test_the_running_kernel_is_the_image_that_reports_its_release(fixture, ecosy
         ("alpine_3.18_kernel", "Alpine:v3.18"),
         ("opensuse_leap_15.5_kernel", "openSUSE:Leap 15.5"),
         ("archlinux_kernel", "Arch Linux"),
+        ("oraclelinux_9_kernel", "Oracle Linux:9"),
+        ("amazonlinux_2023_kernel", "Amazon Linux:2023"),
+        ("fedora_44_kernel", "Fedora"),
+        ("archlinux_lts_zen_kernel", "Arch Linux"),
     ],
 )
 def test_a_running_kernel_no_package_provides_matches_nothing(fixture, ecosystem):
@@ -98,3 +110,24 @@ def test_firmware_is_not_the_kernel():
     """linux-firmware shares a prefix and nothing else (Req 12.5)."""
     names = {p.name for p in _kernels("alpine_3.18_kernel", "Alpine:v3.18")}
     assert names == {"linux-lts", "linux-virt"}
+
+
+@pytest.mark.parametrize(
+    "fixture, ecosystem, images",
+    [
+        ("oraclelinux_9_kernel", "Oracle Linux:9", {"kernel-core", "kernel-uek-core"}),
+        ("amazonlinux_2023_kernel", "Amazon Linux:2023", {"kernel", "kernel6.12"}),
+        ("archlinux_lts_zen_kernel", "Arch Linux", {"linux-lts", "linux-zen"}),
+    ],
+)
+def test_every_kernel_these_distributions_ship_is_known_as_one(fixture, ecosystem, images):
+    """Up to 0.14.x kernel-uek, kernel6.12 and linux-zen were not known as kernels.
+
+    They were matched as ordinary packages against a borrowed tracker that knows
+    nothing of them, so an Oracle host's UEK read as clean rather than as not
+    checked (Req 12.5).
+    """
+    from app.package_identifier import is_kernel_image
+
+    found = {p.name for p in _kernels(fixture, ecosystem) if is_kernel_image(p.name)}
+    assert found == images

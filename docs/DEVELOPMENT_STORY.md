@@ -2893,3 +2893,52 @@ test of a time-zone bug that runs on a UTC machine cannot fail.
 
 The release began by taking the three open Dependabot pull requests -- React,
 the test runner, FastAPI -- each from its own diff, each committed on its own.
+
+## Chapter 33 — Four more kernels (v0.15.0)
+
+Since 0.9.0 a host's kernel had been checked only where its advisories could be
+had at a sane cost, and every other host said so. Four distributions stayed on
+the wrong side of that line: Fedora, Arch, Oracle Linux and Amazon Linux. A
+homelab has all four, so 0.14.1 shipped with a research report instead of code:
+which sources exist, what each costs, what each says about real kernels, and
+what each reveals about the fleet that asks. The owner chose per distribution.
+
+### The one that would not answer
+
+The obvious source for Fedora and Arch, which both ship near-unmodified stable
+kernels, is the kernel's own CVE records, and OSV carries them. Asked about a
+version, though, OSV answered nothing -- not for a current kernel, and not for
+5.4.268, which the record for CVE-2024-26581 says was fixed in 5.4.269. The
+records were there; the version was simply not evaluated for that ecosystem. So
+CveDeck fetches the whole set, about 31,000 records, from the host it already
+talks to, and does the comparison itself.
+
+Doing it itself meant reading the ranges correctly. The kernel CNA states a fix
+per stable series, and its ranges overlap: "introduced 6.13, fixed 6.19.6" spans
+6.18.x as well, which has its own fix at 6.18.16. Read as written, a current
+6.18 kernel carried 589 CVEs; it has 126. The rule that settles it -- a
+kernel's own series decides whenever it lists a fix -- is now Property 21,
+checked with Hypothesis.
+
+### The ones that keep their own version
+
+Oracle's Unbreakable Enterprise Kernel reports 5.15.0 for its whole life and
+takes fixes as backports, so no upstream version describes it; Oracle's own
+OVAL does. Amazon publishes its advisories in the metadata its repositories
+already serve. Both name the release in the request, which is why each went to
+the owner first, and each has a switch to stop it. One trap from the data:
+Oracle's file for OL9 also lists EL10 builds, which an OL9 host could never
+install.
+
+### What the container showed
+
+Four new SSH targets, one per distribution, each with a deliberately old
+kernel, reproduced the research to the CVE: 1,529 and 534 on Oracle's two
+kernels, 1,728 on Amazon's 6.1, 126 on Arch's LTS. They also showed the scan
+reporting 2 findings for the Oracle host that had 2,065. The count had always
+been the matcher's own answer, which no kernel feed passes through, and Ubuntu
+hosts had been undercounted the same way since 0.10.0. Recognising the new
+kernels turned up an older problem too: Oracle's UEK, Amazon's `kernel6.12` and
+Arch's `linux-zen` had never been known as kernels at all, so they had been
+matched as ordinary packages against a tracker that knew nothing about them,
+and could read as clean.

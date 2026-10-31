@@ -96,7 +96,11 @@ def _record_outcome(session: Session, row: ScanJobTarget, scan: MachineScan) -> 
             machine.last_scan_server_key = row.server_key
     row.state = ScanJobTargetState.DONE
     row.status = scan.status
-    row.finding_count = len(scan.findings)
+    # What was stored, as the host's page lists it -- not the matcher's raw
+    # answer, which omits every kernel feed's findings: an Oracle host whose
+    # 2,065 stored findings were reported as 2 (found in the 0.15.0 container
+    # run).
+    row.finding_count = scan.stored_findings if scan.stored_findings is not None else len(scan.findings)
     row.sources_ok = scan.sources_ok
     row.unavailable_sources = ",".join(scan.unavailable_sources)
     row.message = scan.message

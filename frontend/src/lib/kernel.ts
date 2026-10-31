@@ -142,6 +142,21 @@ export function uncheckedReasonText(reason: string | null): string {
       return "Canonical's feed has no entries for this kernel's flavour.";
     case "ubuntu_not_yet_scanned":
       return "The Ubuntu kernel feed is now available; scan this host again to check its kernel.";
+    // Fedora, Arch, Oracle Linux and Amazon Linux 2023 (Req 12.12-12.14).
+    case "kernel_feed_off":
+      return "The kernel advisory feed for this distribution is switched off on this server.";
+    case "kernel_feed_unavailable":
+      return "The kernel advisory feed for this distribution has not been fetched yet, or is out of date. It refreshes with the other intel feeds.";
+    case "kernel_release_unknown":
+      return "CveDeck could not tell which release this host runs, so it has no kernel feed to check it against.";
+    case "kernel_not_in_feed":
+      return "The kernel advisory feed has no entries for the kernels installed on this host.";
+    case "kernel_flavour_unsupported":
+      return "This kernel carries its own patch set (linux-zen, linux-hardened), which no upstream advisory describes, so it is not checked.";
+    case "kernel_release_end_of_support":
+      return "This release is past its end of support, and no kernel advisory feed covers it.";
+    case "kernel_not_yet_scanned":
+      return "The kernel advisory feed is now available; scan this host again to check its kernel.";
     case "not_supported":
       return "CveDeck does not look up the kernel on this distribution.";
     default:

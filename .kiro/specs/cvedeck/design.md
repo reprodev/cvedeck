@@ -534,6 +534,14 @@ From 0.10.4 to 0.12.0 the choice was stable but made by comparing identifiers as
 
 **Validates: Requirements 2.10, 2.11**
 
+### Property 21: A kernel's own stable series decides
+
+*For any* set of upstream ranges for one CVE and any kernel version, IF the kernel's stable series (major.minor) lists a fix THEN the kernel SHALL be reported affected exactly when its version precedes that fix; and any fix offered from elsewhere SHALL belong to a newer series than the kernel's.
+
+The kernel CNA's ranges overlap across series: "introduced 6.13, fixed 6.19.6" also spans 6.18.x, which has its own fix at 6.18.16. Evaluated as written, a current 6.18 kernel carried 589 CVEs instead of 126 (measured 2026-10-31).
+
+**Validates: Requirements 12.12**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).
@@ -930,6 +938,35 @@ scope, since the deployment runs a single uvicorn worker.
   or running. Server timestamps carry no offset (SQLite drops it) but are UTC,
   so the dashboard reads them through `parseServerTime`, which appends `Z` to a
   bare date-time; `Date.parse` alone reads them as local time (Req 19.11).
+
+### Kernel feeds for Fedora, Arch, Oracle Linux and Amazon Linux 2023 (0.15.0)
+
+Req 12.12-12.14, researched and measured on 2026-10-31 and approved by the
+owner, host by host. `app/scanner/kernel_feeds.py` holds the three parsers and
+clients; `app/services/kernel_feeds.py` checks a host's kernels against the
+stored tables, locally, at scan time; the `kernel_feeds` table holds each feed
+by stream, compressed, like `ubuntu_kernel_feeds`.
+
+- **Upstream (Fedora, Arch).** The kernel CNA's records, which OSV carries as
+  the `Linux` ecosystem. OSV evaluates no version for this ecosystem -- a
+  version query returns nothing -- so the whole set (~31,000 records, 14 pages,
+  ~165 MB) is fetched on the feed cadence and evaluated here by upstream
+  version, own series first (Property 21). No new outbound host. `linux-zen`
+  and `linux-hardened` are not checked: they carry their own patch sets.
+- **Oracle Linux.** Oracle's ELSA OVAL, one file per release from
+  `linux.oracle.com`, for UEK (which keeps one version and backports fixes,
+  so no upstream version describes it) and the Red Hat compatible kernel.
+  Tests for another release's builds are dropped: the OL9 file carries EL10
+  UEK builds.
+- **Amazon Linux 2023.** The `updateinfo` its repositories carry, from
+  `cdn.amazonlinux.com` through the mirror list and `repomd.xml`, one stream
+  per kernel series (`kernel`, `kernel6.12`, `kernel6.18`). Amazon Linux 2 is
+  past its end of support and says so.
+
+Unlike Ubuntu's running-kernel check these key on package versions, so every
+installed kernel is assessed. Each source has an off switch and a URL
+override; the daily refresh fetches only the feeds the fleet needs, and the
+first scan of a distribution fetches its feed on demand, as for Ubuntu.
 
 ### Scheduled scanning (0.12.0)
 

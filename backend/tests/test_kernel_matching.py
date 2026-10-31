@@ -223,3 +223,24 @@ def test_a_patched_kernel_is_not_held_to_another_releases_advisories():
 
     assert "CVE-2025-0001" in found
     assert "CVE-2024-53104" not in found
+
+
+@pytest.mark.parametrize(
+    "ecosystem, feed",
+    [
+        ("Ubuntu:22.04:LTS", "ubuntu"),
+        ("Fedora", "upstream"),
+        ("Arch Linux", "upstream"),
+        ("Oracle Linux:9", "oracle"),
+        ("Amazon Linux:2023", "amazon"),
+        # Past its end of support: no feed, and it says so.
+        ("Amazon Linux:2", None),
+        # Looked up in OSV, not a feed.
+        ("Debian:12", None),
+        (None, None),
+    ],
+)
+def test_which_feed_checks_a_kernel_osv_does_not(ecosystem, feed):
+    from app.package_identifier import kernel_feed_for
+
+    assert kernel_feed_for(ecosystem) == feed

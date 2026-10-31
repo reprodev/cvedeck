@@ -536,7 +536,7 @@ def _unchecked_reason(view: KernelView, inventory, repo: Repository) -> str:
     scanned since the feed became available.
     """
     if not view.running_only:
-        return "not_supported"
+        return _feed_unchecked_reason(inventory, repo)
     from ..config import feed_max_age_hours, ubuntu_kernel_feed_enabled
     from ..services.enrichment import FindingEnricher, ubuntu_kernel_feed_name
     from ..services.ubuntu_kernel import NOT_YET_SCANNED, check_ubuntu_kernel
@@ -551,6 +551,36 @@ def _unchecked_reason(view: KernelView, inventory, repo: Repository) -> str:
         inventory, repo, enabled=ubuntu_kernel_feed_enabled(), feed_usable=usable
     )
     if check is None or check.reason is None:
+        return NOT_YET_SCANNED
+    return check.reason
+
+
+def _feed_unchecked_reason(inventory, repo: Repository) -> str:
+    """Why a Fedora, Arch, Oracle or Amazon kernel was not checked (Req 12.12-12.14).
+
+    The scan's check is run again, locally, as for Ubuntu. A distribution no
+    feed covers says so, and Amazon Linux 2 says it is past its end of support.
+    """
+    from ..config import feed_max_age_hours, kernel_feed_enabled
+    from ..package_identifier import is_kernel_image
+    from ..services.enrichment import FindingEnricher, kernel_feed_name
+    from ..services.kernel_feeds import NOT_YET_SCANNED, check_feed_kernels
+
+    health = FindingEnricher(repo, max_age_hours=feed_max_age_hours())
+
+    def usable(feed: str) -> bool:
+        state = health.feed_health(kernel_feed_name(feed))
+        return state.usable and not state.stale and repo.count_kernel_feed_entries(feed) > 0
+
+    check = check_feed_kernels(inventory, repo, enabled=kernel_feed_enabled, feed_usable=usable)
+    if check is None:
+        images = [p for p in inventory.packages if is_kernel_image(p.name)]
+        if images and (images[0].ecosystem or "").startswith("Amazon Linux:2") and not (
+            images[0].ecosystem or ""
+        ).startswith("Amazon Linux:2023"):
+            return "kernel_release_end_of_support"
+        return "not_supported"
+    if check.reason is None:
         return NOT_YET_SCANNED
     return check.reason
 

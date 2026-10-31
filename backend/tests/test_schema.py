@@ -53,6 +53,7 @@ def test_create_all_creates_every_table(engine):
         "epss_scores",
         "feed_refreshes",
         "ubuntu_kernel_feeds",
+        "kernel_feeds",
         # Access control (Req 16). Not syncable either: credentials belong to
         # this instance and must never be copied to the Online_Database.
         "users",

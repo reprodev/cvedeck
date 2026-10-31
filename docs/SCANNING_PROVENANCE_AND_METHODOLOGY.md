@@ -758,9 +758,9 @@ pages (56 MB); RHEL, Rocky, AlmaLinux, SUSE and Alpine, a page or two. Ubuntu's
 is not asked of OSV at all: each of its kernel advisories lists every Ubuntu
 kernel flavour, about 470 KB apiece, and the answer for one 22.04 kernel was
 still arriving after 51 pages and 3.5 GB. It is checked against Canonical's own
-feed instead (below). Hosts resolved onto a borrowed tracker (Arch, Fedora,
-Oracle, Amazon) are excluded. Every excluded host states that its kernel was
-not checked, and why (Req 12.5).
+feed instead (below), and since 0.15.0 so are Fedora, Arch, Oracle Linux and
+Amazon Linux 2023, each against its own feed (below). Every host whose kernel
+is not checked states that, and why (Req 12.5).
 
 **Listed or counted.** Measured with the real client, an up-to-date Debian 12
 kernel matches 2,319 kernel CVEs, none fixable in Debian 12 (2,187 fixed only in
@@ -838,6 +838,46 @@ Measured on the real 22.04 feed for the generic kernel: 5.15.0-25 has 10,704
 applicable CVEs, 6,450 with a fix; the current 5.15.0-198 has 4,254, none
 fixable, which are counted rather than listed (Req 12.9).
 ---
+
+### Fedora, Arch, Oracle Linux and Amazon Linux 2023 (since 0.15.0)
+
+Until 0.15.0 these four said their kernel was not checked: their userland is
+matched against a borrowed tracker, and their kernel is not the one that
+tracker describes. Researched on 2026-10-31 against each distribution's real
+kernels, each is now checked against the source that does describe it
+(Req 12.12-12.14):
+
+| Distribution | Source | Why that one |
+|---|---|---|
+| Fedora, Arch | The Linux kernel CNA's CVE records, as OSV carries them (`Linux` ecosystem) | Both ship near-unmodified upstream stable kernels, so the upstream version is the key. Arch's own tracker stopped following the kernel in 2023; Fedora's advisories name 28 CVEs across 23 kernel updates. |
+| Oracle Linux | Oracle's ELSA OVAL, per release | The Unbreakable Enterprise Kernel keeps one version (5.15.0, 6.12.0) and backports fixes, so no upstream version describes it. |
+| Amazon Linux 2023 | The `updateinfo` its repositories carry | Names the fixed build of each kernel series (`kernel`, `kernel6.12`, `kernel6.18`). |
+
+**Upstream, own series first.** OSV evaluates no version for the `Linux`
+ecosystem -- asked for 5.4.268, which CVE-2024-26581 says was fixed in 5.4.269,
+it returned nothing -- so the whole set is fetched (about 31,000 records in 14
+pages, 165 MB) and evaluated locally. The CNA's ranges overlap across stable
+series: "introduced 6.13, fixed 6.19.6" also spans 6.18.x, whose own fix is
+6.18.16. A kernel's own series decides whenever it lists a fix; only otherwise
+do the ranges decide, and then the earliest fix in a newer series is reported as
+"fixed only in Linux 7.2" (Property 21). Evaluated as written, a current 6.18
+kernel carried 589 CVEs; it has 126. Only about 40% of these CVEs carry a CVSS
+vector, so most are unscored and rank after scored ones (Req 12.10). Arch's
+`linux-zen` and `linux-hardened` carry patch sets of their own and are not
+checked.
+
+**Oracle and Amazon, rpm order.** Each advisory names a fixed build; a kernel
+older than it, compared as rpm does, is affected. Oracle's OL9 file also carries
+EL10 UEK builds, which an OL9 host cannot install, so only builds for the host's
+release count. Both rate advisories rather than CVEs, so their findings carry the
+advisory's rating and no score.
+
+Measured on real kernels: Fedora 44's current 7.2.13 and Arch's 7.2.11 have 0
+and 123 affected CVEs (all 123 fixed in 7.2); an Oracle UEK8 build four months
+old has 3,076, the current one none; an Amazon Linux 2023 6.1 kernel from months
+back has 1,728. Unlike Ubuntu's check these key on package versions, so every
+installed kernel is assessed, not only the running one. Amazon Linux 2 is past
+its end of support and says so.
 
 ## 14. Data Durability & Schema Provenance
 

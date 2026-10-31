@@ -25,6 +25,7 @@ from app.package_identifier import (
     is_kernel_image,
     is_kernel_metapackage,
     is_kernel_package,
+    kernel_feed_for,
     kernel_image_release,
     kernel_is_matched,
     parse_fix,
@@ -114,6 +115,8 @@ def _unfixed_for(p, unfixed: dict[str, UnfixedCount] | None) -> UnfixedCount | N
     found = unfixed.get(f"{p.name}@{p.version}")
     if found is None and kernel_is_matched(p.ecosystem):
         return UnfixedCount()
+    # A feed-checked kernel (Ubuntu, Req 12.11; Fedora, Arch, Oracle, Amazon,
+    # Req 12.12-12.14) with no entry was not assessed.
     return found
 
 
@@ -149,11 +152,13 @@ def kernel_view(
         upgrade = sorted({p.name for p in images})
 
     ubuntu = bool(images) and all((p.ecosystem or "").startswith("Ubuntu") for p in images)
+    by_feed = bool(images) and all(kernel_feed_for(p.ecosystem) is not None for p in images)
     checked = bool(images) and (
         all(kernel_is_matched(p.ecosystem) for p in images)
-        # An Ubuntu kernel is checked when a scan checked it against
-        # Canonical's feed, which records it by name (Req 12.11).
-        or (ubuntu and any(k.unfixed is not None for k in installed))
+        # A kernel checked against a feed -- Canonical's (Req 12.11), or the
+        # Fedora/Arch, Oracle or Amazon one (Req 12.12-12.14) -- is checked
+        # when a scan checked it, which records it by name.
+        or (by_feed and any(k.unfixed is not None for k in installed))
     )
     return KernelView(
         release=release,

@@ -375,3 +375,26 @@ def test_the_job_list_takes_a_limit_up_to_every_job_kept(client, db):
     assert [j["requested_by"] for j in listed[:2]] == ["user24", "user23"]
     for bad in (0, scan_jobs.MAX_JOBS + 1):
         assert client.get(f"/api/scans/jobs?limit={bad}").status_code == 422
+
+
+def test_a_hosts_outcome_counts_what_was_stored_not_the_matchers_answer():
+    """Req 19.2: the job reports a host's findings as its page lists them.
+
+    Kernel-feed findings never pass through the matcher, so its answer alone
+    reported an Oracle host with 2,065 stored findings as 2 (0.15.0).
+    """
+    from app.data.schema import ScanJobTarget
+    from app.enums import ScanJobTargetState
+    from app.scanner.engine import MachineScan
+
+    row = ScanJobTarget(position=0, machine_id="m1", hostname="m1", platform=Platform.LINUX,
+                        state=ScanJobTargetState.RUNNING)
+    scan = MachineScan(machine_id="m1", status=ScanStatus.SUCCESS, match_result=None, stored_findings=2065)
+
+    class _NoSession:
+        def get(self, *args):
+            return None
+
+    scan_jobs._record_outcome(_NoSession(), row, scan)
+
+    assert row.finding_count == 2065

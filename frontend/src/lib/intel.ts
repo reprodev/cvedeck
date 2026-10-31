@@ -173,8 +173,19 @@ export function feedLabel(feedName: string): string {
     const version = UBUNTU_VERSIONS[codename];
     return version ? `Ubuntu ${version} kernel` : `Ubuntu ${codename} kernel`;
   }
+  // Req 12.12-12.14: kernel-feed:upstream, kernel-feed:oracle:ol9, kernel-feed:amazon:al2023.
+  if (feedName.startsWith(KERNEL_FEED_PREFIX)) {
+    const feed = feedName.slice(KERNEL_FEED_PREFIX.length);
+    if (feed === "upstream") return "Upstream kernel (Fedora, Arch)";
+    const oracle = /^oracle:ol(\d+)$/.exec(feed);
+    if (oracle) return `Oracle Linux ${oracle[1]} kernel`;
+    const amazon = /^amazon:al(\d+)$/.exec(feed);
+    if (amazon) return `Amazon Linux ${amazon[1]} kernel`;
+  }
   return feedName;
 }
+
+const KERNEL_FEED_PREFIX = "kernel-feed:";
 
 const UBUNTU_KERNEL_FEED_PREFIX = "ubuntu-kernel:";
 

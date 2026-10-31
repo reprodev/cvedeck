@@ -101,6 +101,11 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_EPSS_FEED_URL` | FIRST EPSS current scores (`.csv.gz`) | Source for the EPSS exploitation-probability score set. |
 | `CVEDECK_UBUNTU_KERNEL_FEED` | `on` | Fetch Canonical's OVAL CVE feed for each Ubuntu release the fleet runs, to check Ubuntu kernels. `off` (or `0`, `false`, `no`) stops it; Ubuntu kernels then read as not checked. The request names the release. |
 | `CVEDECK_UBUNTU_KERNEL_FEED_URL` | Canonical's OVAL feed, `{codename}` filled in | Source of the Ubuntu kernel feed. |
+| `CVEDECK_UPSTREAM_KERNEL_FEED` | `on` | Fetch the Linux kernel CNA's CVE records from OSV (the host scans already use) while the fleet has a Fedora or Arch host, to check their kernels. About 165 MB a day. `off` stops it; those kernels then read as not checked. |
+| `CVEDECK_ORACLE_KERNEL_FEED` | `on` | Fetch Oracle's ELSA OVAL from `linux.oracle.com` for each Oracle Linux release the fleet runs, to check its kernels (UEK and the Red Hat compatible kernel). `off` stops it. The request names the release. |
+| `CVEDECK_ORACLE_KERNEL_FEED_URL` | Oracle's OVAL, `{release}` filled in | Source of the Oracle Linux kernel feed. |
+| `CVEDECK_AMAZON_KERNEL_FEED` | `on` | Fetch Amazon Linux 2023's advisories from its repository (`cdn.amazonlinux.com`) while the fleet has such a host, to check its kernels. `off` stops it. The request names the release. |
+| `CVEDECK_AMAZON_KERNEL_FEED_URL` | Amazon Linux's mirror list, `{release}` filled in | Source of the Amazon Linux kernel feed. |
 | `CVEDECK_FEED_TIMEOUT` | `120.0` | Timeout in seconds for a whole-feed download. Separate from `CVEDECK_HTTP_TIMEOUT` because the EPSS set is a multi-megabyte file, not a per-package query. |
 | `CVEDECK_FEED_REFRESH_HOURS` | `24.0` | How often the application refreshes the intel feeds itself, starting at startup. `0` switches the built-in refresh off, for a deployment that drives it from its own scheduler. Each refresh also reapplies the feeds to findings already stored. Demo mode forces this to `0`. Reported at `GET /api/health`, which reports the interval actually running. |
 | `CVEDECK_FEED_MAX_AGE_HOURS` | `48.0` | How old a cached feed may be before the dashboard reports it stale. Both feeds publish daily, so the default tolerates one missed publication. |
@@ -641,8 +646,10 @@ Therefore:
 
 Outbound access the scanner needs: TCP 22 to Linux targets, and the configured
 WinRM port to any Windows host you run a connection test against. The feeds
-need HTTPS to `api.osv.dev`, `www.cisa.gov`, `epss.empiricalsecurity.com`, and
--- when the fleet runs Ubuntu -- `security-metadata.canonical.com`.
+need HTTPS to `api.osv.dev`, `www.cisa.gov`, `epss.empiricalsecurity.com`, and,
+only when the fleet runs them: `security-metadata.canonical.com` (Ubuntu),
+`linux.oracle.com` (Oracle Linux) and `cdn.amazonlinux.com` (Amazon Linux 2023).
+Fedora and Arch kernels are checked from `api.osv.dev`.
 
 ## Scaling
 

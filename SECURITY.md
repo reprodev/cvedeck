@@ -133,10 +133,20 @@ for is per release (`com.ubuntu.jammy.cve.oval.xml.bz2`), so Canonical can see
 that this address runs 22.04. `CVEDECK_UBUNTU_KERNEL_FEED=off` stops it; Ubuntu
 kernels then say they were not checked. Canonical states the feed is intended
 for third-party scanning tools; each installation downloads its own copy and
-none is redistributed. Only the running kernel is checked on Ubuntu, and hosts
-matched against a borrowed tracker (Arch, Fedora, Oracle Linux, Amazon Linux)
-still have their kernel unchecked. A kernel with no findings there is not a
-clean kernel.
+none is redistributed. Only the running kernel is checked on Ubuntu.
+
+**The Oracle and Amazon kernel feeds name those releases too.** Since 0.15.0 an
+Oracle Linux host's kernels are checked against Oracle's OVAL, fetched from
+`linux.oracle.com` per release (`com.oracle.elsa-ol9.xml.bz2`), and an Amazon
+Linux 2023 host's against its repository's advisories from
+`cdn.amazonlinux.com` (`al2023`). Each reveals the release, nothing about a
+host; neither publishes terms in writing, and each installation downloads its
+own copy. `CVEDECK_ORACLE_KERNEL_FEED=off` and `CVEDECK_AMAZON_KERNEL_FEED=off`
+stop them. Fedora and Arch kernels are checked against the kernel CNA's records
+from `api.osv.dev`, which reveals nothing about the fleet
+(`CVEDECK_UPSTREAM_KERNEL_FEED=off` stops it). Arch's `linux-zen` and
+`linux-hardened`, and Amazon Linux 2, are still not checked, and say so. A
+kernel with no findings there is not a clean kernel.
 
 **Credentials are held in memory during a scan.** They arrive in the request
 body, are wrapped in `SecretStr` so they are not logged or serialized, and are

@@ -464,6 +464,27 @@ class UbuntuKernelFeed(Base):
     payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
+class KernelFeed(Base):
+    """One kernel stream's advisories from one of the 0.15.0 kernel feeds (Req 12.12-12.14).
+
+    ``feed`` is ``upstream`` (the kernel CNA's records, for Fedora and Arch),
+    ``oracle:ol9`` or ``amazon:al2023``; ``stream`` is ``all``, a kernel family
+    and version (``kernel-uek:5.15.0``) or an Amazon kernel series
+    (``kernel6.12``). Compressed like the Ubuntu feed's rows, for the same
+    reason: a scan needs one stream, and the upstream set alone is 17,454
+    entries. ``payload`` is zlib-compressed JSON:
+    ``[[cve_id, severity, score, fixed, ranges], ...]``. A public dataset each
+    instance fetches for itself, so no ``sync_status``.
+    """
+
+    __tablename__ = "kernel_feeds"
+
+    feed: Mapped[str] = mapped_column(String, primary_key=True)
+    stream: Mapped[str] = mapped_column(String, primary_key=True)
+    entries: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+
+
 class KevEntry(Base):
     """One CVE from CISA's Known Exploited Vulnerabilities catalogue.
 
