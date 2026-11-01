@@ -32,7 +32,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Pinned to 3.12: the project requires >=3.11, and 3.12 has the widest wheel
 # coverage for paramiko/pywinrm/psycopg.
-FROM python:3.12-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 # gosu drops privileges in the entrypoint after fixing up /data ownership;
 # iputils-ping backs network discovery's ICMP probe. Without that one every
