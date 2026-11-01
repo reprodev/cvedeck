@@ -542,6 +542,14 @@ The kernel CNA's ranges overlap across series: "introduced 6.13, fixed 6.19.6" a
 
 **Validates: Requirements 12.12**
 
+### Property 22: Narrowing the scan history never hides a match
+
+*For any* list of scan jobs and any host, outcome and requester filter, the history SHALL show exactly the jobs that match every filter, in their original order, where a job matches an outcome when any one of its hosts had it; and with no filter set it SHALL show every job.
+
+A job is several outcomes at once -- one host failed, another came back partial -- so classifying it by its worst host would make a filter for partial scans skip the very jobs most worth reading.
+
+**Validates: Requirements 19.12**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).
@@ -938,6 +946,12 @@ scope, since the deployment runs a single uvicorn worker.
   or running. Server timestamps carry no offset (SQLite drops it) but are UTC,
   so the dashboard reads them through `parseServerTime`, which appends `Z` to a
   bare date-time; `Date.parse` alone reads them as local time (Req 19.11).
+- **Scan history filters (0.16.1).** Host, outcome and requester, applied in
+  the browser by `src/lib/jobFilters.ts`: the server keeps a hundred jobs and
+  sends them all, so a query parameter would buy nothing. An outcome matches
+  when any host had it (Property 22); "clean" needs every host scanned with
+  every source answering, so a job with no hosts is never clean. The requester
+  list is built from the jobs kept, plus the one selected (Req 19.12).
 
 ### Kernel feeds for Fedora, Arch, Oracle Linux and Amazon Linux 2023 (0.15.0)
 

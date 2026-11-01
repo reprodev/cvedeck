@@ -105,7 +105,12 @@ def _mode(path) -> str:
     ("auto", None, "delete"),
     ("wal", "nfs4", "delete"),
 ])
-def test_the_journal_is_set_and_read_back(tmp_path, setting, filesystem, expected):
+def test_the_journal_is_set_and_read_back(tmp_path, monkeypatch, setting, filesystem, expected):
+    # filesystem=None asks configure_sqlite to detect it, which on a Linux CI
+    # runner finds the real ext4 and picks WAL. Pin "unknown" here instead:
+    # this case passed on Windows, where detection is always unknown, and
+    # failed on the first Linux run.
+    monkeypatch.setattr(sqlite_journal, "filesystem_type", lambda _path: None)
     db = tmp_path / "cvedeck.db"
     state = configure_sqlite(_engine(db), setting, filesystem=filesystem)
     assert state.mode == expected

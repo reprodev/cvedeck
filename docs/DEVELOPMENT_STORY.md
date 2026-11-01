@@ -2982,3 +2982,28 @@ Under WAL the newest writes live in a file beside the database, so `cp` of the
 database alone can miss them. `cvedeck-admin backup` uses SQLite's own online
 backup, checks the copy before keeping it, and writes it as a self-contained
 file. Taken mid-scan in the container, it opened clean.
+
+## Chapter 35 — Narrowing the history, and a test that only ran on Windows (v0.16.1)
+
+Scan history kept a hundred jobs and could only be paged. The questions put to
+it were narrower: did last night's schedule fail anywhere, when did web-01 last
+scan. Three filters answer them, in the browser, since the server already sends
+all hundred.
+
+The one decision in it was what "Partial" should match. A job is several
+outcomes at once, and the obvious design ranks it by its worst host -- which
+files a job with one failure and one partial result under "failed" alone, so
+the filter for partial results skips it. A job now matches an outcome when any
+of its hosts had it, and Property 22 states that against a host-by-host
+restatement of the rule.
+
+### The red badge nobody was looking at
+
+0.16.0's CI had failed on `main` while its Release run passed, and nothing in
+the routine looked at the first. One test meant "auto on an unknown
+filesystem" and said so with `filesystem=None` -- which is how the code is
+told to detect the filesystem itself. Every release is verified on Windows,
+where detection always answers unknown, so it passed there every time; on the
+Linux runner it found ext4 and correctly chose WAL. The code was right. The
+routine now runs the backend suite in a Linux container before tagging, and
+checks the previous release's CI before starting the next.

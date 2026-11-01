@@ -728,6 +728,11 @@ can leave the page, and can see which host is being scanned.
 11. THE dashboard SHALL show times in the viewer's own time zone, and SHALL read
     a timestamp the server sends without a UTC offset as UTC, since that is what
     the server stores (extends Req 10.5, whose staleness depends on it).
+12. THE dashboard SHALL let the user narrow that list by host, by outcome and by
+    who requested the job; a job SHALL match an outcome WHEN any one of its hosts
+    had it, so one host's failure never hides another's partial result in the
+    same job; and WHEN no job matches THE dashboard SHALL name the filters
+    excluding them and offer to clear them (extends Req 13.5).
 
 ### Requirement 20: Scheduled scanning
 

@@ -65,6 +65,8 @@ Frontend layout:
                           each -- the drill-down used to keep private copies that drifted
 - src/lib/useUrlState.ts  hash-based routing (parseHash/formatHash/useUrlState). Hash, not
                           History API, on purpose -- see the invariant below
+- src/lib/jobFilters.ts   scan history filters (host, outcome, requester). A job matches an
+                          outcome when ANY host had it -- never rank it by its worst host
 - src/lib/useTheme.ts     theme preference: light / dark / system, persisted to localStorage,
                           applied by stamping data-theme on <html>
 - src/views/              ScanFormView, MachineListView, MachineDrillDownView, DiscoveryView

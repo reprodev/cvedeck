@@ -176,7 +176,7 @@ describe("ScanHistoryView (Req 19.10)", () => {
     expect(await screen.findByText("Showing 1 to 25 of 30 scans")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Next/ }));
     expect(screen.getByText("Showing 26 to 30 of 30 scans")).toBeInTheDocument();
-    expect(screen.getByText("user29")).toBeInTheDocument();
+    expect(within(screen.getByRole("table")).getByText("user29")).toBeInTheDocument();
   });
 
   it("reports a history that could not be loaded", async () => {
@@ -185,5 +185,94 @@ describe("ScanHistoryView (Req 19.10)", () => {
 
     expect(await screen.findByText(/Could not load scan history: Network down/)).toBeInTheDocument();
     expect(screen.getByText("No scans yet.")).toBeInTheDocument();
+  });
+});
+
+describe("ScanHistoryView filters (Req 19.12)", () => {
+  const partial = makeScanJob({
+    id: "job-4",
+    requestedBy: "token:ci",
+    targets: [
+      {
+        machineId: "nas",
+        hostname: "nas",
+        state: "done",
+        outcome: makeScanOutcome({ machineId: "nas", sourcesOk: false }),
+      },
+    ],
+  });
+
+  function startedCells() {
+    return screen.queryAllByRole("button", { expanded: false }).map((b) => b.closest("tr")!);
+  }
+
+  it("narrows by host, matching any host in the job and ignoring case", async () => {
+    renderView(api([[finished, cancelled, partial]]));
+    await screen.findAllByRole("button", { expanded: false });
+
+    await userEvent.type(screen.getByRole("textbox", { name: "Search scans by host" }), "WEB-02");
+    expect(startedCells()).toHaveLength(1);
+    expect(within(startedCells()[0]).getByText("Cancelled after 1 of 2")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1 to 1 of 1 scans (filtered from 3)")).toBeInTheDocument();
+  });
+
+  it("narrows by outcome, counting each, with a job listed under every outcome its hosts had", async () => {
+    renderView(api([[finished, cancelled, partial]]));
+    await screen.findAllByRole("button", { expanded: false });
+    const outcome = screen.getByRole("combobox", { name: "Filter by outcome" });
+
+    expect(within(outcome).getByRole("option", { name: "Failed or interrupted (1)" })).toBeInTheDocument();
+    expect(within(outcome).getByRole("option", { name: "Partial (1)" })).toBeInTheDocument();
+    expect(within(outcome).getByRole("option", { name: "Cancelled (1)" })).toBeInTheDocument();
+
+    await userEvent.selectOptions(outcome, "failed");
+    expect(startedCells()).toHaveLength(1);
+    expect(within(startedCells()[0]).getByText("1 succeeded · 1 failed")).toBeInTheDocument();
+
+    await userEvent.selectOptions(outcome, "partial");
+    expect(within(startedCells()[0]).getByText("API token ci")).toBeInTheDocument();
+  });
+
+  it("narrows by requester, offering only who has requested a kept scan", async () => {
+    renderView(api([[finished, cancelled, partial]]));
+    await screen.findAllByRole("button", { expanded: false });
+    const requester = screen.getByRole("combobox", { name: "Filter by requester" });
+
+    expect(within(requester).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Anyone",
+      "admin",
+      "API token ci",
+      "Schedule",
+    ]);
+    await userEvent.selectOptions(requester, "schedule");
+    expect(startedCells()).toHaveLength(1);
+    expect(within(startedCells()[0]).getByText("Schedule")).toBeInTheDocument();
+  });
+
+  it("names every filter excluding the rows, and clears them all", async () => {
+    renderView(api([[finished, cancelled, partial]]));
+    await screen.findAllByRole("button", { expanded: false });
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Filter by requester" }), "schedule");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Filter by outcome" }), "cancelled");
+
+    expect(screen.getByText("No scans match the current filters.")).toBeInTheDocument();
+    const status = screen.getByText("No scans match the current filters.").closest<HTMLElement>("[role=status]")!;
+    expect(within(status).getByText("Cancelled")).toBeInTheDocument();
+    expect(within(status).getByText("Schedule")).toBeInTheDocument();
+    expect(screen.queryByText("No scans yet.")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(startedCells()).toHaveLength(3);
+  });
+
+  it("goes back to the first page when a filter changes", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => makeScanJob({ id: `job-${i}`, requestedBy: "schedule" }));
+    renderView(api([many]));
+    await userEvent.click(await screen.findByRole("button", { name: /Next/ }));
+    expect(screen.getByText("Showing 26 to 30 of 30 scans")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole("textbox", { name: "Search scans by host" }), "web");
+    expect(screen.getByText("Showing 1 to 25 of 30 scans")).toBeInTheDocument();
   });
 });

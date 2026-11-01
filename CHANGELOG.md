@@ -8,6 +8,26 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.16.1] - 2026-11-01
+
+### Added
+
+- **Filters on Scan history.** Search by host, and narrow by outcome (failed or
+  interrupted, partial, clean, cancelled, queued or running -- each with a
+  count) and by who requested the scan. A job with one failed host and one
+  partial host is listed under both, so neither hides the other. When nothing
+  matches, the page says which filters are excluding scans and offers to clear
+  them.
+
+### Fixed
+
+- **A test that only passed on Windows.** 0.16.0's CI failed on Linux in one
+  journal-mode test, which meant to simulate an unknown filesystem but asked
+  CveDeck to detect the real one -- and on Linux it found ext4 and correctly
+  chose WAL. The test was wrong, not the code; the 0.16.0 image is unaffected.
+
+---
+
 ## [0.16.0] - 2026-11-01
 
 Nothing changes unless you turn it on.
