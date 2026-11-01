@@ -106,6 +106,7 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_ORACLE_KERNEL_FEED_URL` | Oracle's OVAL, `{release}` filled in | Source of the Oracle Linux kernel feed. |
 | `CVEDECK_AMAZON_KERNEL_FEED` | `on` | Fetch Amazon Linux 2023's advisories from its repository (`cdn.amazonlinux.com`) while the fleet has such a host, to check its kernels. `off` stops it. The request names the release. |
 | `CVEDECK_AMAZON_KERNEL_FEED_URL` | Amazon Linux's mirror list, `{release}` filled in | Source of the Amazon Linux kernel feed. |
+| `CVEDECK_SQLITE_JOURNAL` | `delete` | Which journal SQLite keeps. `wal` lets the dashboard keep answering while a large feed write commits (see "Faster reads: WAL" below), and is refused on a network filesystem. `auto` uses WAL only on a filesystem known to be local. Reported at `GET /api/health` once signed in. |
 | `CVEDECK_FEED_TIMEOUT` | `120.0` | Timeout in seconds for a whole-feed download. Separate from `CVEDECK_HTTP_TIMEOUT` because the EPSS set is a multi-megabyte file, not a per-package query. |
 | `CVEDECK_FEED_REFRESH_HOURS` | `24.0` | How often the application refreshes the intel feeds itself, starting at startup. `0` switches the built-in refresh off, for a deployment that drives it from its own scheduler. Each refresh also reapplies the feeds to findings already stored. Demo mode forces this to `0`. Reported at `GET /api/health`, which reports the interval actually running. |
 | `CVEDECK_FEED_MAX_AGE_HOURS` | `48.0` | How old a cached feed may be before the dashboard reports it stale. Both feeds publish daily, so the default tolerates one missed publication. |
@@ -136,17 +137,44 @@ files an older release left world-readable are closed on the next start.
 
 ## Data and backups
 
-Everything persistent lives in one file: `<data dir>/cvedeck.db`. The schema
-is created automatically on first start, so a fresh empty directory is a valid
-starting state — there is no migration step to run.
+Everything persistent lives in one file: `<data dir>/cvedeck.db` (with
+`cvedeck.db-wal` and `cvedeck.db-shm` beside it while CveDeck runs, if you turned
+WAL on). The schema is created automatically on first start, so a fresh empty
+directory is a valid starting state — there is no migration step to run.
 
-To back up, stop the container and copy the file:
+To back up while CveDeck keeps running, use the backup command. It takes a
+consistent copy with SQLite's online backup API, checks the copy's integrity,
+and refuses to overwrite a file unless you pass `--force`:
 
 ```bash
-docker compose stop
-cp /srv/cvedeck/cvedeck.db /backups/cvedeck-$(date +%F).db
-docker compose start
+docker exec --user 1000:1000 cvedeck cvedeck-admin backup /data/backup-$(date +%F).db
 ```
+
+Copying `cvedeck.db` with `cp` is only safe with the container stopped: while it
+runs, recent writes may still be in the `-wal` file, or caught mid-commit.
+PostgreSQL deployments use `pg_dump` instead.
+
+### Faster reads: WAL
+
+By default SQLite uses its rollback journal, which makes every read wait while
+a large write commits. A full feed refresh rewrites hundreds of thousands of
+rows, and on a slow disk the dashboard can stall for several seconds: measured
+with disk writes throttled to 5 MB/s, the slowest read was 16.8 s and the slowest
+write 17.0 s. With `CVEDECK_SQLITE_JOURNAL=wal` they were 1.7 s and 7.1 s.
+
+**Never use WAL with the database on a network filesystem** -- NFS, SMB/CIFS,
+sshfs or 9p. It relies on locking and shared memory those do not provide, and
+the database can be corrupted. CveDeck reads the filesystem holding `/data` and
+refuses `wal` on any of those, logging why. `auto` goes further and uses WAL
+only on a filesystem it knows to be local (ext4, xfs, btrfs, zfs, overlay,
+tmpfs and similar), keeping the rollback journal on anything else.
+
+A Docker named volume is local. A bind mount from Windows through Docker
+Desktop shows up as 9p, so WAL is refused there: use a named volume if you want
+it. The start-up log says which journal is in force and why, for example
+`SQLite journal: wal (auto, on local filesystem ext4)`. Switching back to
+`delete` converts the file on the next start; stopping CveDeck cleanly folds
+the WAL back into `cvedeck.db`.
 
 To upgrade to a newer release, pull and recreate:
 

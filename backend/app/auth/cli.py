@@ -8,6 +8,7 @@ the systemd feed timer uses ``refresh-feeds`` instead of an API token.
     docker exec -it --user 1000:1000 cvedeck cvedeck-admin reset-password
     docker exec -it --user 1000:1000 cvedeck cvedeck-admin create-user admin
     cvedeck-admin refresh-feeds
+    docker exec --user 1000:1000 cvedeck cvedeck-admin backup /data/backup.db
 
 Run it as the user that owns the data directory (``PUID:PGID``), or SQLite may
 leave a root-owned journal file behind that the server then cannot write.
@@ -49,6 +50,10 @@ def _session() -> Session:
         # the way it waits for ours.
         connect_args = {"timeout": SQLITE_BUSY_TIMEOUT}
     engine = create_engine(url, connect_args=connect_args)
+    # The same journal as the server it runs beside (Req 13.10).
+    from ..data.sqlite_journal import configure_sqlite
+
+    configure_sqlite(engine, config.sqlite_journal())
     upgrade_to_head(engine)
     return Session(engine)
 
@@ -79,9 +84,18 @@ def main(argv: list[str] | None = None) -> int:
         help="download the CISA KEV and FIRST EPSS feeds into the local cache",
     )
 
+    backup = sub.add_parser(
+        "backup",
+        help="write a consistent copy of the SQLite database while CveDeck runs",
+    )
+    backup.add_argument("target", help="file to write the copy to")
+    backup.add_argument("--force", action="store_true", help="replace the target if it exists")
+
     args = parser.parse_args(argv)
     if args.command == "refresh-feeds":
         return _refresh_feeds()
+    if args.command == "backup":
+        return _backup(args.target, force=args.force)
     try:
         with _session() as session:
             service = AuthService(session)
@@ -106,6 +120,75 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cvedeck-admin: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _backup(target: str, *, force: bool = False) -> int:
+    """Copy the live SQLite database with SQLite's online backup API (Req 13.11).
+
+    ``cp cvedeck.db`` copies whatever is on disk at that moment: under WAL the
+    newest writes are still in ``cvedeck.db-wal``, and even with the rollback
+    journal a copy taken mid-commit can be torn. The backup API takes a
+    consistent snapshot while CveDeck keeps running, in either journal mode.
+    The copy is then integrity-checked, so a backup that will not open is
+    found now rather than on the day it is needed.
+
+    Refuses to overwrite a file unless ``--force``, to write over the live
+    database, and to run against PostgreSQL, which has ``pg_dump`` for this.
+    Allowed in demo mode: it only reads the database it copies.
+    """
+    import os
+    import sqlite3
+    from pathlib import Path
+
+    url = config.database_url()
+    if not url.startswith("sqlite"):
+        print(
+            "cvedeck-admin: backup copies a SQLite database; this deployment uses "
+            "PostgreSQL. Use pg_dump.",
+            file=sys.stderr,
+        )
+        return 1
+    from sqlalchemy.engine import make_url
+
+    source = make_url(url).database
+    if not source or source == ":memory:" or not Path(source).exists():
+        print(f"cvedeck-admin: there is no database file at {source!r} to back up.", file=sys.stderr)
+        return 1
+    destination = Path(target)
+    if destination.exists() and os.path.samefile(destination, source):
+        print("cvedeck-admin: refusing to write the backup over the live database.", file=sys.stderr)
+        return 1
+    if destination.exists() and not force:
+        print(f"cvedeck-admin: {destination} already exists; use --force to replace it.", file=sys.stderr)
+        return 1
+    partial = destination.with_name(destination.name + ".partial")
+    partial.unlink(missing_ok=True)
+    # An ordinary connection that only reads. Not mode=ro: a WAL database
+    # opened read-only fails when its -wal and -shm files are absent, which is
+    # exactly the state a clean stop leaves.
+    live = sqlite3.connect(source, timeout=30.0)
+    copy = sqlite3.connect(partial)
+    try:
+        live.backup(copy)
+        result = _integrity_check(copy)
+        # A self-contained file whatever journal the live database keeps.
+        copy.execute("PRAGMA journal_mode=DELETE")
+    finally:
+        copy.close()
+        live.close()
+    if not result or result[0] != "ok":
+        partial.unlink(missing_ok=True)
+        print(f"cvedeck-admin: the copy failed its integrity check: {result}", file=sys.stderr)
+        return 1
+    os.replace(partial, destination)
+    size = destination.stat().st_size
+    print(f"Backed up {source} to {destination} ({size / 1_048_576:.1f} MB, integrity check ok).")
+    return 0
+
+
+def _integrity_check(connection) -> tuple | None:
+    """SQLite's own verdict on a database: ``("ok",)`` when sound."""
+    return connection.execute("PRAGMA integrity_check").fetchone()
 
 
 def _refresh_feeds() -> int:

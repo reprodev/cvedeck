@@ -407,6 +407,17 @@ host.
    rather than be refused, and a scan that fails SHALL NOT keep the next one
    waiting. (0.10.4 refused a second scan of a busy host with HTTP 409;
    background scanning, Requirement 19, replaced the refusal with the queue.)
+10. THE system SHALL keep SQLite's rollback journal unless the operator asks for
+    write-ahead logging; WHEN asked for it explicitly THE system SHALL use it
+    except on a filesystem known to be a network filesystem, where it SHALL
+    refuse it and say so; WHEN asked to choose THE system SHALL use it only on a
+    filesystem known to be local; and THE system SHALL report the journal mode
+    SQLite actually has in force, not the one requested.
+11. THE system SHALL offer a backup of the SQLite database that is consistent
+    while the system is running, in either journal mode; SHALL verify the copy's
+    integrity before keeping it; and SHALL NOT overwrite an existing file unless
+    told to, write over the live database, or attempt a SQLite backup of a
+    PostgreSQL deployment.
 
 ### Requirement 14: Accurate and reachable remediation guidance
 

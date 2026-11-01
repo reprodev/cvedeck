@@ -8,6 +8,30 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.16.0] - 2026-11-01
+
+Nothing changes unless you turn it on.
+
+### Added
+
+- **Faster reads during feed refreshes, if you want them: SQLite WAL.** Set
+  `CVEDECK_SQLITE_JOURNAL=wal` (or `auto`) and the dashboard keeps answering
+  while a large feed write commits. Measured with disk writes throttled to
+  5 MB/s during a full refresh, the slowest read went from 16.8 s to 1.7 s and
+  the slowest write from 17.0 s to 7.1 s. WAL is never used with the database on
+  a network filesystem (NFS, SMB/CIFS, sshfs, 9p), where it can corrupt it:
+  CveDeck checks the filesystem holding `/data` and refuses, saying why. `auto`
+  uses WAL only on a filesystem it knows to be local. On Windows, a Docker
+  Desktop bind mount counts as network (9p); use a named volume for WAL. The
+  start-up log and `GET /api/health` say which journal is in force. See
+  DEPLOYMENT.md.
+- **`cvedeck-admin backup <file>`.** A consistent copy of the database taken
+  while CveDeck runs, integrity-checked before it is kept. It won't overwrite a
+  file without `--force`. DEPLOYMENT.md's backup instructions now use it;
+  copying `cvedeck.db` by hand is only safe with the container stopped.
+
+---
+
 ## [0.15.0] - 2026-11-01
 
 **Upgrading:** a database migration adds a table for the new kernel feeds; it

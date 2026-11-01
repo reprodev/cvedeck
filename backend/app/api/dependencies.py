@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from .. import config
 from ..data.migrations_runtime import upgrade_to_head
+from ..data.sqlite_journal import configure_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,9 @@ def get_engine() -> Engine:
         # the SQLite file lives in exists before SQLAlchemy opens it.
         config.data_dir().mkdir(parents=True, exist_ok=True)
     engine = create_engine(url, connect_args=connect_args)
+    # Before the first migration, so every pooled connection keeps the journal
+    # the operator chose (Req 13.10). A no-op for PostgreSQL.
+    configure_sqlite(engine, config.sqlite_journal())
     upgrade_to_head(engine)
     _seed_demo_if_requested(engine)
     _prepare_access_control(engine)

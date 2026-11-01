@@ -31,12 +31,13 @@ from sqlalchemy.exc import OperationalError
 
 from .. import config
 from ..auth.dependencies import login_required, require_principal, resolve_principal
+from ..data import sqlite_journal
 from . import actions, auth_routes, routes, security
 from .dependencies import get_engine, get_scanner_engine, get_sync_service
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.15.0"
+_VERSION = "0.16.0"
 
 
 async def _validation_error_without_input(
@@ -171,6 +172,13 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
         if not login_required() or resolve_principal(request) is not None:
             capabilities["server_ssh_key"] = config.default_ssh_key_path() is not None
             capabilities["default_ssh_user"] = config.default_ssh_user() is not None
+            # Which journal SQLite is keeping, as SQLite reports it (Req 13.10);
+            # no path, nothing an operator would not want shown.
+            journal = sqlite_journal.current()
+            capabilities["database"] = {
+                "engine": "sqlite" if config.database_url().startswith("sqlite") else "postgresql",
+                "journal": journal.mode if journal is not None else None,
+            }
         return {"status": "ok", "version": _VERSION, "capabilities": capabilities}
 
     # Every router except the public auth routes is protected here, at include
@@ -267,6 +275,8 @@ async def _open_database_at_startup(_: FastAPI):
         await scan_schedule.stop_scan_schedule(schedule)
         await stop_periodic_refresh(refresher)
         scan_jobs.stop_worker()
+        # Under WAL, leave one self-contained database file behind (Req 13.10).
+        sqlite_journal.checkpoint(engine)
 
 
 def _configure_logging() -> None:

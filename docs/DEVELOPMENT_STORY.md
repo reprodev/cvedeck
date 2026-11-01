@@ -2942,3 +2942,43 @@ kernels turned up an older problem too: Oracle's UEK, Amazon's `kernel6.12` and
 Arch's `linux-zen` had never been known as kernels at all, so they had been
 matched as ordinary packages against a tracker that knew nothing about them,
 and could read as clean.
+
+## Chapter 34 — The journal, and a probe that lied (v0.16.0)
+
+The read stall had been known since 0.10.3: with a slow disk, the dashboard
+froze for about twenty seconds while the Ubuntu kernel feed's 844,000 rows
+committed, because SQLite's rollback journal makes every reader wait out a
+commit. Write-ahead logging fixes it, and corrupts databases on network
+filesystems. The owner had asked for exactly that trade to be handled
+carefully, and chose it carefully now: WAL only when asked for, an allowlist
+when CveDeck is asked to decide, and an explicit request refused on NFS, SMB or
+9p. Docker Desktop's bind mounts on Windows turned out to be 9p, so they fall
+back too, which is the right answer and needed saying in the docs.
+
+### Asking SQLite what it did
+
+Setting the mode is not the same as having it. SQLite keeps its current mode,
+quietly, when another connection holds the file, so CveDeck reads the mode back
+and reports that. The tests found the less quiet case too: switching away from
+WAL with another process holding the database raises "database is locked"
+instead of failing silently, which at start-up would have stopped the server
+because the admin CLI happened to be open.
+
+### The probe
+
+The first measurement looked like a trade-off: reads 17.3 s down to 1.5 s, but
+writes 0.6 s up to 7.1 s. The probe took a write and then a read, one after the
+other, so while a read hung for seventeen seconds under the rollback journal no
+write was even attempted, and the write stall it would have met was never
+measured. With the two probes run independently the rollback journal's worst
+write was 17.0 s, and WAL improved both: 16.8 to 1.7 s for reads, 17.0 to 7.1 s
+for writes. The same pattern had produced the "0.85 s" write figure recorded
+for 0.10.4. The remaining seven seconds are one transaction streaming its pages
+out at 5 MB/s, and chunking it is the next step if anyone needs one.
+
+### A backup that is a backup
+
+Under WAL the newest writes live in a file beside the database, so `cp` of the
+database alone can miss them. `cvedeck-admin backup` uses SQLite's own online
+backup, checks the copy before keeping it, and writes it as a self-contained
+file. Taken mid-scan in the container, it opened clean.

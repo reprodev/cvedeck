@@ -968,6 +968,31 @@ installed kernel is assessed. Each source has an off switch and a URL
 override; the daily refresh fetches only the feeds the fleet needs, and the
 first scan of a distribution fetches its feed on demand, as for Ubuntu.
 
+### Journal mode and backups (0.16.0)
+
+Req 13.10, 13.11. `app/data/sqlite_journal.py` decides which journal SQLite
+keeps. `CVEDECK_SQLITE_JOURNAL` is `delete` by default (the rollback journal),
+`auto` (WAL only on a filesystem on the `LOCAL` allowlist) or `wal` (WAL unless
+the filesystem is on the `NETWORK` list). The filesystem comes from
+`/proc/self/mountinfo`, by the longest mount point containing the database
+directory; elsewhere it is unknown, which `auto` treats as not local. The whole
+policy is `decide()`. `configure_sqlite` sets the mode on every connection and
+reads it back, because SQLite keeps the old mode when it cannot switch (another
+process holding the file); the read-back is what is logged and what
+`GET /api/health` reports. A clean stop under WAL runs
+`wal_checkpoint(TRUNCATE)`.
+
+Measured on 2026-11-01 with disk writes throttled to 5 MB/s, during a full
+refresh that rewrites Ubuntu's 882,721-row kernel feed, with independent read
+and write probes: the rollback journal's slowest read was 16.8 s and slowest
+write 17.0 s; WAL's were 1.7 s and 7.1 s, medians unchanged. The remaining
+write wait is that one transaction holding the write lock while its pages
+stream out; chunking it is the further step.
+
+`cvedeck-admin backup <file>` copies the live database with SQLite's online
+backup API, integrity-checks the copy, writes it in the rollback journal so it
+stands alone, and only then moves it into place.
+
 ### Scheduled scanning (0.12.0)
 
 One daily schedule, stored in `scan_schedule` and set from the dashboard

@@ -328,6 +328,13 @@ environment the app reads, so no alembic.ini edit is needed.
   the refresher is idempotent and owns no scan. `next_due` is pure and naive-local
   by design (Property 19); keep DST and catch-up reasoning there. No remediation
   is ever automatic.
+- **SQLite WAL is opt-in, and never on a network filesystem** (0.16.0, Req 13.10,
+  `data/sqlite_journal.py`). Do not make it the default without the owner's
+  decision; do not apply it outside `decide()`; keep the `NETWORK` refusal under an
+  explicit `wal` -- WAL on NFS/SMB/9p can corrupt the database. Docker Desktop bind
+  mounts on Windows report `9p` and correctly fall back. Report the mode SQLite
+  read back, never the one requested. `cp cvedeck.db` is not a safe backup under
+  WAL while running: point people at `cvedeck-admin backup` (Req 13.11).
 - **Kernel feeds (0.15.0, Req 12.12-12.14).** Fedora and Arch kernels are checked
   against the kernel CNA's records via OSV, Oracle Linux against Oracle's OVAL,
   Amazon Linux 2023 against its repo updateinfo (`scanner/kernel_feeds.py`,

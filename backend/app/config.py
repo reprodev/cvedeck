@@ -69,6 +69,24 @@ def static_dir() -> Path | None:
     return Path(raw)
 
 
+def sqlite_journal() -> str:
+    """Which journal SQLite keeps: ``delete`` (default), ``auto`` or ``wal`` (Req 13.10).
+
+    ``delete`` is the rollback journal every release has used. ``wal`` lets
+    dashboard reads carry on while a large write commits, and is refused on a
+    network filesystem (NFS, SMB, sshfs, 9p), where it can corrupt the
+    database; ``auto`` uses it only on a filesystem known to be local. See
+    app.data.sqlite_journal. Anything else is refused at start-up rather than
+    quietly read as the default.
+    """
+    raw = os.environ.get("CVEDECK_SQLITE_JOURNAL", "delete").strip().lower() or "delete"
+    if raw not in ("delete", "auto", "wal"):
+        raise ValueError(
+            f"CVEDECK_SQLITE_JOURNAL must be delete, auto or wal, not {raw!r}"
+        )
+    return raw
+
+
 def cors_origins() -> list[str]:
     """Allowed CORS origins, empty when the API and dashboard share an origin.
 
