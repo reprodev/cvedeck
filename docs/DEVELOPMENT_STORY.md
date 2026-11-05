@@ -3007,3 +3007,19 @@ where detection always answers unknown, so it passed there every time; on the
 Linux runner it found ext4 and correctly chose WAL. The code was right. The
 routine now runs the backend suite in a Linux container before tagging, and
 checks the previous release's CI before starting the next.
+
+## Chapter 36 — The version nothing tested (v0.16.2)
+
+Dependabot's pull request changed one line: the image's base from Python 3.12
+to 3.15. Reading it raised a question nobody had asked. CI tested 3.11 and 3.13,
+the oldest and newest supported, and the image ran 3.12 -- a version CI had
+never run. The old pin's reason, "the widest wheel coverage", was a guess that
+had never been rechecked.
+
+So the change grew by two lines and a check. CI's matrix gained 3.15, so the
+version the image runs is the newest one tested. Before tagging, the suite ran
+on 3.15 and 3.11 under Linux, and the arm64 image was built under emulation,
+since the release workflow builds it and a missing wheel there would have shown
+up only after the tag was pushed. Every compiled dependency came as a wheel on
+both. pip's bundled certifi, which cost 0.13.0 its image, was checked against
+the advisory published two weeks earlier, and is past it.

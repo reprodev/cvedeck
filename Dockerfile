@@ -30,9 +30,12 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage 2: runtime
 # ---------------------------------------------------------------------------
-# Pinned to 3.12: the project requires >=3.11, and 3.12 has the widest wheel
-# coverage for paramiko/pywinrm/psycopg.
-FROM python:3.12-slim AS runtime
+# The newest Python, and CI tests it (the backend matrix in ci.yml): the image
+# must never run a version nothing tests. Every compiled dependency ships cp315
+# or abi3 wheels for amd64 and arm64 -- checked on 2026-11-05 for pydantic-core,
+# cffi, psycopg-binary, markupsafe, greenlet, sqlalchemy, cryptography, bcrypt
+# and pynacl -- so nothing is built from source on either platform.
+FROM python:3.15-slim AS runtime
 
 # gosu drops privileges in the entrypoint after fixing up /data ownership;
 # iputils-ping backs network discovery's ICMP probe. Without that one every

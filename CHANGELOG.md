@@ -8,6 +8,24 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.16.2] - 2026-11-05
+
+Maintenance: dependency updates, and the image moves to Python 3.15.
+
+### Changed
+
+- **The image runs Python 3.15** (was 3.12), and CI now tests 3.15 alongside
+  3.11 and 3.13. Before this the image ran a Python version CI never tested.
+  Every compiled dependency installs from a prebuilt wheel on both amd64 and
+  arm64.
+- **pydantic 2.14.2**, which fixes two security advisories in how extra data is
+  handled during validation. CveDeck's models are not affected by its one
+  behaviour change.
+- GitHub Actions: setup-python 7.1.0, setup-node 7.1.0, docker/login-action
+  4.7.0.
+
+---
+
 ## [0.16.1] - 2026-11-01
 
 ### Added
