@@ -54,7 +54,7 @@ from ..package_identifier import (
     parse_package_name,
     parse_package_version,
 )
-from ..services import scan_jobs, scan_schedule
+from ..services import notifications, notify_destination, scan_jobs, scan_schedule
 from ..services.enrichment import FindingEnricher
 from ..services.kernel import KernelView, decode_unfixed, kernel_view
 from .dependencies import get_session
@@ -63,6 +63,7 @@ from .schemas import (
     FeedHealthOut,
     FindingChangeOut,
     HostKeyOut,
+    NotificationsOut,
     InstalledKernelOut,
     KernelOut,
     MachineScanOut,
@@ -697,6 +698,8 @@ def scan_job_out(job: ScanJob) -> ScanJobOut:
         error_detail=job.error_detail,
         cancellable=scan_jobs.is_cancellable(job),
         cancel_requested=scan_jobs.cancel_requested(job),
+        notification_status=job.notification_status,
+        notification_error=job.notification_error,
         targets=[
             ScanJobTargetOut(
                 machine_id=row.machine_id,
@@ -745,3 +748,39 @@ def scan_schedule_out(session: Session) -> ScanScheduleOut:
 def get_scan_schedule(session: Session = Depends(get_session)) -> ScanScheduleOut:
     """The daily scheduled scan: on or off, when, for how many hosts (Req 20.2)."""
     return scan_schedule_out(session)
+
+
+def notifications_out(session: Session) -> NotificationsOut:
+    """Alert settings plus what the environment amounts to (Req 21.10, 21.14).
+
+    Built from the policy's public fields alone; the destination itself, which
+    holds the URL and token, is never read here.
+    """
+    row = notifications.get_notification_settings(session)
+    session.commit()  # the row is created, off, on first read
+    policy = notify_destination.evaluate(notify_destination.read_config())
+    return NotificationsOut(
+        configured=policy.configured,
+        kind=policy.kind,
+        destination_host=policy.destination_host,
+        problems=list(policy.problems),
+        detail_in_effect=policy.detail_in_effect,
+        detail_reason=policy.detail_reason,
+        allow_http=policy.allow_http,
+        allow_public=policy.allow_public,
+        link=policy.link,
+        signed=policy.signed,
+        enabled=row.enabled,
+        threshold=notifications.threshold_of(row),
+        include_not_checked=row.include_not_checked,
+        last_sent_at=row.last_sent_at,
+        last_status=row.last_status,
+        last_error=row.last_error,
+        last_job_id=row.last_job_id,
+    )
+
+
+@router.get("/notifications", response_model=NotificationsOut)
+def get_notifications(session: Session = Depends(get_session)) -> NotificationsOut:
+    """Alerts for scheduled scans: on or off, threshold, destination host (Req 21)."""
+    return notifications_out(session)

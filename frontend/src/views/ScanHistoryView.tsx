@@ -23,6 +23,7 @@ import { useToast } from "../components/Toast";
 import {
   durationLabel,
   formatServerTime,
+  notificationStatusLabel,
   relativeTime,
   requestedByLabel,
   statusLabel,
@@ -306,6 +307,7 @@ export function ScanHistoryView({
                     {shown.map((job) => {
                       const open = expanded === job.id;
                       const outcome = jobOutcomeLabel(job);
+                      const alert = notificationStatusLabel(job.notificationStatus);
                       const when = job.startedAt ?? job.createdAt;
                       const detailsId = `scan-job-${job.id}`;
                       return (
@@ -329,6 +331,9 @@ export function ScanHistoryView({
                             <td data-label="Hosts">{job.targets.length}</td>
                             <td data-label="Outcome">
                               <span className={`badge badge-status-${outcome.tone}`}>{outcome.text}</span>
+                              {alert && (
+                                <span className={`badge badge-status-${alert.tone}`}>{alert.text}</span>
+                              )}
                             </td>
                             <td data-label="Duration" data-col="duration">
                               {durationLabel(job.startedAt, job.finishedAt)}
@@ -350,6 +355,9 @@ export function ScanHistoryView({
                             <tr id={detailsId}>
                               <td colSpan={6}>
                                 {job.errorDetail && <p className="scan-history-detail">{job.errorDetail}</p>}
+                                {job.notificationError && (
+                                  <p className="scan-history-detail">Alert: {job.notificationError}</p>
+                                )}
                                 <table className="scan-history-hosts">
                                   <thead>
                                     <tr>

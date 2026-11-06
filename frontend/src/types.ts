@@ -386,6 +386,13 @@ export interface ScanJob {
   cancellable: boolean;
   /** Asked to cancel; it stops once the host being scanned is done (Req 19.8). */
   cancelRequested: boolean;
+  /**
+   * What happened to a scheduled job's alert (Req 21.8): "sent", "failed",
+   * "refused" or "nothing_to_send"; null when the job sends none.
+   */
+  notificationStatus: string | null;
+  /** Destination host plus status, never the URL (Req 21.12). */
+  notificationError: string | null;
   targets: ScanJobTarget[];
 }
 
@@ -403,6 +410,43 @@ export interface ScanSchedule {
   /** Hosts whose last successful scan used the server key. */
   eligibleHosts: number;
   serverKeyConfigured: boolean;
+}
+
+/**
+ * Alerts for scheduled scans (Req 21). Where they go and how much they say
+ * are set in the server's environment; the dashboard sees the destination's
+ * host only, never its URL or token (Req 21.10).
+ */
+export interface NotificationSettings {
+  /** A destination URL is set in the environment. */
+  configured: boolean;
+  /** "webhook" or "ntfy". */
+  kind: string;
+  destinationHost: string | null;
+  /** Why nothing can be sent as configured; empty when it can. */
+  problems: string[];
+  /** "summary" or "detailed". */
+  detailInEffect: string;
+  /** Why a detailed configuration is sending summaries (Req 21.14). */
+  detailReason: string | null;
+  allowHttp: boolean;
+  allowPublic: boolean;
+  link: boolean;
+  signed: boolean;
+  enabled: boolean;
+  /** "kev", "critical" or "high". */
+  threshold: string;
+  includeNotChecked: boolean;
+  lastSentAt: string | null;
+  lastStatus: string | null;
+  lastError: string | null;
+  lastJobId: string | null;
+}
+
+/** The result of a test alert. */
+export interface TestNotificationResult {
+  status: string;
+  error: string | null;
 }
 
 /** Deployment capabilities reported by the backend. */

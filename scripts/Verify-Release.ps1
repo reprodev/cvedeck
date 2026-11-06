@@ -200,7 +200,10 @@ else {
                         @('POST', '/api/discovery/enroll'),
                         @('POST', '/api/sync'),
                         @('POST', '/api/machines/x/cves/CVE-2024-0001/remediation'),
-                        @('PUT', '/api/remediation/x')
+                        @('PUT', '/api/remediation/x'),
+                        # Alerts (Req 21.9): the test route sends a message on request.
+                        @('PUT', '/api/notifications'),
+                        @('POST', '/api/notifications/test')
                     )
                     foreach ($write in $writes) {
                         $method = $write[0]; $route = $write[1]

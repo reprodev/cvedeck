@@ -48,6 +48,8 @@ const jobArb: fc.Arbitrary<ScanJob> = fc.record({
   startedAt: fc.constant(null),
   finishedAt: fc.constant(null),
   errorDetail: fc.constant(null),
+  notificationStatus: fc.constantFrom(null, "sent", "failed"),
+  notificationError: fc.constant(null),
   cancellable: fc.boolean(),
   cancelRequested: fc.boolean(),
   targets: fc.array(targetArb, { maxLength: 4 }),

@@ -27,6 +27,20 @@ function client({ demoMode }: { demoMode: boolean }) {
       case "/api/feeds":
       case "/api/scans/jobs":
         return jsonResponse([]);
+      case "/api/notifications":
+        return jsonResponse({
+          configured: false,
+          kind: "webhook",
+          problems: [],
+          detail_in_effect: "summary",
+          allow_http: false,
+          allow_public: false,
+          link: false,
+          signed: false,
+          enabled: false,
+          threshold: "critical",
+          include_not_checked: true,
+        });
       case "/api/scan-schedule":
         return jsonResponse({
           enabled: false,
@@ -54,6 +68,14 @@ describe("Settings without sign-in (Req 20.2)", () => {
 
     expect(await screen.findByLabelText("Scan every day")).toBeInTheDocument();
     expect(screen.queryByText("Change password")).not.toBeInTheDocument();
+  });
+
+  it("shows the alerts panel, wired to the API (Req 21)", async () => {
+    render(<App client={client({ demoMode: false })} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+
+    expect(await screen.findByTestId("alerts-not-configured")).toHaveTextContent("CVEDECK_NOTIFY_URL");
   });
 
   it("is not offered in a public demo, which changes nothing", async () => {

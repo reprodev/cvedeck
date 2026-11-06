@@ -147,6 +147,34 @@ export function requestedByLabel(requestedBy: string): string {
   return requestedBy;
 }
 
+/**
+ * What happened to a scheduled job's alert (Req 21.8), and the tone to show
+ * it in. Null for "nothing_to_send" and for a job that sends none: the common
+ * case needs no badge. Amber, never red, for a failure -- red is reserved for
+ * exploitation.
+ */
+export function notificationStatusLabel(
+  status: string | null,
+): { text: string; tone: "success" | "warn" } | null {
+  switch (status) {
+    case "sent":
+      return { text: "Alert sent", tone: "success" };
+    case "failed":
+      return { text: "Alert failed", tone: "warn" };
+    case "refused":
+      return { text: "Alert refused", tone: "warn" };
+    default:
+      return null;
+  }
+}
+
+/** The dashboard's choice of what is worth an alert (Req 21.4). */
+export const NOTIFICATION_THRESHOLDS: { value: string; label: string }[] = [
+  { value: "kev", label: "Actively exploited only" },
+  { value: "critical", label: "Actively exploited, or critical" },
+  { value: "high", label: "Actively exploited, critical or high" },
+];
+
 /** How long a job ran: "12s", "2m 10s", "1h 5m"; "–" before it starts. */
 export function durationLabel(
   startedAt: string | null,

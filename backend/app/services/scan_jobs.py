@@ -43,6 +43,7 @@ from ..data.schema import ScanJob, ScanJobTarget, TargetMachine as TargetMachine
 from ..enums import ScanJobStatus, ScanJobTargetState, ScanStatus
 from ..models import Credentials, TargetMachine
 from ..scanner.engine import MachineScan, ScannerEngine
+from .notifications import notify_after_job
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -196,7 +197,12 @@ def _prune(session: Session) -> None:
     )
 
 
-def run_job(session: Session, job_id: str, engine: ScannerEngine) -> ScanJob | None:
+def run_job(
+    session: Session,
+    job_id: str,
+    engine: ScannerEngine,
+    outcomes: list[MachineScan] | None = None,
+) -> ScanJob | None:
     """Run a queued job, holding the scan slot until it is done (Req 19.1, 19.2).
 
     Each host is marked running before it is scanned and its outcome written
@@ -204,6 +210,10 @@ def run_job(session: Session, job_id: str, engine: ScannerEngine) -> ScanJob | N
     An engine that reports nothing until the end still has its outcomes written
     then. A job that is not queued -- already run, or interrupted -- is returned
     untouched.
+
+    ``outcomes``, when given, collects each completed host's scan, diff
+    included, so the worker can build the job's alert without the diffs having
+    to be read back from the database (Req 21.2).
     """
     with _scan_slot:
         job = session.get(ScanJob, job_id)
@@ -246,6 +256,8 @@ def run_job(session: Session, job_id: str, engine: ScannerEngine) -> ScanJob | N
             if row is not None:
                 _record_outcome(session, row, scan)
                 session.commit()
+                if outcomes is not None:
+                    outcomes.append(scan)
 
         engine.set_credentials(credentials)
         engine.on_target_start = started
@@ -266,6 +278,8 @@ def run_job(session: Session, job_id: str, engine: ScannerEngine) -> ScanJob | N
                 row = row_for(scan.machine_id)
                 if row is not None:
                     _record_outcome(session, row, scan)
+                    if outcomes is not None:
+                        outcomes.append(scan)
             with _credentials_lock:
                 cancelled_by = _cancel_requested.get(job_id)
             skipped = [r for r in pending if r.state is not ScanJobTargetState.DONE]
@@ -454,12 +468,18 @@ class ScanJobWorker:
                 finally:
                     item.done.set()
                 continue
+            outcomes: list[MachineScan] = []
             try:
                 with self._session_factory() as session:
-                    run_job(session, item, self._engine_factory(session))
+                    run_job(session, item, self._engine_factory(session), outcomes)
             except Exception:
                 # Recorded on the job by run_job; the worker carries on.
                 _LOGGER.exception("Scan job %s failed", item)
+            # After the job is committed and the scan slot released, so a slow
+            # receiver never delays the next scan. Only scheduled jobs send, and
+            # notify_after_job never raises (Req 21.2, 21.8). Scheduled jobs
+            # only ever arrive here, through submit(), never as a _Handoff.
+            notify_after_job(self._session_factory, item, outcomes)
 
 
 _worker: ScanJobWorker | None = None

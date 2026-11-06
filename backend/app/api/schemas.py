@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 from ..enums import (
     FeedStatus,
     FindingChange,
+    NotificationStatus,
+    NotificationThreshold,
     Platform,
     RemediationStatus,
     ScanJobStatus,
@@ -514,6 +516,11 @@ class ScanJobOut(BaseModel):
     cancellable: bool = False
     #: Asked to cancel while scanning a host; it stops once that host is done.
     cancel_requested: bool = False
+    #: What happened to a scheduled job's alert (Req 21.8); ``None`` when the
+    #: job sends none. ``notification_error`` names the destination host and
+    #: status only (Req 21.12).
+    notification_status: NotificationStatus | None = None
+    notification_error: str | None = None
     targets: list[ScanJobTargetOut]
 
 
@@ -539,6 +546,57 @@ class ScanScheduleIn(BaseModel):
 
     enabled: bool
     time_of_day: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$", max_length=5)
+
+
+class NotificationsOut(BaseModel):
+    """Alerts for scheduled scans: what is set, and where they would go (Req 21).
+
+    Deliberately without the URL, token or secret (Req 21.10): the destination
+    is shown by host alone, because a webhook path or an ntfy topic is itself a
+    secret, and this response reaches any signed-in browser.
+    """
+
+    #: A destination URL is set in the environment.
+    configured: bool
+    kind: str
+    destination_host: str | None = None
+    #: Why nothing can be sent as configured; empty when it can.
+    problems: list[str] = Field(default_factory=list)
+    detail_in_effect: str
+    #: Why a detailed configuration is sending summaries (Req 21.14).
+    detail_reason: str | None = None
+    allow_http: bool
+    allow_public: bool
+    link: bool
+    signed: bool
+    enabled: bool
+    threshold: NotificationThreshold
+    include_not_checked: bool
+    last_sent_at: datetime | None = None
+    last_status: NotificationStatus | None = None
+    last_error: str | None = None
+    last_job_id: str | None = None
+
+
+class NotificationsIn(BaseModel):
+    """What the dashboard may change about alerts (Req 21.1, 21.4, 21.5).
+
+    Only how often they fire, never where they go or what they say: no field
+    here can name a destination or raise the detail level (Req 21.10).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool
+    threshold: NotificationThreshold
+    include_not_checked: bool
+
+
+class TestNotificationOut(BaseModel):
+    """The result of a test alert (Req 21.8)."""
+
+    status: NotificationStatus
+    error: str | None = None
 
 
 class SyncResponse(BaseModel):

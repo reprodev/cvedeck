@@ -8,6 +8,48 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.17.0] - 2026-11-06
+
+Alerts after scheduled scans.
+
+### Added
+
+- **Alerts when a scheduled scan finds something new** (Req 21). There is one
+  message per scheduled scan, sent to a webhook or an ntfy topic. It goes out
+  only when a new finding is actively exploited (CISA KEV) or at or above the
+  threshold you choose, or when a host could not be checked. There is never an
+  all-clear, and nothing for a host's first scan. Set the destination with
+  `CVEDECK_NOTIFY_URL`, then switch alerts on in **Settings → Alerts**, which
+  can also send a test alert. See DEPLOYMENT.md, "Notifications".
+- **Alerts are built so they can't become a leak:**
+  - The destination, token and detail level are set only in the environment.
+    The dashboard can switch alerts on or off and pick the threshold, but it
+    can't redirect them or make them say more.
+  - Alerts stay on your network unless `CVEDECK_NOTIFY_ALLOW_PUBLIC` is set.
+    Every address the destination resolves to is checked, and CveDeck connects
+    to the address it checked.
+  - Messages are summaries by default: counts only, nothing that names a
+    machine, and no version or link unless you opt in.
+  - Detailed messages need a token and are never sent to ntfy.sh. On a public
+    ntfy server the topic must be long and random, and Settings will suggest
+    one.
+  - A token is never sent over plain http unless you allow it. Redirects are
+    not followed. Errors name the destination's host, never its URL.
+  - Webhook messages can be signed with HMAC-SHA256
+    (`CVEDECK_NOTIFY_SECRET`).
+- **Scan history shows each scheduled scan's alert**: sent, failed or refused,
+  and why.
+
+### Changed
+
+- hypothesis 6.170.14 (test-only).
+
+A migration adds the alert settings table and two columns on scan jobs; it
+runs on start. Alerts are off until you configure and enable them, so an
+upgraded instance sends nothing new.
+
+---
+
 ## [0.16.2] - 2026-11-05
 
 Maintenance: dependency updates, and the image moves to Python 3.15.

@@ -550,6 +550,14 @@ A job is several outcomes at once -- one host failed, another came back partial 
 
 **Validates: Requirements 19.12**
 
+### Property 23: An alert is sent exactly when there is something to act on, and says no more than it may
+
+*For any* scheduled job, any set of host outcomes and any notification settings, a message SHALL be produced exactly when the job ended finished or cancelled AND either some non-baseline new finding qualifies (KEV-listed, or at or above the threshold) or, with that option on, some host was not checked; its KEV count SHALL never include a finding whose KEV state is unknown; and a summary SHALL contain no hostname, CVE identifier, package name or CveDeck version, and no link unless the link is opted in.
+
+The first half keeps the channel worth reading: a nightly "all clear" or a baseline's thousand findings teaches people to mute it. The second half is the enrichment invariant again -- an unchecked KEV answer must never read as a clean one -- and the privacy rule that makes a leaked summary say nothing about which machines are exposed.
+
+**Validates: Requirements 21.2, 21.3, 21.4, 21.5, 21.6, 21.7, 21.16**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).
@@ -1026,3 +1034,67 @@ through daylight-saving changes, and only the latest slot is ever due
 - **Arming.** Switching on or changing the time sets `armed_at`, so a slot
   already past that day is not run on the spot.
 
+### Notifications (0.17.0)
+
+One message per scheduled job, to one destination the operator runs, and only
+when something new is worth acting on (Req 21). It is the first time CveDeck
+pushes data out on its own initiative, so the design is shaped by one rule:
+**where data goes, and how much of it goes, is set by the operator in the
+environment; the dashboard can only make alerts quieter or louder.** A stolen
+API token, or a dashboard left open with sign-in off, then cannot redirect
+alerts or make them say more.
+
+- **Configuration.** `CVEDECK_NOTIFY_URL`, `CVEDECK_NOTIFY_KIND` (`webhook` |
+  `ntfy`), `CVEDECK_NOTIFY_TOKEN[_FILE]`, `CVEDECK_NOTIFY_SECRET[_FILE]`,
+  `CVEDECK_NOTIFY_DETAIL` (`summary` | `detailed`), and three opt-ins that
+  default off: `CVEDECK_NOTIFY_ALLOW_HTTP`, `CVEDECK_NOTIFY_ALLOW_PUBLIC`,
+  `CVEDECK_NOTIFY_LINK` (with `CVEDECK_PUBLIC_URL`). The dashboard stores only
+  `enabled`, the threshold and whether unchecked hosts are reported, in the
+  one-row `notification_settings` table. A bad value never stops the app: it is
+  reported as a configuration problem and nothing is sent.
+- **Destination policy** (`services/notify_destination.py`). Pure checks on the
+  configuration -- scheme, no userinfo, a topic for ntfy, no token over plain
+  http without the opt-in, topic strength whenever public destinations are
+  allowed -- and the
+  detail level actually used: detailed only with a token and never to
+  `ntfy.sh`, where a token proves the right to publish but not that the topic
+  is reserved (Req 21.12, 21.14, 21.17).
+- **LAN only by default** (Req 21.15). Every address the destination resolves
+  to must fall in an explicit allowlist (127/8, 10/8, 172.16/12, 192.168/16,
+  169.254/16, 100.64/10, ::1, fc00::/7, fe80::/10; IPv4-mapped addresses
+  unwrapped first). Not `ipaddress.is_private`, which also answers True for the
+  RFC 5737 documentation ranges and other special-use blocks. The request is
+  then sent to the checked address, with the original `Host` header and, for
+  https, the original name as TLS server name, so the certificate is still
+  verified against the name and a DNS answer that changes between check and
+  connect cannot redirect it. Proxies from the environment are honoured only
+  when public destinations are allowed.
+- **Digest** (`services/notifications.py`, Property 23). A pure function of the
+  job, its hosts' `FindingDiff`s, the settings and whether the KEV feed is
+  usable. Baselines contribute nothing; a NULL KEV state is counted as unknown;
+  scan-derived strings are stripped of control characters and capped. Headers
+  are built from counts alone, so a hostname a compromised host chose can never
+  reach one (Req 21.11). ntfy markdown is never switched on.
+- **Delivery.** After the job is committed and the scan slot released, from the
+  worker thread; bounded by `CVEDECK_HTTP_TIMEOUT`, one retry on a connection
+  error or 5xx, no redirects, at most 4 KiB of response read and never parsed.
+  The result is stored on the job (`scan_jobs.notification_status`,
+  `notification_error`) and on the settings row. Errors are recorded as
+  destination host plus status or error class, never the URL -- webhook paths
+  often embed secrets, and an ntfy topic is a password (Req 21.10, 21.12). A
+  failure, or a bug in the notifier, is logged and never reaches the job's
+  outcome or the worker loop (Req 21.8).
+- **Signing.** With a secret configured, webhook messages carry
+  `X-CveDeck-Timestamp` and `X-CveDeck-Signature: sha256=<hex>` over
+  `timestamp + "." + body`, so a receiver can reject forged or replayed alerts
+  (Req 21.13).
+- **Routes.** `GET /api/notifications` (state, destination host, the detail
+  level in effect and why, problems; never the URL, token or secret),
+  `PUT /api/notifications`, and `POST /api/notifications/test`, which sends a
+  message labelled as a test through the same policy, at most once per 30
+  seconds. Both writes are refused in demo mode by route-level guards (Req 21.9)
+  and written to the security log.
+- **Statuses are strings, not a database enum.** `notification_status` and the
+  threshold are `String` columns validated through `NotificationStatus` /
+  `NotificationThreshold`, so adding a status later needs no PostgreSQL enum
+  migration.

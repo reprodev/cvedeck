@@ -123,6 +123,7 @@ Every setting is an environment variable; all of them are optional.
 | `CVEDECK_ADMIN_USERNAME` | unset | With a password, creates this account on start-up if none exists. Never changes an existing account. |
 | `CVEDECK_ADMIN_PASSWORD` | unset | Password for the account above, at least 12 characters. |
 | `CVEDECK_ADMIN_PASSWORD_FILE` | unset | Read the password from this file instead, for Docker secrets. Takes precedence over `CVEDECK_ADMIN_PASSWORD`. |
+| `CVEDECK_NOTIFY_URL` and the other `CVEDECK_NOTIFY_*` | unset | Alerts after scheduled scans. See "Notifications" below. |
 | `CVEDECK_COOKIE_SECURE` | `auto` | Mark the session cookie `Secure`: `auto` does so when the request arrived over HTTPS, `true` always, `false` never. Set `true` behind a TLS proxy that uvicorn does not trust for `X-Forwarded-Proto`. |
 
 Container-only extras: `PUID` / `PGID` (default `1000`) set the ownership of
@@ -555,6 +556,109 @@ or without sign-in, except in demo mode.
 - A scheduled scan is an ordinary scan job: it runs in its turn with any other
   scan, and an open dashboard shows its progress. Settings shows the last run and,
   when a run did not start a scan, why.
+
+### Notifications
+
+Since 0.17.0 a scheduled scan can send you a message when it finds something new
+worth acting on: a new finding CISA lists as actively exploited, or one at or
+above the threshold you pick (critical by default), or a host it could not
+check. It sends one message per scheduled scan, never an all-clear, and nothing
+for a host's first scan, which has nothing to compare with. Scans you start
+yourself never send one.
+
+Two kinds of destination are supported:
+
+- **A webhook**: a JSON `POST` to any URL. Home Assistant, n8n, Node-RED and a
+  Gotify bridge all accept it.
+- **ntfy** (`CVEDECK_NOTIFY_KIND=ntfy`): a topic on an ntfy server, ideally your
+  own.
+
+Set the destination in the environment, restart, then switch alerts on in
+**Settings → Alerts** and press *Send a test alert*.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CVEDECK_NOTIFY_URL` | unset | Where alerts go: a webhook URL, or `https://ntfy.example.org/<topic>`. Unset means no alerts. |
+| `CVEDECK_NOTIFY_KIND` | `webhook` | `webhook` or `ntfy`. Any other value is reported in Settings and nothing is sent. |
+| `CVEDECK_NOTIFY_TOKEN` / `_FILE` | unset | Sent as `Authorization: Bearer <token>` (an ntfy access token, or whatever your webhook expects). The `_FILE` form wins, for Docker secrets. |
+| `CVEDECK_NOTIFY_DETAIL` | `summary` | `summary` sends counts only. `detailed` adds hostnames, CVE IDs and packages, but only with a token set and never to `ntfy.sh` (see below). |
+| `CVEDECK_NOTIFY_SECRET` / `_FILE` | unset | Signs each webhook message, so your receiver can check it came from CveDeck (see below). |
+| `CVEDECK_NOTIFY_ALLOW_PUBLIC` | off | Allow a destination outside your network. Off, alerts go only to loopback, private (RFC 1918), link-local, `100.64.0.0/10` (Tailscale) and IPv6 unique-local addresses. |
+| `CVEDECK_NOTIFY_ALLOW_HTTP` | off | Allow the token to be sent over plain `http://`. Off, a token with an `http://` URL is refused. |
+| `CVEDECK_NOTIFY_LINK` | off | Put a link to the dashboard in each alert, built from `CVEDECK_PUBLIC_URL`. |
+| `CVEDECK_PUBLIC_URL` | unset | The dashboard's address as people reach it, for that link. |
+
+**Where alerts go is set only here.** The dashboard can switch alerts on and off,
+pick the threshold, and decide whether unchecked hosts are reported. It cannot
+change the destination, the token or the detail level, and no API route accepts
+them. So someone holding an API token, or anyone reaching a dashboard with
+sign-in off, can make alerts quieter or louder but can't redirect them or make
+them say more. Settings shows the destination's host and never its path,
+because a webhook path often contains a secret and an ntfy topic is one.
+
+**Alerts stay on your network by default.** CveDeck looks up the destination's
+name, refuses to send if *any* address it resolves to is public, and then
+connects to the address it checked. The TLS certificate is still verified
+against the name you configured. Nothing about your fleet reaches a third
+party: not the message, not your public IP, not when your scans finish. To
+use a public server, such as ntfy.sh or a hosted webhook, set
+`CVEDECK_NOTIFY_ALLOW_PUBLIC=1` and read the next paragraphs first.
+
+**What a message says.** A summary is a headline and a few lines of counts:
+
+```
+CveDeck: 1 actively exploited, 4 more new
+Scheduled scan finished 2026-11-07 03:04 UTC.
+2 of 12 hosts have new findings: 5 worth acting on, 1 actively exploited.
+1 host could not be checked, so their results are missing or partial.
+```
+
+It names no machine, CVE or package, and carries no CveDeck version or link
+unless you opt in. Message headers (ntfy's title, priority and tags) are built
+from counts alone. A finding whose exploitation status is unknown, because the
+KEV catalogue has not been downloaded yet, is counted as unknown and never as
+"not exploited".
+
+**Using a public ntfy server.**
+
+- **Use a long random topic.** On ntfy.sh anyone who knows a topic's name can
+  read it. With public destinations allowed, CveDeck refuses a topic shorter
+  than 20 characters or without both letters and digits. Settings → Alerts
+  will suggest one, generated in your browser.
+- **Detailed messages are never sent to ntfy.sh.** A token there proves you
+  may publish to a topic, not that nobody else can read it. On your own ntfy
+  server, require a login to *read* detailed topics, not only to publish
+  (`auth-default-access: deny-all`).
+- **Your server's IP and scan times are visible to the service.** To hide the
+  IP, send through a proxy or VPN. `HTTPS_PROXY` is honoured, but only when
+  public destinations are allowed.
+
+**Checking a webhook's signature.** With `CVEDECK_NOTIFY_SECRET` set, each
+webhook request carries `X-CveDeck-Timestamp` (Unix seconds) and
+`X-CveDeck-Signature: sha256=<hex>`, an HMAC-SHA256 of the timestamp, a dot,
+and the raw body:
+
+```python
+import hashlib, hmac, time
+
+def from_cvedeck(secret: bytes, timestamp: str, signature: str, body: bytes) -> bool:
+    if abs(time.time() - int(timestamp)) > 300:  # reject replays older than 5 minutes
+        return False
+    expected = hmac.new(secret, timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest("sha256=" + expected, signature)
+```
+
+**Treat every field as untrusted text.** In detailed mode, hostnames and
+package names come from the scanned machines, and a compromised machine
+chooses its own. CveDeck strips control characters and caps their length, but
+a receiver that puts them into a template, a shell command or HTML should
+escape them as it would any input.
+
+**When a send fails** (the receiver is down, a 401, a public address without the
+opt-in), the scan is unaffected. The result shows on the job in Scan history
+and in Settings, as the destination's host and the status, never the URL. A
+connection error or a 5xx is retried once after 5 seconds. Redirects are not
+followed, and the response body is never read.
 
 ## Demo mode
 

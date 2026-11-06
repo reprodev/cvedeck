@@ -28,6 +28,7 @@ import type {
   RemediationRecord,
   FindingChangeRow,
   HostKeyPin,
+  NotificationSettings,
   ScanJob,
   ScanOutcome,
   ScanSchedule,
@@ -36,6 +37,7 @@ import type {
   Severity,
   TestConnectionInput,
   TestConnectionResult,
+  TestNotificationResult,
   ServerCapabilities,
   FeedHealth,
   FeedRefreshOutcome,
@@ -348,7 +350,36 @@ interface ScanJobWire {
   error_detail?: string | null;
   cancellable?: boolean;
   cancel_requested?: boolean;
+  notification_status?: string | null;
+  notification_error?: string | null;
   targets: ScanJobTargetWire[];
+}
+
+/** Wire shape of GET and PUT /api/notifications (Req 21). */
+interface NotificationSettingsWire {
+  configured: boolean;
+  kind: string;
+  destination_host?: string | null;
+  problems?: string[];
+  detail_in_effect: string;
+  detail_reason?: string | null;
+  allow_http: boolean;
+  allow_public: boolean;
+  link: boolean;
+  signed: boolean;
+  enabled: boolean;
+  threshold: string;
+  include_not_checked: boolean;
+  last_sent_at?: string | null;
+  last_status?: string | null;
+  last_error?: string | null;
+  last_job_id?: string | null;
+}
+
+/** Wire shape of POST /api/notifications/test. */
+interface TestNotificationWire {
+  status: string;
+  error?: string | null;
 }
 
 /** Wire shape of a remediation record as serialized by the backend. */
@@ -535,6 +566,28 @@ function toScanSchedule(wire: ScanScheduleWire): ScanSchedule {
   };
 }
 
+function toNotificationSettings(wire: NotificationSettingsWire): NotificationSettings {
+  return {
+    configured: wire.configured,
+    kind: wire.kind,
+    destinationHost: wire.destination_host ?? null,
+    problems: wire.problems ?? [],
+    detailInEffect: wire.detail_in_effect,
+    detailReason: wire.detail_reason ?? null,
+    allowHttp: wire.allow_http,
+    allowPublic: wire.allow_public,
+    link: wire.link,
+    signed: wire.signed,
+    enabled: wire.enabled,
+    threshold: wire.threshold,
+    includeNotChecked: wire.include_not_checked,
+    lastSentAt: wire.last_sent_at ?? null,
+    lastStatus: wire.last_status ?? null,
+    lastError: wire.last_error ?? null,
+    lastJobId: wire.last_job_id ?? null,
+  };
+}
+
 function toScanJob(wire: ScanJobWire): ScanJob {
   return {
     id: wire.id,
@@ -546,6 +599,8 @@ function toScanJob(wire: ScanJobWire): ScanJob {
     errorDetail: wire.error_detail ?? null,
     cancellable: wire.cancellable ?? false,
     cancelRequested: wire.cancel_requested ?? false,
+    notificationStatus: wire.notification_status ?? null,
+    notificationError: wire.notification_error ?? null,
     targets: wire.targets.map((target) => ({
       machineId: target.machine_id,
       hostname: target.hostname,
@@ -983,6 +1038,37 @@ export class CveScannerApiClient {
         time_of_day: timeOfDay,
       }),
     );
+  }
+
+  /** GET /api/notifications -- alerts for scheduled scans (Req 21). */
+  async getNotifications(): Promise<NotificationSettings> {
+    return toNotificationSettings(
+      await this.request<NotificationSettingsWire>("GET", "/api/notifications"),
+    );
+  }
+
+  /**
+   * PUT /api/notifications -- switch alerts on or off and choose what is
+   * worth one (Req 21.1, 21.4, 21.5). Nothing here can change where they go.
+   */
+  async setNotifications(
+    enabled: boolean,
+    threshold: string,
+    includeNotChecked: boolean,
+  ): Promise<NotificationSettings> {
+    return toNotificationSettings(
+      await this.request<NotificationSettingsWire>("PUT", "/api/notifications", {
+        enabled,
+        threshold,
+        include_not_checked: includeNotChecked,
+      }),
+    );
+  }
+
+  /** POST /api/notifications/test -- one alert labelled as a test (Req 21.9). */
+  async sendTestNotification(): Promise<TestNotificationResult> {
+    const wire = await this.request<TestNotificationWire>("POST", "/api/notifications/test");
+    return { status: wire.status, error: wire.error ?? null };
   }
 
   /**

@@ -12,9 +12,17 @@ import type { FormEvent } from "react";
 import { Icon } from "../components/Icon";
 import { useToast } from "../components/Toast";
 import { useClipboard } from "../lib/useClipboard";
-import type { ApiToken, CreatedApiToken, HostKeyPin, ScanSchedule } from "../types";
+import type {
+  ApiToken,
+  CreatedApiToken,
+  HostKeyPin,
+  NotificationSettings,
+  ScanSchedule,
+  TestNotificationResult,
+} from "../types";
 import { MIN_PASSWORD_LENGTH } from "./SetupView";
-import { parseServerTime } from "../lib/labels";
+import { NOTIFICATION_THRESHOLDS, notificationStatusLabel, parseServerTime } from "../lib/labels";
+import { randomTopicName } from "../lib/topicName";
 
 export interface SettingsViewProps {
   /**
@@ -36,6 +44,14 @@ export interface SettingsViewProps {
   /** The daily scheduled scan (Req 20.2). */
   onGetScanSchedule?: () => Promise<ScanSchedule>;
   onSetScanSchedule?: (enabled: boolean, timeOfDay: string) => Promise<ScanSchedule>;
+  /** Alerts for scheduled scans (Req 21). */
+  onGetNotifications?: () => Promise<NotificationSettings>;
+  onSetNotifications?: (
+    enabled: boolean,
+    threshold: string,
+    includeNotChecked: boolean,
+  ) => Promise<NotificationSettings>;
+  onSendTestNotification?: () => Promise<TestNotificationResult>;
   onBack: () => void;
 }
 
@@ -61,6 +77,9 @@ export function SettingsView({
   onForgetHostKey,
   onGetScanSchedule,
   onSetScanSchedule,
+  onGetNotifications,
+  onSetNotifications,
+  onSendTestNotification,
   onBack,
 }: SettingsViewProps) {
   const toast = useToast();
@@ -82,6 +101,13 @@ export function SettingsView({
       </div>
       {onGetScanSchedule && onSetScanSchedule && (
         <ScanSchedulePanel onGet={onGetScanSchedule} onSet={onSetScanSchedule} />
+      )}
+      {onGetNotifications && onSetNotifications && onSendTestNotification && (
+        <NotificationsPanel
+          onGet={onGetNotifications}
+          onSet={onSetNotifications}
+          onTest={onSendTestNotification}
+        />
       )}
       {username && (
         <>
@@ -231,6 +257,251 @@ function ScanSchedulePanel({
             </button>
           </div>
         </form>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Alerts for scheduled scans (Req 21).
+ *
+ * The panel shows where alerts would go but cannot change it: the destination,
+ * token and detail level are read from the server's environment alone (Req
+ * 21.10), so a dashboard left open, or an API token, can make alerts quieter
+ * or louder and never redirect them. The destination appears by host only --
+ * a webhook path or an ntfy topic is itself a secret.
+ */
+function NotificationsPanel({
+  onGet,
+  onSet,
+  onTest,
+}: {
+  onGet: NonNullable<SettingsViewProps["onGetNotifications"]>;
+  onSet: NonNullable<SettingsViewProps["onSetNotifications"]>;
+  onTest: NonNullable<SettingsViewProps["onSendTestNotification"]>;
+}) {
+  const toast = useToast();
+  const clipboard = useClipboard(toast.error, 2500, "Topic name copied to the clipboard.");
+  const [settings, setSettings] = useState<NotificationSettings | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [threshold, setThreshold] = useState("critical");
+  const [includeNotChecked, setIncludeNotChecked] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [topic, setTopic] = useState<string | null>(null);
+
+  const show = useCallback((next: NotificationSettings) => {
+    setSettings(next);
+    setEnabled(next.enabled);
+    setThreshold(next.threshold);
+    setIncludeNotChecked(next.includeNotChecked);
+  }, []);
+
+  useEffect(() => {
+    onGet()
+      .then(show)
+      .catch((err: unknown) => setError(errorText(err, "Alert settings could not be loaded.")));
+  }, [onGet, show]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await onSet(enabled, threshold, includeNotChecked);
+      show(saved);
+      toast.success(saved.enabled ? "Alerts on." : "Alerts off.");
+    } catch (err) {
+      setError(errorText(err, "Alert settings could not be saved."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendTest = async () => {
+    setTesting(true);
+    setError(null);
+    try {
+      const result = await onTest();
+      if (result.status === "sent") toast.success("Test alert sent.");
+      else setError(`The test alert was not sent: ${result.error ?? result.status}`);
+      show(await onGet());
+    } catch (err) {
+      setError(errorText(err, "The test alert could not be sent."));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const unchanged =
+    settings !== null &&
+    enabled === settings.enabled &&
+    threshold === settings.threshold &&
+    includeNotChecked === settings.includeNotChecked;
+  const sendable = settings !== null && settings.configured && settings.problems.length === 0;
+  const lastAlert = settings ? notificationStatusLabel(settings.lastStatus) : null;
+
+  return (
+    <section className="card settings-panel" aria-labelledby="alerts-heading">
+      <h3 id="alerts-heading">
+        <Icon name="alert" /> Alerts
+      </h3>
+      <p className="hint">
+        One message after a scheduled scan that finds something new worth acting on, or a
+        host it could not check. Never an all-clear. Where alerts go, and how much they say,
+        are set in the server&apos;s environment, not here.
+      </p>
+
+      {error && (
+        <p role="alert" className="error-banner">
+          {error}
+        </p>
+      )}
+
+      {settings === null ? (
+        !error && <p className="hint">Loading alert settings…</p>
+      ) : (
+        <>
+          {settings.configured ? (
+            <dl className="settings-facts" data-testid="alerts-facts">
+              <dt>Destination</dt>
+              <dd>
+                {settings.kind === "ntfy" ? "ntfy" : "Webhook"} at{" "}
+                <code>{settings.destinationHost ?? "?"}</code>
+              </dd>
+              <dt>Messages</dt>
+              <dd>
+                {settings.detailInEffect === "detailed"
+                  ? "Detailed: hostnames, CVEs and packages."
+                  : "Summary: counts only, nothing that names a machine."}
+                {settings.detailReason && <span className="field-hint">{settings.detailReason}</span>}
+              </dd>
+              {settings.kind === "webhook" && (
+                <>
+                  <dt>Signed</dt>
+                  <dd>{settings.signed ? "Yes (HMAC-SHA256)" : "No"}</dd>
+                </>
+              )}
+            </dl>
+          ) : (
+            <p className="hint" data-testid="alerts-not-configured">
+              No destination is configured. Set <code>CVEDECK_NOTIFY_URL</code> (and{" "}
+              <code>CVEDECK_NOTIFY_KIND=ntfy</code> for an ntfy topic) in the server&apos;s
+              environment and restart; DEPLOYMENT.md, &quot;Notifications&quot;, has the details.
+            </p>
+          )}
+
+          {(settings.allowPublic || settings.allowHttp || settings.link) && (
+            <ul className="settings-warnings" data-testid="alerts-warnings">
+              {settings.allowPublic && (
+                <li>Public destinations are allowed: alerts may leave your network.</li>
+              )}
+              {settings.allowHttp && <li>The access token may be sent over plain http.</li>}
+              {settings.link && <li>Alerts include a link to this dashboard.</li>}
+            </ul>
+          )}
+
+          {settings.problems.length > 0 && (
+            <div className="settings-warnings" data-testid="alerts-problems">
+              <p>Nothing will be sent until this is fixed:</p>
+              <ul>
+                {settings.problems.map((problem) => (
+                  <li key={problem}>{problem}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <form className="settings-form" onSubmit={submit}>
+            <div className="field-group">
+              <label className="inline-check" htmlFor="alerts-enabled">
+                <input
+                  id="alerts-enabled"
+                  type="checkbox"
+                  checked={enabled}
+                  disabled={!settings.configured && !settings.enabled}
+                  onChange={(e) => setEnabled(e.target.checked)}
+                />{" "}
+                Send alerts after scheduled scans
+              </label>
+            </div>
+            <div className="field-group">
+              <label htmlFor="alerts-threshold">Alert on new findings that are</label>
+              <select
+                id="alerts-threshold"
+                value={threshold}
+                onChange={(e) => setThreshold(e.target.value)}
+              >
+                {NOTIFICATION_THRESHOLDS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field-group">
+              <label className="inline-check" htmlFor="alerts-not-checked">
+                <input
+                  id="alerts-not-checked"
+                  type="checkbox"
+                  checked={includeNotChecked}
+                  onChange={(e) => setIncludeNotChecked(e.target.checked)}
+                />{" "}
+                Also alert when a host could not be checked
+              </label>
+            </div>
+            {settings.lastSentAt && (
+              <p className="hint" data-testid="alerts-last">
+                Last alert: {formatDate(settings.lastSentAt)}
+                {lastAlert ? ` — ${lastAlert.text}` : ""}
+                {settings.lastError ? ` (${settings.lastError})` : "."}
+              </p>
+            )}
+            <div className="settings-actions">
+              <button type="submit" disabled={busy || unchanged}>
+                {busy ? "Saving…" : "Save alerts"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={testing || !sendable}
+                onClick={() => void sendTest()}
+              >
+                {testing ? "Sending…" : "Send a test alert"}
+              </button>
+            </div>
+          </form>
+
+          {(!settings.configured || settings.kind === "ntfy") && (
+            <div className="topic-suggestion">
+              <p className="hint">
+                Using ntfy? A long random topic name is the only thing between your alerts and
+                anyone who guesses it. This one is made in your browser and never sent anywhere.
+              </p>
+              {topic ? (
+                <p className="topic-suggestion-row">
+                  <code data-testid="alerts-topic">{topic}</code>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => void clipboard.copy(topic, "topic")}
+                  >
+                    <Icon name={clipboard.copiedKey === "topic" ? "check" : "copy"} />{" "}
+                    {clipboard.copiedKey === "topic" ? "Copied" : "Copy"}
+                  </button>
+                </p>
+              ) : (
+                <button type="button" className="secondary" onClick={() => setTopic(randomTopicName())}>
+                  Suggest a topic name
+                </button>
+              )}
+              <span className="visually-hidden" aria-live="polite">
+                {clipboard.announcement}
+              </span>
+            </div>
+          )}
+        </>
       )}
     </section>
   );

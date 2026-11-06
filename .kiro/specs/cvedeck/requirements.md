@@ -765,3 +765,66 @@ their own.
 7. IN demo mode THE system SHALL NOT run scheduled scans and SHALL refuse to
    change the schedule (extends Req 15).
 
+### Requirement 21: Notifications
+
+**User story:** As an operator, I want to be told when a scheduled scan finds
+something new that matters, so that a newly exploited vulnerability does not
+wait for me to open the dashboard -- without the alert itself becoming a way to
+leak my fleet's weaknesses or to aim CveDeck at someone else.
+
+#### Acceptance criteria
+
+1. THE system SHALL send no notification until a destination is configured in
+   the environment AND notifications are switched on from the dashboard; they
+   SHALL be switched off until the operator switches them on.
+2. WHEN a scheduled scan job (Requirement 20) ends finished or cancelled THEN
+   THE system SHALL send at most one message for that job, covering the hosts
+   it completed; a job started by a person, and a job interrupted by a
+   restart, SHALL send none.
+3. A host's first successful scan is a baseline (Req 18.4) and SHALL
+   contribute no new findings to a message.
+4. A new finding SHALL qualify for a message WHEN it is listed in CISA's KEV
+   catalogue, OR its severity is at or above the threshold chosen in the
+   dashboard (KEV only, Critical, or High; Critical by default); a finding
+   whose KEV state is unknown SHALL be counted as unknown and SHALL NOT be
+   counted or described as not exploited, and IF the KEV feed is not usable
+   THEN the message SHALL say the exploitation check did not run.
+5. Hosts in the job that failed, or that were scanned with an advisory source
+   unavailable, SHALL be reported in the message as not checked, unless the
+   operator switches that off.
+6. IF no new finding qualifies AND every host was checked THEN THE system
+   SHALL NOT send a message.
+7. THE message SHALL be a summary by default: counts only, with no hostname,
+   CVE identifier or package name.
+8. A failed send SHALL NOT change the job's outcome or stop the scan worker;
+   the result of every attempt -- sent, failed, refused, or nothing to send --
+   SHALL be recorded on the job and shown in the dashboard.
+9. IN demo mode THE system SHALL refuse every route that changes notification
+   settings or sends a message (extends Req 15).
+10. THE destination URL, its access token, the signing secret and the detail
+    level SHALL be read only from the environment; no route SHALL accept any of
+    them, and no response, log line or stored error SHALL contain the URL's
+    path, the token or the secret.
+11. No message header SHALL carry a value taken from scan data, AND every
+    string taken from scan data in a message body SHALL have control
+    characters removed and its length capped.
+12. THE system SHALL NOT send an access token over plain http unless the
+    operator opts in, SHALL NOT follow a redirect, SHALL verify TLS
+    certificates, AND SHALL record a failed send by destination host and status
+    alone.
+13. WHEN a signing secret is configured THEN every webhook message SHALL carry
+    a timestamp and an HMAC-SHA256 signature over the timestamp and body.
+14. A detailed message -- hostnames, CVE identifiers and packages -- SHALL be
+    sent only WHEN the operator configured detailed mode AND an access token
+    is set AND the destination host is not the public ntfy.sh service;
+    otherwise a summary SHALL be sent, and the dashboard SHALL say why.
+15. Unless the operator allows public destinations, THE system SHALL send only
+    WHEN every address the destination resolves to is loopback, private
+    (RFC 1918), link-local, shared address space (RFC 6598) or IPv6
+    unique-local, AND SHALL connect only to an address that passed that check.
+16. A summary SHALL carry no CveDeck version, and SHALL carry a link to the
+    dashboard only WHEN the operator opts in.
+17. WHEN public destinations are allowed THEN THE system SHALL refuse an ntfy
+    topic shorter than 20 characters or without both letters and digits --
+    checked before any lookup, since a name that resolves to the LAN today can
+    resolve publicly tomorrow.

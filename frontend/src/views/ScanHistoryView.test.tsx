@@ -110,6 +110,26 @@ describe("ScanHistoryView (Req 19.10)", () => {
     expect(document.getElementById(toggle.getAttribute("aria-controls")!)).toBeNull();
   });
 
+  it("shows a scheduled job's alert, and why one did not go out (Req 21.8)", async () => {
+    const sent = makeScanJob({ id: "j-sent", requestedBy: "schedule", notificationStatus: "sent" });
+    const failed = makeScanJob({
+      id: "j-failed",
+      requestedBy: "schedule",
+      notificationStatus: "failed",
+      notificationError: "alerts.home.example.org: HTTP 401",
+    });
+    const quiet = makeScanJob({ id: "j-quiet", requestedBy: "schedule", notificationStatus: "nothing_to_send" });
+    renderView(api([[sent, failed, quiet]]));
+
+    const rows = (await screen.findAllByRole("button", { expanded: false })).map((b) => b.closest("tr")!);
+    expect(within(rows[0]).getByText("Alert sent")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("Alert failed")).toBeInTheDocument();
+    expect(within(rows[2]).queryByText(/^Alert/)).not.toBeInTheDocument();
+
+    await userEvent.click(within(rows[1]).getByRole("button", { expanded: false }));
+    expect(screen.getByText("Alert: alerts.home.example.org: HTTP 401")).toBeInTheDocument();
+  });
+
   it("shows why a cancelled job stopped and which hosts it never reached", async () => {
     renderView(api([[cancelled]]));
     await userEvent.click(await screen.findByRole("button", { expanded: false }));

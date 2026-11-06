@@ -9,6 +9,7 @@ import type {
   CveFinding,
   MachineSummary,
   ScanJob,
+  NotificationSettings,
   ScanSchedule,
   ScanOutcome,
   SeverityCounts,
@@ -75,6 +76,8 @@ export function makeScanJob(overrides: Partial<ScanJob> = {}): ScanJob {
     errorDetail: null,
     cancellable: false,
     cancelRequested: false,
+    notificationStatus: null,
+    notificationError: null,
     targets: [{ machineId: "m1", hostname: "web-01", state: "done", outcome: makeScanOutcome() }],
     ...overrides,
   };
@@ -92,6 +95,32 @@ export function makeScanSchedule(overrides: Partial<ScanSchedule> = {}): ScanSch
     lastNote: null,
     eligibleHosts: 2,
     serverKeyConfigured: true,
+    ...overrides,
+  };
+}
+
+/** Alerts (Req 21): a LAN webhook configured, alerts off, by default. */
+export function makeNotificationSettings(
+  overrides: Partial<NotificationSettings> = {},
+): NotificationSettings {
+  return {
+    configured: true,
+    kind: "webhook",
+    destinationHost: "alerts.home.example.org",
+    problems: [],
+    detailInEffect: "summary",
+    detailReason: null,
+    allowHttp: false,
+    allowPublic: false,
+    link: false,
+    signed: false,
+    enabled: false,
+    threshold: "critical",
+    includeNotChecked: true,
+    lastSentAt: null,
+    lastStatus: null,
+    lastError: null,
+    lastJobId: null,
     ...overrides,
   };
 }

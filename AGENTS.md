@@ -39,7 +39,10 @@ Backend package layout:
 - app/data/               schema.py (SQLAlchemy ORM) + repository.py (read/write),
                           demo_seed.py (the CVEDECK_DEMO_MODE fixture fleet)
 - app/services/           remediation.py, sync.py, enrichment.py (FeedRefreshService pulls the
-                          KEV/EPSS caches; FindingEnricher joins them onto findings)
+                          KEV/EPSS caches; FindingEnricher joins them onto findings),
+                          notifications.py (alerts after scheduled scans: digest, rendering,
+                          the worker hook) + notify_destination.py (where an alert may go:
+                          LAN-only address check, pinned connection, sanitised errors)
 - app/config.py           deployment settings read from the environment (nothing else reads os.environ)
 - app/api/                app.py (create_app factory), routes.py (reads, including
                           GET /api/feeds for intel cache health), actions.py (writes,
@@ -495,7 +498,8 @@ environment the app reads, so no alembic.ini edit is needed.
   `POST /api/scans/test-connection` each take a hostname or a CIDR plus
   credentials and connect to it, so an unguarded public instance is an SSH/WinRM
   client and port scanner anyone can aim at any address, sourced from the
-  operator's IP. If you add a fourth route that dials out, add the guard --
+  operator's IP. `POST /api/notifications/test` sends a message, so it is guarded
+  too. If you add another route that dials out, add the guard --
   `tests/test_demo_mode.py` asserts each one individually for exactly this
   reason.
 
@@ -503,6 +507,42 @@ environment the app reads, so no alembic.ini edit is needed.
   not a check in the handler body. FastAPI resolves a handler's parameter
   dependencies before its body runs, so a body check let the `ScannerEngine` be
   constructed first and surfaced its failure instead of the 403.
+
+- Alerts must never become the leak (Req 21). They are the first thing CveDeck
+  sends anywhere on its own initiative, so:
+  - **Where an alert goes, and how much it says, are environment-only.** The
+    URL, token, signing secret and detail level are read in `app/config.py`
+    and nowhere else. `NotificationsIn` forbids extra fields, so a body naming
+    a URL is a 422 rather than silently ignored. Do not add a dashboard field
+    for any of them, however convenient: a stolen API token, or a dashboard
+    with sign-in off, would then redirect alerts or make them say more. The
+    dashboard may make alerts quieter or louder, never anything else.
+  - **LAN only unless `CVEDECK_NOTIFY_ALLOW_PUBLIC`.** `notify_destination`
+    checks *every* resolved address against `ALLOWED_NETWORKS`, an explicit
+    list. Never `ipaddress.is_private`, which says yes to the RFC 5737
+    documentation ranges. It then connects to the address it checked (Host
+    header and TLS `sni_hostname` keep the name, so the certificate is still
+    verified against it). Resolving to check and letting httpx resolve again
+    to connect reopens DNS rebinding.
+  - **Headers carry counts, never scan data.** A hostname or package name
+    comes from the scanned host, and a compromised one chooses its own. Body
+    strings go through `notifications.clean`; ntfy markdown stays off.
+  - **Errors name the host and status only.** Never `str(exc)` (httpx puts
+    the URL in it) and never the response body, which is not even read. A
+    webhook path and an ntfy topic are secrets.
+  - **A summary names nothing**: no hostname, CVE, package, version or link
+    unless opted in. Detailed mode needs a token and never goes to `ntfy.sh`.
+    Property 23 and `test_a_summary_names_nothing` guard this.
+  - **The notifier never raises into the worker and never holds a
+    transaction across the network call.** `notify_after_job`'s broad
+    `except` is the one justified exception to the narrow-handler rule: the
+    worker thread runs every later scan.
+  - `POST /api/notifications/test` sends a message on request, so it carries
+    its own `_demo_guard` and a 30 s limit. FastAPI runs a router's
+    dependencies before a route's, so the router-wide write refusal always
+    answers first and hides a missing route guard;
+    `test_the_test_alert_route_carries_its_own_guard` switches it off to test
+    the route's own.
 
 - The demo seed must not misrepresent anything. It is what strangers and
   screenshots see, which makes it the easiest place to introduce a

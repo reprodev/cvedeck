@@ -369,6 +369,12 @@ class ScanJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
     #: Why the job as a whole did not finish normally; ``None`` when it did.
     error_detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: What happened to this job's alert (Req 21.8): a ``NotificationStatus``
+    #: value, stored as a string. ``None`` for a job that sends no alert -- one
+    #: a person started, or any job while notifications are off.
+    notification_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: Destination host plus status or error class (Req 21.12); never the URL.
+    notification_error: Mapped[str | None] = mapped_column(String, nullable=True)
 
     targets: Mapped[list[ScanJobTarget]] = relationship(
         back_populates="job",
@@ -441,6 +447,32 @@ class ScanSchedule(Base):
     last_job_id: Mapped[str | None] = mapped_column(String, nullable=True)
     #: Why the last due slot did or did not start a scan (Req 20.5).
     last_note: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class NotificationSettings(Base):
+    """What the dashboard may decide about alerts (Req 21). One row.
+
+    Deliberately not where an alert goes or how much it says: the destination,
+    token, secret and detail level live in the environment only (Req 21.10).
+    These columns can make alerts quieter or louder, never redirect them.
+    ``threshold`` and ``last_status`` are ``NotificationThreshold`` /
+    ``NotificationStatus`` values stored as strings.
+    """
+
+    __tablename__ = "notification_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    threshold: Mapped[str] = mapped_column(String, nullable=False, default="critical")
+    include_not_checked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
+    last_sent_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_job_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class UbuntuKernelFeed(Base):

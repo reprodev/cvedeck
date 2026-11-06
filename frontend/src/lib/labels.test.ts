@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   durationLabel,
   formatServerTime,
+  notificationStatusLabel,
   parseServerTime,
   requestedByLabel,
   isStale,
@@ -143,6 +144,19 @@ describe("requestedByLabel", () => {
     expect(requestedByLabel("token:ci")).toBe("API token ci");
     expect(requestedByLabel("unknown")).toBe("Unknown");
     expect(requestedByLabel("admin")).toBe("admin");
+  });
+});
+
+describe("notificationStatusLabel (Req 21.8)", () => {
+  it("labels an alert that was attempted, amber when it did not go out", () => {
+    expect(notificationStatusLabel("sent")).toEqual({ text: "Alert sent", tone: "success" });
+    expect(notificationStatusLabel("failed")).toEqual({ text: "Alert failed", tone: "warn" });
+    expect(notificationStatusLabel("refused")).toEqual({ text: "Alert refused", tone: "warn" });
+  });
+
+  it("shows nothing for the common case and for jobs that send no alert", () => {
+    expect(notificationStatusLabel("nothing_to_send")).toBeNull();
+    expect(notificationStatusLabel(null)).toBeNull();
   });
 });
 

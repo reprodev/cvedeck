@@ -73,6 +73,8 @@ def test_create_all_creates_every_table(engine):
         # The daily scan schedule (Req 20). Not syncable: this instance's own
         # configuration.
         "scan_schedule",
+        # Alert settings (Req 21). Not syncable, for the same reason.
+        "notification_settings",
     }
 
 

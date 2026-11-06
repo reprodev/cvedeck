@@ -3023,3 +3023,47 @@ since the release workflow builds it and a missing wheel there would have shown
 up only after the tag was pushed. Every compiled dependency came as a wheel on
 both. pip's bundled certifi, which cost 0.13.0 its image, was checked against
 the advisory published two weeks earlier, and is past it.
+
+## Chapter 37 — An alert that cannot be aimed (v0.17.0)
+
+Scheduled scans had been running since 0.12.0, and they found things at three
+in the morning that nobody saw until they opened the dashboard. An alert was
+the obvious next step. It was also the first time CveDeck would send anything
+anywhere on its own initiative, and the design spent more time on that than on
+the alert.
+
+The owner's question shaped it: how do we make sure nothing about this is
+exploitable? Taking each answer in turn produced the rules. Where an alert goes
+and how much it says live in the environment, so the dashboard can make alerts
+quieter or louder and never redirect them. A stolen API token can't turn
+CveDeck into an HTTP client aimed at an address of its choosing. Then: does the
+message leak anything? A summary names no machine and carries no version or
+link. A detailed message needs a token and never goes to ntfy.sh, where a token
+proves the right to publish but not that a topic is private. Then: what about
+the IP, and the scan times a public server sees? The default became LAN-only.
+A destination is refused if *any* address it resolves to is public, and the
+request goes to the address that was checked, with the TLS server name kept so
+the certificate is still verified against the name. A random delay to hide the
+schedule was considered and left out: knowing that someone scans at about
+3 am tells an attacker very little, while a late alert about an exploited CVE
+has a real cost.
+
+Two details would have been easy to get wrong. `ipaddress.is_private` says yes
+to the RFC 5737 documentation ranges, so the allowlist is written out network
+by network. And httpx puts the full URL in its exception messages, while a
+webhook path is often a secret and an ntfy topic always is, so a failure is
+recorded as the host and a status code, and `str(exc)` never reaches storage.
+
+Each control was checked against a broken copy of the code, and the check
+itself went wrong twice. The test-alert route's demo guard first passed with
+the guard removed, because the router-wide refusal of writes still answered
+403. The outcome was right and the test proved nothing about the route. The
+fix tightened the test to expect the route's own message, and the broken-copy
+check then reported it caught. But it would have reported that anyway: FastAPI
+runs a router's dependencies before a route's, so the router-wide message
+always wins, and the tightened test failed with or without the guard. The
+release check on Linux showed the failure. The suite had not been rerun
+unbroken after the edit. The test now switches the router-wide refusal off so
+that only the route's guard can answer. The broken-copy script now refuses to
+run until the unbroken suite passes, because a check that fails in both states
+proves nothing.

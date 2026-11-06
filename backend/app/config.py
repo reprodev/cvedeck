@@ -496,3 +496,99 @@ def _int_env(name: str, default: int) -> int:
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
 
+
+
+# --- Notifications (Req 21) -------------------------------------------------
+#
+# Where an alert goes, and how much it says, are set here and nowhere else: no
+# route accepts any of these values (Req 21.10). The dashboard can switch alerts
+# on or off and change how often they fire, never redirect them or make them
+# reveal more -- so a stolen API token cannot turn CveDeck into an HTTP client
+# aimed at an address of its choosing, or into a leak of the fleet's weaknesses.
+# Every opt-in below defaults off, towards the safe state.
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _opt_in(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUTHY
+
+
+def _secret_env(name: str) -> str | None:
+    """A secret from ``<name>_FILE`` (a Docker secret) or ``<name>``.
+
+    The file wins, as for :func:`admin_password`, and a file that cannot be read
+    raises rather than silently sending without the credential. Callers must
+    never log or return the value.
+    """
+    path = os.environ.get(f"{name}_FILE", "").strip()
+    if path:
+        return Path(path).read_text(encoding="utf-8").strip() or None
+    raw = os.environ.get(name, "").strip()
+    return raw or None
+
+
+def notify_url() -> str | None:
+    """Where alerts are sent (Req 21.1), or ``None`` when notifications are not set up."""
+    raw = os.environ.get("CVEDECK_NOTIFY_URL", "").strip()
+    return raw or None
+
+
+def notify_kind() -> str:
+    """``webhook`` (JSON POST, the default) or ``ntfy``; anything else raises."""
+    raw = os.environ.get("CVEDECK_NOTIFY_KIND", "").strip().lower() or "webhook"
+    if raw not in {"webhook", "ntfy"}:
+        raise ValueError(f"CVEDECK_NOTIFY_KIND must be 'webhook' or 'ntfy', got {raw!r}")
+    return raw
+
+
+def notify_token() -> str | None:
+    """Bearer token sent with each alert, or ``None``."""
+    return _secret_env("CVEDECK_NOTIFY_TOKEN")
+
+
+def notify_secret() -> str | None:
+    """Key that signs webhook bodies with HMAC-SHA256 (Req 21.13), or ``None``."""
+    return _secret_env("CVEDECK_NOTIFY_SECRET")
+
+
+def notify_detail() -> str:
+    """``summary`` (the default: counts only) or ``detailed``; anything else raises.
+
+    Detailed is only what the operator asked for. Whether it is actually used
+    also depends on the destination (Req 21.14), decided in
+    ``services.notify_destination``.
+    """
+    raw = os.environ.get("CVEDECK_NOTIFY_DETAIL", "").strip().lower() or "summary"
+    if raw not in {"summary", "detailed"}:
+        raise ValueError(f"CVEDECK_NOTIFY_DETAIL must be 'summary' or 'detailed', got {raw!r}")
+    return raw
+
+
+def notify_allow_http() -> bool:
+    """Whether a token may be sent over plain http (Req 21.12). Off by default."""
+    return _opt_in("CVEDECK_NOTIFY_ALLOW_HTTP")
+
+
+def notify_allow_public() -> bool:
+    """Whether alerts may go to a public address (Req 21.15). Off by default.
+
+    Off, alerts stay on the local network: nothing about the fleet -- not even
+    the server's IP or when its scans finish -- reaches a third party.
+    """
+    return _opt_in("CVEDECK_NOTIFY_ALLOW_PUBLIC")
+
+
+def notify_link() -> bool:
+    """Whether alerts carry a dashboard link (Req 21.16). Off by default.
+
+    A link such as ``cvedeck.<surname>.net`` names its owner and says they run a
+    vulnerability scanner there, so it is something to opt into.
+    """
+    return _opt_in("CVEDECK_NOTIFY_LINK")
+
+
+def public_url() -> str | None:
+    """The dashboard's address as people reach it, for links in alerts."""
+    raw = os.environ.get("CVEDECK_PUBLIC_URL", "").strip().rstrip("/")
+    return raw or None

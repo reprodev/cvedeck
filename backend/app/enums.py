@@ -181,3 +181,35 @@ class RemediationStatus(str, Enum):
     IN_PROGRESS = "in_progress"
     REMEDIATED = "remediated"
     ACCEPTED_RISK = "accepted_risk"
+
+
+class NotificationThreshold(str, Enum):
+    """Which new findings are worth an alert besides KEV-listed ones (Req 21.4).
+
+    ``KEV`` sends only for findings CISA lists as exploited. ``CRITICAL`` and
+    ``HIGH`` add findings at or above that band by :data:`SEVERITY_RANK`, so
+    ``HIGH`` includes ``UNSCORED``: an unmeasured finding could be either, and
+    leaving it out would be the silent all-clear Req 10.11 forbids.
+    """
+
+    KEV = "kev"
+    CRITICAL = "critical"
+    HIGH = "high"
+
+
+class NotificationStatus(str, Enum):
+    """What happened to a scheduled job's alert (Req 21.8).
+
+    Persisted as a plain string column rather than a database enum, so a status
+    added later needs no PostgreSQL enum migration.
+
+    ``REFUSED`` is the destination policy declining to send -- a public address
+    without the opt-in, a token over plain http -- which is a configuration
+    problem, not a delivery failure. ``NOTHING_TO_SEND`` is the common case: no
+    new finding qualified and every host was checked (Req 21.6).
+    """
+
+    SENT = "sent"
+    FAILED = "failed"
+    REFUSED = "refused"
+    NOTHING_TO_SEND = "nothing_to_send"

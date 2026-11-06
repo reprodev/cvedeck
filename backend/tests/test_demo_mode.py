@@ -105,6 +105,65 @@ def test_scheduling_scans_is_refused(demo):
     assert "demo mode" in response.json()["detail"].lower()
 
 
+def test_changing_alerts_is_refused(demo):
+    """Validates Req 21.9."""
+    response = demo.put(
+        "/api/notifications",
+        json={"enabled": True, "threshold": "critical", "include_not_checked": True},
+    )
+
+    assert response.status_code == 403
+    assert "demo mode" in response.json()["detail"].lower()
+
+
+def test_sending_a_test_alert_is_refused(demo, monkeypatch):
+    """Validates Req 21.9: the one route that sends a message on request.
+
+    A destination is configured, so a missing guard would actually try to send
+    rather than fail for want of one; the sender is stubbed so that attempt
+    would be recorded rather than reach a network.
+    """
+    from app.services import notify_destination
+
+    sends: list[object] = []
+    monkeypatch.setattr(notify_destination, "send", lambda *a, **k: sends.append(a))
+    monkeypatch.setenv("CVEDECK_NOTIFY_URL", "https://alerts.home.example.org/hook")
+    response = demo.post("/api/notifications/test")
+
+    assert response.status_code == 403
+    assert "demo mode" in response.json()["detail"].lower()
+    assert sends == []
+
+
+def test_the_test_alert_route_carries_its_own_guard(demo, monkeypatch):
+    """Validates Req 21.9 for the route itself, not only its router.
+
+    FastAPI runs a router's dependencies before a route's, so with both in
+    place the router-wide refusal of writes always answers first, and a test of
+    the response alone passes with the route's own guard deleted. Switching the
+    router-wide one off leaves the route's guard as the only thing in the way;
+    AGENTS.md requires it, so moving the route to another router cannot unguard
+    a route that sends messages.
+    """
+    from app.api import actions
+    from app.services import notify_destination
+
+    sends: list[object] = []
+    monkeypatch.setattr(notify_destination, "send", lambda *a, **k: sends.append(a))
+    monkeypatch.setenv("CVEDECK_NOTIFY_URL", "https://alerts.home.example.org/hook")
+    demo.app.dependency_overrides[actions.refuse_writes_in_demo_mode] = lambda: None
+    actions._last_test_alert.clear()
+    try:
+        response = demo.post("/api/notifications/test")
+    finally:
+        demo.app.dependency_overrides.pop(actions.refuse_writes_in_demo_mode, None)
+        actions._last_test_alert.clear()
+
+    assert response.status_code == 403
+    assert response.json()["detail"].startswith("Sending a test alert is disabled in demo mode")
+    assert sends == []
+
+
 def test_queueing_a_scan_job_is_refused(demo):
     """Validates Req 19.6: the background route dials out just as surely (Req 15)."""
     response = demo.post(

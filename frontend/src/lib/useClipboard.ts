@@ -87,6 +87,8 @@ export interface ClipboardApi {
 export function useClipboard(
   onError?: (message: string) => void,
   resetMs = 2000,
+  /** What a screen reader hears on success; most callers copy a command. */
+  copiedAnnouncement = "Command copied to the clipboard.",
 ): ClipboardApi {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
@@ -116,7 +118,7 @@ export function useClipboard(
       }
 
       setCopiedKey(key);
-      setAnnouncement("Command copied to the clipboard.");
+      setAnnouncement(copiedAnnouncement);
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => {
         setCopiedKey(null);
@@ -124,7 +126,7 @@ export function useClipboard(
       }, resetMs);
       return true;
     },
-    [onError, resetMs],
+    [onError, resetMs, copiedAnnouncement],
   );
 
   return { copiedKey, copy, announcement };

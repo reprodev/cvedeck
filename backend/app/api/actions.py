@@ -24,6 +24,7 @@ that never touch real hosts or an online database.
 
 import logging
 import socket
+import threading
 import time
 from typing import Any
 
@@ -44,7 +45,7 @@ from ..scanner.collectors import (
 from ..scanner.engine import ScannerEngine
 from ..scanner.exceptions import AuthError, HostKeyError, HostKeyMismatchError
 from ..scanner.host_keys import connect_pinned
-from ..services import scan_jobs, scan_schedule
+from ..services import notifications, notify_destination, scan_jobs, scan_schedule
 from ..services.remediation import (
     RemediationRecordNotFoundError,
     RemediationService,
@@ -52,7 +53,7 @@ from ..services.remediation import (
 from ..services.sync import SyncService
 from .credentials import CredentialResolutionError, resolve_credentials
 from .dependencies import get_scanner_engine, get_session, get_sync_service
-from .routes import machine_scan_out, scan_job_out, scan_schedule_out
+from .routes import machine_scan_out, notifications_out, scan_job_out, scan_schedule_out
 from .wiring import RepositoryHostKeyStore
 from .schemas import (
     DiscoveredHostOut,
@@ -66,6 +67,8 @@ from .schemas import (
     HostEnrollResponse,
     MachineScanOut,
     MachineSummary,
+    NotificationsIn,
+    NotificationsOut,
     RemediationIn,
     RemediationOut,
     ScanJobCreated,
@@ -78,6 +81,7 @@ from .schemas import (
     SyncResponse,
     TestConnectionRequest,
     TestConnectionResponse,
+    TestNotificationOut,
 )
 
 router = APIRouter(prefix="/api", tags=["actions"])
@@ -430,6 +434,91 @@ def set_scan_schedule(
         f"{'on' if body.enabled else 'off'}, daily at {body.time_of_day}",
     )
     return scan_schedule_out(session)
+
+
+@router.put(
+    "/notifications",
+    response_model=NotificationsOut,
+    dependencies=[Depends(_demo_guard("Notifications"))],
+)
+def set_notifications(
+    body: NotificationsIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> NotificationsOut:
+    """Switch alerts on or off and choose what is worth one (Req 21.1, 21.4, 21.5).
+
+    Nothing here can change where an alert goes or how much it says (Req 21.10).
+    Switching on with no destination configured is refused, as switching on the
+    schedule with no key is: it could never send. Refused in demo mode (Req 21.9).
+    """
+    policy = notify_destination.evaluate(notify_destination.read_config())
+    if body.enabled and not policy.configured:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Alerts need a destination: set CVEDECK_NOTIFY_URL in the server's "
+                "environment and restart."
+            ),
+        )
+    row = notifications.get_notification_settings(session)
+    row.enabled = body.enabled
+    row.threshold = body.threshold.value
+    row.include_not_checked = body.include_not_checked
+    session.commit()
+    _audit(
+        request,
+        "Notifications",
+        f"{'on' if body.enabled else 'off'}, threshold {body.threshold.value}, "
+        f"unchecked hosts {'reported' if body.include_not_checked else 'not reported'}",
+    )
+    return notifications_out(session)
+
+
+#: At most one test alert per this many seconds, across all callers (Req 21.9):
+#: the route sends a real message, so it must not become a way to flood a
+#: receiver -- or, with sign-in off, a button anyone on the network can hold down.
+TEST_ALERT_INTERVAL_SECONDS = 30.0
+_test_alert_lock = threading.Lock()
+_last_test_alert: list[float] = []
+
+
+def _claim_test_alert_slot() -> float:
+    """Seconds to wait before another test alert, or 0 after claiming the slot."""
+    now = time.monotonic()
+    with _test_alert_lock:
+        if _last_test_alert and now - _last_test_alert[0] < TEST_ALERT_INTERVAL_SECONDS:
+            return TEST_ALERT_INTERVAL_SECONDS - (now - _last_test_alert[0])
+        _last_test_alert[:] = [now]
+        return 0.0
+
+
+@router.post(
+    "/notifications/test",
+    response_model=TestNotificationOut,
+    dependencies=[Depends(_demo_guard("Sending a test alert"))],
+)
+def send_test_notification(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> TestNotificationOut:
+    """Send one alert labelled as a test to the configured destination (Req 21.8, 21.9).
+
+    Goes through the same policy as a real alert -- LAN-only unless allowed, no
+    token over plain http, no redirects -- and only ever to the destination the
+    environment names: no request field can choose it.
+    """
+    wait = _claim_test_alert_slot()
+    if wait > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"A test alert was sent moments ago; try again in {int(wait) + 1} seconds.",
+            headers={"Retry-After": str(int(wait) + 1)},
+        )
+    bind = session.get_bind()
+    result = notifications.send_test(lambda: Session(bind))
+    _audit(request, "Test alert", f"{result.status.value}" + (f": {result.error}" if result.error else ""))
+    return TestNotificationOut(status=result.status, error=result.error)
 
 
 @router.delete(
