@@ -1,8 +1,8 @@
 # Runtime dependencies, pinned for reproducible container and server builds.
 # Development and test dependencies live in requirements-dev.txt.
 fastapi==0.162.0
-pydantic==2.14.2
-sqlalchemy==2.1.6
+pydantic==2.14.3
+sqlalchemy==2.1.8
 alembic==1.20.1
 paramiko==5.1.0
 pywinrm==0.5.0
@@ -11,4 +11,4 @@ httpx==0.28.1
 
 # PostgreSQL driver, used when CVEDECK_DB_URL points at postgresql+psycopg://.
 # Harmless when the deployment stays on the default SQLite database.
-psycopg[binary]==3.3.6
+psycopg[binary]==3.3.8
