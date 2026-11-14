@@ -291,6 +291,9 @@ export function MachineDrillDownView({
   const patchCounts = useMemo(() => {
     let fixable = 0;
     let pending = 0;
+    // Findings whose stated fix is already installed (Req 14.11): pending, as
+    // no upgrade can clear them, and said so on their own.
+    let disputed = 0;
     // Findings a package upgrade cannot clear because only a newer release has
     // the fix, by release -- surfaced on its own, since re-running the fix plan
     // and re-scanning would otherwise look like the plan failed (Req 14.8).
@@ -301,12 +304,13 @@ export function MachineDrillDownView({
       } else {
         pending++;
         const fix = findingFix(f);
+        if (fix.status === "disputed") disputed++;
         if (fix.status === "newer_release" && fix.release) {
           newerRelease.set(fix.release, (newerRelease.get(fix.release) ?? 0) + 1);
         }
       }
     }
-    return { fixable, pending, newerRelease, total: findings.length };
+    return { fixable, pending, newerRelease, disputed, total: findings.length };
   }, [findings]);
 
   // Remediation posture summary
@@ -840,6 +844,20 @@ export function MachineDrillDownView({
                 Upgrading packages cannot clear them, so they stay after the fix plan
                 runs and the host is re-scanned. Upgrading the distribution clears them,
                 or they clear once this release publishes the fix.
+              </div>
+            </div>
+          )}
+
+          {patchCounts.disputed > 0 && (
+            <div className="release-fix-notice" role="note" data-testid="disputed-notice">
+              <Icon name="alert" />
+              <div>
+                <strong>
+                  {patchCounts.disputed} finding(s) name a fix this host already has.
+                </strong>{" "}
+                The advisory source contradicted itself. They are listed and counted
+                under Pending, but never offered as an upgrade or sent as an alert.
+                Scan again; if they stay, check the distribution&apos;s own tracker.
               </div>
             </div>
           )}

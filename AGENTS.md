@@ -544,6 +544,27 @@ environment the app reads, so no alembic.ini edit is needed.
     `test_the_test_alert_route_carries_its_own_guard` switches it off to test
     the route's own.
 
+- A fix the host already has is *disputed* -- not fixed, and not deleted
+  (Req 14.11, 21.18, Property 24). `fix_is_disputed` in
+  `app/package_identifier.py` compares the `(fixed in V)` note with the
+  installed version, both read from the identifier, by `version_order` -- the
+  one dpkg / rpm table the matcher also uses to choose a fix. Keep all of this:
+  - **Decided when read, never stored.** No column, so it cannot disagree with
+    the identifier beside it and needs no backfill.
+  - **Undecidable is not disputed.** No ordering (Alpine, Wolfi, guessed
+    trackers), no installed version, or a comparator that raises: the finding
+    is treated as before. A disputed finding is left out of alerts, so only a
+    comparison that succeeded may dispute one. Do not "fail safe" the other
+    way -- that is a silent false negative.
+  - **Kept and counted.** The API says `fix_status = "disputed"` (so `has_fix`
+    is false and no upgrade is offered) and keeps `fixed_version`. Fleet counts
+    and triage cards still include it: the owner's choice, so a wrong flag can
+    never quietly lower a headline number.
+  - **The matcher picks the fix the host needs** (Req 2.11, 2.12): the earliest
+    `fixed` event newer than the installed version, within an advisory's
+    ranges and across duplicate records. Reverting to "the first listed" would
+    dispute -- and silence -- a real vulnerability that was reintroduced.
+
 - The demo seed must not misrepresent anything. It is what strangers and
   screenshots see, which makes it the easiest place to introduce a
   comfortable-looking lie. `kev_listed` keeps all three states, an unenriched

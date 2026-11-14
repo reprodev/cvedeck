@@ -528,7 +528,9 @@ Only the most recent slot is ever considered, so a slot the process slept throug
 
 ### Property 20: The fix shown is the earliest the distribution orders first
 
-*For any* set of records for one CVE and package from ecosystems that share a version ordering (dpkg for Debian and Ubuntu, rpm for the RPM families), each naming a fixed version, in any order, deduplication SHALL keep a record whose fixed version no other record's precedes under that ordering, and SHALL keep the same record whatever the arrival order.
+*For any* set of records for one CVE and package from ecosystems that share a version ordering (dpkg for Debian and Ubuntu, rpm for the RPM families), each naming a fixed version, in any order, deduplication SHALL keep a record whose fixed version is newer than the installed version whenever any record's is, and among those -- or among all, when none is -- one whose fixed version no other record's precedes under that ordering; and SHALL keep the same record whatever the arrival order.
+
+Until 0.17.1 the earliest fix was chosen regardless of the installed version, so a record naming a fix the host already has could outrank one naming the fix it needs, and the finding would read as disputed (Property 24) when the evidence for a real fix was in hand.
 
 From 0.10.4 to 0.12.0 the choice was stable but made by comparing identifiers as text, which picks `1.10-1.el9` over `1.9-1.el9`. The fixed version is display only -- remediation commands upgrade the package -- but the earliest is the one an operator can check an installed version against.
 
@@ -557,6 +559,14 @@ A job is several outcomes at once -- one host failed, another came back partial 
 The first half keeps the channel worth reading: a nightly "all clear" or a baseline's thousand findings teaches people to mute it. The second half is the enrichment invariant again -- an unchecked KEV answer must never read as a clean one -- and the privacy rule that makes a leaked summary say nothing about which machines are exposed.
 
 **Validates: Requirements 21.2, 21.3, 21.4, 21.5, 21.6, 21.7, 21.16**
+
+### Property 24: A fix the host already has never pages anyone
+
+*For any* package identifier, the finding SHALL be disputed exactly when its fix note names a fix in the host's own release, its ecosystem has a version ordering, and that fix is not newer than the installed version under it -- and never when the ordering is missing or the comparison fails. *For any* scheduled job, `build_digest` SHALL never count a disputed new finding, and a job whose only new findings are disputed (with every host checked) SHALL produce no message.
+
+In 0.17.0's upgrade check, OSV once reported 6,835 kernel CVEs against a Debian host, every one "fixed in" a version older than the one installed, 13 of them KEV-listed. The fix note was CveDeck's own evidence that the answer was wrong. The finding is kept -- a real advisory with an odd range must not vanish -- but it must not wake anyone.
+
+**Validates: Requirements 2.12, 14.11, 21.18**
 
 ## Addendum: design changes after the initial implementation
 
@@ -1098,3 +1108,38 @@ alerts or make them say more.
   threshold are `String` columns validated through `NotificationStatus` /
   `NotificationThreshold`, so adding a status later needs no PostgreSQL enum
   migration.
+
+### Disputed findings (0.17.1)
+
+A finding is *disputed* when its fix in the host's own release is not newer
+than the installed version (Req 14.11, Property 24). Run 1 of 0.17.0's upgrade
+check is the case: OSV answered "affected" for 6,835 Debian kernel CVEs whose
+own fix notes named versions older than the installed 6.1.187-1. Measured on
+the saved scans, the rule flags exactly those 6,835 and none of the 1,130 good
+findings on that host, and nothing on twelve clean Debian, Ubuntu and Rocky
+scans.
+
+- **Decided when read, not stored.** `fix_is_disputed` in
+  `app/package_identifier.py` reads the ecosystem, the installed version and
+  the `(fixed in V)` note from the `package_identifier` every finding already
+  carries, and compares with `version_order` -- the same dpkg / rpm orderings
+  the matcher uses to pick a fix (Req 2.11), moved there so there is one copy.
+  No column, so findings stored before 0.17.1 are judged too, and the flag can
+  never disagree with the text shown beside it.
+- **Can't decide means not disputed.** No ordering (Alpine, Wolfi, guessed
+  trackers), no installed version, or a comparator that raises: the finding
+  keeps its 0.17.0 treatment. Disputing takes a finding out of alerts, so only
+  a comparison that succeeded may do it.
+- **Kept and counted.** The owner chose to keep disputed findings in the fleet
+  counts and triage cards so a wrong flag can never quietly lower a headline
+  number. The API reports `fix_status = "disputed"` (with `fixed_version`
+  still set), which makes `has_fix` false: the finding is not in Ready to Fix,
+  a fix script or the kernel's upgrade list, and the dashboard says the fix it
+  names is already installed.
+- **Never in an alert** (Req 21.18). `build_digest` skips disputed new
+  findings before applying the threshold.
+- **The applicable fix is chosen first** (Req 2.11, 2.12). An advisory that
+  was fixed, reintroduced and fixed again lists several fixes for one release;
+  taking the first would dispute a real finding and silence it. The matcher
+  takes the earliest fix newer than the installed version, within one
+  advisory's ranges and across duplicate records, wherever an ordering exists.

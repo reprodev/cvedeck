@@ -106,6 +106,19 @@ def test_thresholds():
     assert by[NotificationThreshold.HIGH].qualifying == 3
 
 
+def test_a_job_whose_only_new_findings_are_disputed_sends_nothing():
+    """Req 21.18: run 1 of 0.17.0's upgrade check, KEV-listed and critical."""
+    stale = "Debian:12:linux-image-6.1.0-53-amd64@6.1.187-1 (fixed in 6.1.177-1)"
+    assert digest(host("web-01", snap(kev=True, pkg=stale), snap("CVE-2026-0002", pkg=stale))) is None
+
+
+def test_a_disputed_finding_is_not_counted_beside_a_real_one():
+    stale = "Debian:12:linux-image-6.1.0-53-amd64@6.1.187-1 (fixed in 6.1.177-1)"
+    real = "Debian:12:linux-image-6.1.0-53-amd64@6.1.187-1 (fixed in 6.1.190-1)"
+    d = digest(host("web-01", snap(kev=True, pkg=stale), snap("CVE-2026-0002", kev=True, pkg=real)))
+    assert d.qualifying == d.kev == 1
+
+
 def test_kev_listed_findings_always_qualify():
     d = digest(host("web-01", snap(severity=Severity.LOW, kev=True)),
                threshold=NotificationThreshold.KEV)
@@ -219,10 +232,31 @@ def test_priority_follows_exploitation():
 # Mostly distinctive names, which a leak check can look for without colliding
 # with the message's own words, plus arbitrary text for the cleaning path.
 hostnames = st.one_of(st.from_regex(r"host-[a-z0-9]{6}", fullmatch=True), st.text(min_size=1, max_size=40))
+# Fixes either side of an installed 1.5-1, and the ones dpkg puts at or below
+# it -- written out rather than computed, so the oracle is not the code under
+# test (Req 21.18, Property 24).
+_FIXES = ["1.4-1", "1.5-1", "1.5-1~deb12u1", "1.5-2", "1:1.0-1", "1.10-1"]
+_DISPUTED_FIXES = {"1.4-1", "1.5-1", "1.5-1~deb12u1"}
+_debian_findings = st.builds(
+    lambda name, fix: f"Debian:12:{name}@1.5-1 (fixed in {fix})",
+    st.from_regex(r"[a-z][a-z0-9-]{0,20}", fullmatch=True),
+    st.sampled_from(_FIXES),
+)
+
+
+def _disputed(s) -> bool:
+    pid = s.package_identifier or ""
+    return pid.startswith("Debian:12:") and pid.rsplit("(fixed in ", 1)[1][:-1] in _DISPUTED_FIXES
+
+
 snapshots = st.builds(
     FindingSnapshot,
     cve_id=st.from_regex(r"CVE-20[0-9]{2}-[0-9]{4,6}", fullmatch=True),
-    package_identifier=st.one_of(st.none(), st.from_regex(r"deb:[a-z][a-z0-9-]{0,20}@1\.[0-9]", fullmatch=True)),
+    package_identifier=st.one_of(
+        st.none(),
+        st.from_regex(r"deb:[a-z][a-z0-9-]{0,20}@1\.[0-9]", fullmatch=True),
+        _debian_findings,
+    ),
     severity=st.sampled_from(list(Severity)),
     cvss_score=st.one_of(st.none(), st.floats(0, 10)),
     kev_listed=st.sampled_from([True, False, None]),
@@ -252,6 +286,7 @@ outcomes = st.builds(
     kev_usable=st.booleans(),
 )
 def test_property_23(hosts, status, requested_by, threshold, include_not_checked, kev_usable):
+    """Property 23, and Property 24's half of it: a disputed finding never counts."""
     d = n.build_digest(
         job_status=status, requested_by=requested_by, finished_at=FINISHED_AT,
         outcomes=hosts, threshold=threshold, include_not_checked=include_not_checked,
@@ -265,7 +300,7 @@ def test_property_23(hosts, status, requested_by, threshold, include_not_checked
         )
 
     checked = [h for h in hosts if h.status is ScanStatus.SUCCESS and h.diff and not h.diff.baseline]
-    expected_qualifying = [s for h in checked for s in h.diff.new if qualifying(s)]
+    expected_qualifying = [s for h in checked for s in h.diff.new if qualifying(s) and not _disputed(s)]
     unchecked = [h for h in hosts if h.status is not ScanStatus.SUCCESS or not h.sources_ok]
     should_send = (
         requested_by == "schedule"

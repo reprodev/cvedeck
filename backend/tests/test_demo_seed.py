@@ -38,6 +38,26 @@ def test_seeds_a_non_trivial_fleet(session):
     assert session.query(CveFinding).count() > 0
 
 
+def test_no_seeded_finding_is_disputed(session):
+    """Req 14.11: every demo fix is newer than the 1.0-demo installed.
+
+    The seed is what strangers see; a disputed badge across it would say the
+    product cannot tell a fixed host from a vulnerable one. Measured when the
+    rule landed: 136 findings compared, none disputed.
+    """
+    from app.package_identifier import fix_is_disputed, parse_fix, version_order
+
+    seed_demo_fleet(session)
+    compared = [
+        f.package_identifier
+        for f in session.query(CveFinding)
+        if parse_fix(f.package_identifier)[0] == "available" and version_order(f.package_identifier)
+    ]
+
+    assert compared, "the check must compare something to mean anything"
+    assert [p for p in compared if fix_is_disputed(p)] == []
+
+
 def test_kev_listed_keeps_all_three_states(session):
     """The invariant this project is built around (AGENTS.md section 3).
 

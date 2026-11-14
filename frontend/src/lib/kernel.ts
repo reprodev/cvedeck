@@ -8,7 +8,7 @@
 
 import type { CveFinding, InstalledKernel, KernelInfo, Platform } from "../types";
 import { isKnownExploited } from "./intel";
-import { getDistroTooling, hasFix } from "./remediation";
+import { getDistroTooling, hasFix, identifierVersion } from "./remediation";
 
 export type KernelScope = "all" | "kernel" | "userland";
 
@@ -42,15 +42,6 @@ export interface KernelPlan {
   needUpgrade: CveFinding[];
   /** Known-exploited live findings. */
   exploited: number;
-}
-
-/** The installed version a finding names: what follows the last "@", before any note. */
-function identifierVersion(identifier: string | null): string | null {
-  if (!identifier) return null;
-  const note = identifier.indexOf(" (");
-  const base = note === -1 ? identifier : identifier.slice(0, note);
-  const at = base.lastIndexOf("@");
-  return at > 0 && base[at - 1] !== ":" ? base.slice(at + 1).trim() || null : null;
 }
 
 /**

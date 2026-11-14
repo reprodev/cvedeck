@@ -643,6 +643,46 @@ def test_a_finding_with_no_package_has_no_fix_status(session, client):
     assert by_id["CVE-pkg"]["fix_status"] == "available"
 
 
+def test_a_fix_the_host_already_has_is_disputed_and_still_counted(session, client):
+    """Validates Req 14.11: shown with its version, never offered, still counted."""
+    _make_machine(session, "m1", "alpha.example.com")
+    repo = Repository(session)
+    repo.save_findings(
+        "m1",
+        [
+            _finding(
+                "CVE-stale",
+                9.8,
+                Severity.CRITICAL,
+                package_identifier="Debian:12:linux-image-6.1.0-53-amd64@6.1.187-1 (fixed in 6.1.177-1)",
+            ),
+            _finding(
+                "CVE-real",
+                9.8,
+                Severity.CRITICAL,
+                package_identifier="Debian:12:curl@7.88.1-10 (fixed in 7.88.1-10+deb12u5)",
+            ),
+        ],
+    )
+    session.commit()
+
+    by_id = {
+        f["cve_id"]: f
+        for f in _assert_json_response(client.get("/api/machines/m1/cves"))
+    }
+
+    stale = by_id["CVE-stale"]
+    assert stale["fix_status"] == "disputed"
+    assert stale["has_fix"] is False
+    assert stale["fixed_version"] == "6.1.177-1"
+    assert by_id["CVE-real"]["fix_status"] == "available"
+    assert by_id["CVE-real"]["has_fix"] is True
+
+    # The owner's decision: a wrong flag must never lower a headline number.
+    (machine,) = [m for m in _assert_json_response(client.get("/api/machines")) if m["machine_id"] == "m1"]
+    assert machine["cve_counts"]["critical"] == 2
+
+
 def test_a_finding_with_no_package_has_no_blast_radius(session, client):
     """Validates Req 10.10: an OS-level advisory is not a leaf package.
 

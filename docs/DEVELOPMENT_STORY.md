@@ -3067,3 +3067,45 @@ unbroken after the edit. The test now switches the router-wide refusal off so
 that only the route's guard can answer. The broken-copy script now refuses to
 run until the unbroken suite passes, because a check that fails in both states
 proves nothing.
+
+## Chapter 38 — A fix the host already has (v0.17.1)
+
+The upgrade check for 0.17.0 went wrong once. A rescan of the Debian test host
+came back with 6,835 more kernel findings than the scan before it, 13 of them
+on CISA's KEV list, and every one said "fixed in 6.1.177-1" or similar, on a
+host running 6.1.187-1. Five more scans on both versions never reproduced it.
+OSV had answered "affected", and CveDeck had believed it. With alerts about to
+ship, that one answer would have been a page in the middle of the night. The
+owner chose to ship 0.17.0 and fix this next.
+
+The evidence was in the finding itself. An advisory that says a CVE is fixed
+in 6.1.177-1 about a host running 6.1.187-1 contradicts itself, and CveDeck
+already had the dpkg and rpm orderings it needed: the matcher used them to pick
+the earliest fix. Measured on the saved scans before any code changed, the
+comparison flagged exactly the 6,835 and none of the 1,130 good findings on
+that host, and nothing on twelve clean scans.
+
+The owner's rule was *flag, never delete*: a real advisory with an odd range
+must not vanish. So a disputed finding stays listed and counted, the host page
+says so, and it never becomes an upgrade command or an alert. It is worked out
+when read, from the identifier every finding already stores, so there is no
+migration and it covers findings stored before the release. Where versions
+can't be compared, nothing is disputed. Disputing takes a finding out of
+alerts, and a check that fails open would hide exactly what alerts exist to
+report.
+
+That rule had a gap, and closing it changed the matcher. A vulnerability that
+was fixed, came back and was fixed again lists two fixes for one release, and
+the matcher took the first. On a host between them, that is a fix it already
+has, so the guard would have disputed a real finding and kept it out of
+alerts. The matcher now takes the earliest fix newer than the installed
+version, within an advisory and across duplicate records. Without the first
+change, the second would have silenced a real vulnerability.
+
+The failure can't be reproduced against real OSV, so the container check
+brought its own: a small proxy that forwards to OSV and adds three advisories
+for the test host's bash. One is Shellshock with a fix older than installed.
+Another, log4shell's ID, has a newer fix. The third is a made-up CVE that was
+reintroduced. A scheduled scan whose only new finding was the contradiction
+sent nothing. One with all three new sent one alert counting two, and the
+reintroduced CVE named the fix after the installed version.

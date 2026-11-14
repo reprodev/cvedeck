@@ -25,8 +25,9 @@ from app.package_identifier import (
     kernel_is_matched,
     parse_fix,
     parse_package_name,
+    parse_package_version,
+    version_order,
 )
-from app.scanner import debian_version, rpm_version
 from app.enums import SEVERITY_RANK, Severity
 from app.scanner.cvss import (
     cvss_v3_base_score,
@@ -175,36 +176,26 @@ def _severity_rank(advisory: RawAdvisory) -> tuple[int, float]:
     return SEVERITY_RANK[band], -(advisory.cvss_score or 0.0)
 
 
-#: How each ecosystem orders its own versions, by the ecosystem's name -- the
-#: first part of a package identifier. Alpine and Wolfi are absent on purpose:
-#: their trackers publish one fix per release branch, so records rarely
-#: disagree, and they keep the stable text order.
-_VERSION_ORDER: dict[str, Callable[[str, str], int]] = {
-    "Debian": debian_version.compare,
-    "Ubuntu": debian_version.compare,
-    "Red Hat": rpm_version.compare,
-    "Rocky Linux": rpm_version.compare,
-    "AlmaLinux": rpm_version.compare,
-    "SUSE": rpm_version.compare,
-    "openSUSE": rpm_version.compare,
-}
-
-
 def _version_order(package_identifier: str) -> Callable[[str, str], int] | None:
-    return _VERSION_ORDER.get(package_identifier.split(":", 1)[0])
+    return version_order(package_identifier)
 
 
 def _earliest_fix(
     fixed: list[RawAdvisory], order: Callable[[RawAdvisory], Any]
 ) -> RawAdvisory:
-    """The record naming the earliest fix, by the distribution's own ordering (Req 2.11).
+    """The record naming the earliest fix the host needs, by the distribution's ordering (Req 2.11).
+
+    That is the earliest fix newer than the installed version; only when no
+    record names one, the earliest of them all. A record naming a fix the host
+    already has must not outrank one naming the fix it needs: the finding would
+    then read as disputed (Req 14.11) with a real fix in hand.
 
     Every record must come from ecosystems ordered the same way; otherwise --
     a mixture, or an ecosystem without an ordering here -- the records are
     taken in ``order``, a fixed order of their own, as they were before. Two
     fixes the ordering calls equal but spells differently (``1.0`` and
     ``1.00``) fall to ``order`` too, so the choice stays total and the same
-    whatever order the records arrive in (Property 18).
+    whatever order the records arrive in (Property 18, Property 20).
     """
     compare = _version_order(fixed[0].package_identifier)
     fixes = [parse_fix(a.package_identifier) for a in fixed]
@@ -214,7 +205,27 @@ def _earliest_fix(
     ):
         return min(fixed, key=order)
     version = cmp_to_key(compare)
-    return min(zip(fixed, fixes), key=lambda pair: (version(pair[1][2]), order(pair[0])))[0]
+
+    def needed(advisory: RawAdvisory, fix: str) -> bool:
+        installed = parse_package_version(advisory.package_identifier)
+        return installed is not None and _newer(compare, fix, installed)
+
+    return min(
+        zip(fixed, fixes),
+        key=lambda pair: (
+            not needed(pair[0], pair[1][2]),
+            version(pair[1][2]),
+            order(pair[0]),
+        ),
+    )[0]
+
+
+def _newer(compare: Callable[[str, str], int], fix: str, installed: str) -> bool:
+    """``fix`` sorts after ``installed``; an uncomparable pair is not newer."""
+    try:
+        return compare(fix, installed) > 0
+    except Exception:  # noqa: BLE001 -- falls back to the order used before 0.17.1
+        return False
 
 
 def _merge_duplicates(group: list[RawAdvisory]) -> RawAdvisory:
@@ -322,14 +333,35 @@ def _reattribute(advisory: RawAdvisory, remap: dict[str, str]) -> RawAdvisory:
     return advisory.model_copy(update={"package_identifier": prefix + remap[tail] + suffix})
 
 
-def _fixed_from_ranges(ranges: list[Any]) -> str | None:
+def _fixed_from_ranges(
+    ranges: list[Any],
+    installed: str | None = None,
+    compare: Callable[[str, str], int] | None = None,
+) -> str | None:
+    """The fix an advisory's ranges name for one release (Req 2.12).
+
+    A vulnerability fixed, reintroduced and fixed again lists more than one
+    ``fixed`` event. With the distribution's ordering and the installed
+    version, the fix is the earliest event newer than what is installed --
+    the one the host needs. Taking the first listed instead would name a fix
+    the host already has, and the finding would be disputed and left out of
+    alerts (Req 14.11, 21.18) while it is real. Without an ordering, or when
+    no event is newer, the first listed, as before.
+    """
+    found: list[str] = []
     for rng in ranges:
         if isinstance(rng, dict):
             events = rng.get("events") or []
             for ev in events:
                 if isinstance(ev, dict) and "fixed" in ev:
-                    return str(ev["fixed"])
-    return None
+                    found.append(str(ev["fixed"]))
+    if not found:
+        return None
+    if compare is not None and installed:
+        newer = [f for f in found if _newer(compare, f, installed)]
+        if newer:
+            return min(newer, key=cmp_to_key(compare))
+    return found[0]
 
 
 _parse_pkg_name = parse_package_name
@@ -408,6 +440,14 @@ def fix_suffix(
     """
     blocks = _package_blocks(vuln, package)
     fixes = [(b, _fixed_from_ranges(b.get("ranges") or [])) for b in blocks]
+    # The fix for the host's own release, chosen against what is installed
+    # (Req 2.12). Another release's fix is only named, never compared: its
+    # versions say nothing about this host's.
+    compare = version_order(package.ecosystem or queried_ecosystem)
+    own_fixes = {
+        id(b): _fixed_from_ranges(b.get("ranges") or [], package.version, compare)
+        for b in blocks
+    }
     host = host_releases(package.ecosystem or "")
 
     def same_release(block_eco: str) -> bool:
@@ -420,7 +460,7 @@ def fix_suffix(
             and any(release.family == h.family and release.key == h.key for h in host)
         )
 
-    own = [(b, f) for b, f in fixes if same_release(_block_ecosystem(b))]
+    own = [(b, own_fixes[id(b)]) for b, _f in fixes if same_release(_block_ecosystem(b))]
     if own:
         for _b, fixed in own:
             if fixed:
@@ -450,7 +490,8 @@ def fix_suffix(
     if not host:
         # No release to reason about. A rolling distribution's entry names the
         # ecosystem exactly ("Wolfi"), and its fix is the host's fix.
-        for b, fixed in fixes:
+        for b, _fixed in fixes:
+            fixed = own_fixes[id(b)]
             if fixed and _block_ecosystem(b).lower() == queried_ecosystem.lower():
                 return f" (fixed in {fixed})"
 

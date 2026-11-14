@@ -8,6 +8,32 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.17.1] - 2026-11-14
+
+A finding whose stated fix is already installed is marked, and never alerts.
+
+### Fixed
+
+- **A fix the host already has no longer reads as a fix, or wakes anyone**
+  (Req 14.11, 21.18). OSV once reported 6,835 kernel CVEs on a Debian host,
+  each "fixed in" a version older than the one installed, 13 of them on CISA's
+  KEV list. Such a finding is now marked **Disputed fix**. It is still listed
+  and counted, the host page says how many there are, and the finding explains
+  which version the advisory names and which is installed. It is never offered
+  as an upgrade and never counted toward an alert. Only Debian, Ubuntu and the
+  RPM distributions are compared; where CveDeck can't compare versions
+  (Alpine, Wolfi), nothing changes.
+- **The fix shown is the one the host needs** (Req 2.11, 2.12). When a
+  vulnerability was fixed, came back and was fixed again, CveDeck showed the
+  first fix, which a host past it already has. It now shows the earliest fix
+  newer than the installed version.
+
+No migration: the mark is worked out from what every finding already stores,
+so it applies to existing findings too. Upgrading from 0.17.0 kept every
+finding and fix version, and a rescan found nothing new or resolved.
+
+---
+
 ## [0.17.0] - 2026-11-06
 
 Alerts after scheduled scans.

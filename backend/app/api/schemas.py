@@ -148,7 +148,10 @@ class CveFindingOut(BaseModel):
     #: ships a fix, so upgrading packages cannot clear it;
     #: ``upstream`` -- ``fix_release`` has a fix, but the host's release could not
     #: be matched, so availability is unconfirmed;
-    #: ``none`` -- no fix is published.
+    #: ``none`` -- no fix is published;
+    #: ``disputed`` -- the host's own release names ``fixed_version``, but that
+    #: is not newer than the installed version, so the advisory contradicts
+    #: itself (Req 14.11). Listed and counted, never offered as an upgrade.
     #: ``None`` where there is no package identifier to read it from, which is
     #: not the same claim as "no fix is published" (Req 14.9).
     fix_status: str | None = None

@@ -139,9 +139,15 @@ def fixed_group(draw):
 
 @given(fixed_group(), st.randoms(use_true_random=False))
 def test_the_fix_kept_is_the_earliest_the_distribution_orders_first(group, rng):
-    """Property 20: no other record's fix precedes the one kept, in any order."""
+    """Property 20: the fix kept is one the host needs whenever any record names
+    one, and no other such record's fix precedes it -- in any arrival order.
+
+    ``_RPM_FIXES`` holds fixes on both sides of the installed 1.20.1-14.el9
+    (1.9 and 1.10 sort below it), so both halves of the rule are exercised.
+    """
     base, records = group
     compare = _FAMILIES[base][1]
+    installed = base.rsplit("@", 1)[1]
     shuffled = list(records)
     rng.shuffle(shuffled)
     client = OsvHttpClient()
@@ -151,8 +157,30 @@ def test_the_fix_kept_is_the_earliest_the_distribution_orders_first(group, rng):
 
     assert kept == again
     _status, _release, chosen = parse_fix(kept.package_identifier)
-    for record in records:
-        assert compare(parse_fix(record.package_identifier)[2], chosen) >= 0
+    fixes = [parse_fix(record.package_identifier)[2] for record in records]
+    needed = [fix for fix in fixes if compare(fix, installed) > 0]
+    candidates = needed or fixes
+    if needed:
+        assert compare(chosen, installed) > 0
+    for fix in candidates:
+        assert compare(fix, chosen) >= 0
+
+
+def test_a_fix_the_host_already_has_does_not_outrank_the_one_it_needs():
+    """Req 2.11: 1.9-1.el9 is earlier, but nginx 1.20.1 is already past it."""
+    client = OsvHttpClient()
+    stale, needed = _rocky("1.9-1.el9"), _rocky("1.21.1-1.el9")
+
+    for order in ([stale, needed], [needed, stale]):
+        (kept,) = client._deduplicate_findings(order)
+        assert kept.package_identifier.endswith("(fixed in 1.21.1-1.el9)")
+
+
+def test_when_every_fix_is_already_installed_the_earliest_is_kept():
+    """Nothing newer to prefer: the 0.17.0 rule, and the finding is disputed."""
+    client = OsvHttpClient()
+    (kept,) = client._deduplicate_findings([_rocky("1.10-1.el9"), _rocky("1.9-1.el9")])
+    assert kept.package_identifier.endswith("(fixed in 1.9-1.el9)")
 
 
 def _rocky(fix: str, score: float | None = 7.5) -> RawAdvisory:

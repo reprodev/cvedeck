@@ -321,6 +321,21 @@ export interface FixInfo {
   /** The release with the fix, for "newer_release" and "upstream". */
   release: string | null;
   version: string | null;
+  /** What the host has installed, for "disputed": the reason it is one. */
+  installed?: string | null;
+}
+
+/**
+ * The installed version a package identifier names: what follows the last
+ * "@", before any note. Mirrors parse_package_version in
+ * backend/app/package_identifier.py.
+ */
+export function identifierVersion(identifier: string | null | undefined): string | null {
+  if (!identifier) return null;
+  const note = identifier.indexOf(" (");
+  const base = note === -1 ? identifier : identifier.slice(0, note);
+  const at = base.lastIndexOf("@");
+  return at > 0 && base[at - 1] !== ":" ? base.slice(at + 1).trim() || null : null;
 }
 
 const ELSEWHERE_NOTE = /\(no fix in (.+?); fixed only in (.+): (\S+)\)\s*$/;
@@ -335,6 +350,14 @@ const AVAILABLE_NOTE = /\(fixed in ([^)\s]+)\)\s*$/;
  * backend/app/package_identifier.py.
  */
 export function findingFix(finding: CveFinding): FixInfo {
+  if (finding.fixStatus === "disputed") {
+    return {
+      status: "disputed",
+      release: null,
+      version: finding.fixedVersion ?? null,
+      installed: identifierVersion(finding.packageIdentifier),
+    };
+  }
   if (finding.fixStatus) {
     return {
       status: finding.fixStatus,
@@ -374,6 +397,7 @@ export function hasFix(finding: CveFinding): boolean {
 
 /** A short label for a fix that is not installable here, or null. */
 export function fixElsewhereLabel(fix: FixInfo): string | null {
+  if (fix.status === "disputed") return "Disputed fix";
   if (fix.status === "newer_release" && fix.release) return `Fixed only in ${fix.release}`;
   if (fix.status === "upstream" && fix.release) return `Upstream fix in ${fix.release}`;
   return null;
@@ -381,6 +405,16 @@ export function fixElsewhereLabel(fix: FixInfo): string | null {
 
 /** The longer explanation for the same, for a tooltip or a detail view. */
 export function fixElsewhereExplanation(fix: FixInfo): string | null {
+  if (fix.status === "disputed") {
+    const named = fix.version ? `names ${fix.version} as the fix` : "names a fix";
+    const has = fix.installed ? ` ${fix.installed}` : " a version at least as new";
+    return (
+      `The advisory ${named}, but this host already has${has}. The source ` +
+      `contradicted itself, so this finding is shown and counted but never ` +
+      `alerted on or offered as an upgrade. Scan again; if it stays, check ` +
+      `the distribution's own security tracker.`
+    );
+  }
   const version = fix.version ? ` (${fix.version})` : "";
   if (fix.status === "newer_release" && fix.release) {
     return (

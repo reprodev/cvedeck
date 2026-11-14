@@ -23,7 +23,9 @@ unambiguous for every identifier the matcher produces.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
+
+from app.scanner import debian_version, rpm_version
 
 if TYPE_CHECKING:
     from app.models import Package
@@ -113,6 +115,59 @@ def parse_fix(
     if m := _UPSTREAM.search(text):
         return "upstream", m.group("label"), m.group("version")
     return "none", None, None
+
+
+#: How each ecosystem orders its own versions, by the ecosystem's name -- the
+#: first part of a package identifier or a package's ecosystem. Alpine and
+#: Wolfi are absent on purpose: CveDeck has no apk ordering, so their findings
+#: are never compared, and never disputed (Req 14.11).
+_VERSION_ORDER: dict[str, Callable[[str, str], int]] = {
+    "Debian": debian_version.compare,
+    "Ubuntu": debian_version.compare,
+    "Red Hat": rpm_version.compare,
+    "Rocky Linux": rpm_version.compare,
+    "AlmaLinux": rpm_version.compare,
+    "SUSE": rpm_version.compare,
+    "openSUSE": rpm_version.compare,
+}
+
+
+def version_order(ecosystem_or_identifier: str | None) -> Callable[[str, str], int] | None:
+    """The distribution's own version comparison, or ``None`` where CveDeck has none.
+
+    Takes a package identifier (``Debian:12:openssl@3.0.15-1``) or an
+    ecosystem (``Debian:12``) alike: only the part before the first colon
+    counts. One table for the matcher choosing a fix (Req 2.11, 2.12) and for
+    disputing one (Req 14.11), so the two can never order versions differently.
+    """
+    return _VERSION_ORDER.get((ecosystem_or_identifier or "").split(":", 1)[0])
+
+
+def fix_is_disputed(package_identifier: str | None) -> bool:
+    """Whether a finding's own fix is one the host already has (Req 14.11, Property 24).
+
+    True when the note says the host's release has a fix, the ecosystem has an
+    ordering, and that fix is not newer than the installed version. An advisory
+    that says "fixed in 6.1.177-1" about a host running 6.1.187-1 contradicts
+    itself: in 0.17.0's upgrade check OSV once answered that way for 6,835
+    kernel CVEs on one Debian host.
+
+    Anything that cannot be decided is *not* disputed -- no ordering, no
+    installed version, a comparison that fails -- because a disputed finding is
+    left out of alerts (Req 21.18), and only a comparison that succeeded may
+    take a finding out of one.
+    """
+    status, _release, fixed = parse_fix(package_identifier)
+    if status != "available" or not fixed:
+        return False
+    compare = version_order(package_identifier)
+    installed = parse_package_version(package_identifier)
+    if compare is None or installed is None:
+        return False
+    try:
+        return compare(fixed, installed) <= 0
+    except Exception:  # noqa: BLE001 -- undecidable is not disputed, by design
+        return False
 
 
 # Binary and source names of the kernel, across the package managers CveDeck

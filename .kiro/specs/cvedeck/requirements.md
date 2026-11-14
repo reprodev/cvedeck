@@ -65,7 +65,8 @@ The CveDeck is a vulnerability management tool that scans Windows and Linux mach
 8. WHEN THE Scanner_Engine looks up a package's advisories, THE Scanner_Engine SHALL ask under the package's source name and source version as well as under the binary's own, since distributions publish advisories under either, and SHALL report each advisory once per source package however many of its binaries are installed and however many of the names asked found it.
 9. WHEN OSV_Source answers a query in pages, THE Scanner_Engine SHALL read every page before using the answer, and IF any page cannot be read or the answer exceeds a fixed page ceiling, THEN THE Scanner_Engine SHALL treat the whole query as unanswered rather than use the pages that arrived.
 10. WHEN OSV_Source returns more than one record for the same CVE and package, THE Scanner_Engine SHALL report one finding that carries a fixed version if any record names one and the most severe rating any record gives, and SHALL produce the same finding whatever order the records arrive in.
-11. WHEN those records name different fixed versions THEN THE Scanner_Engine SHALL report the earliest by the distribution's own version ordering -- dpkg's for Debian and Ubuntu, rpm's for Red Hat, Rocky Linux, AlmaLinux, SUSE and openSUSE -- and, for any other ecosystem or a mixture of ecosystems, SHALL choose by a fixed order that does not depend on arrival order.
+11. WHEN those records name different fixed versions THEN THE Scanner_Engine SHALL report the earliest that is newer than the installed version by the distribution's own version ordering -- dpkg's for Debian and Ubuntu, rpm's for Red Hat, Rocky Linux, AlmaLinux, SUSE and openSUSE -- or, IF none is newer, the earliest of them all; and, for any other ecosystem or a mixture of ecosystems, SHALL choose by a fixed order that does not depend on arrival order.
+12. WHEN one advisory lists more than one fixed version for the host's own release -- a vulnerability fixed, reintroduced and fixed again -- THEN THE Scanner_Engine SHALL report the earliest that is newer than the installed version by that distribution's ordering, rather than the first listed; and WHERE the ecosystem has no such ordering, or none is newer, SHALL report the first listed.
 
 ### Requirement 3: Machine List and Severity Filtering
 
@@ -461,6 +462,14 @@ host it is for, so that copying it produces a command that works.
     argument, SHALL keep text placed in a comment line free of line breaks, and
     SHALL NOT place a control character into a command, since a scanned host
     is not trusted and these commands are run with root privileges.
+11. WHEN a finding's fix in the host's own release is not newer than the
+    installed version by the distribution's own version ordering THEN THE
+    system SHALL report the finding as disputed: it SHALL still list and count
+    it, SHALL NOT offer that fix as installable, and SHALL say that the fix it
+    names is already installed. WHERE the ecosystem has no such ordering, the
+    finding names no installed version, or the versions cannot be compared,
+    THE system SHALL NOT report it as disputed, since disputing a finding takes
+    it out of alerts and only a comparison that succeeded may do that.
 
 ### Requirement 15: Public demonstration mode
 
@@ -828,3 +837,6 @@ leak my fleet's weaknesses or to aim CveDeck at someone else.
     topic shorter than 20 characters or without both letters and digits --
     checked before any lookup, since a name that resolves to the LAN today can
     resolve publicly tomorrow.
+18. THE system SHALL NOT count a disputed finding (Requirement 14.11) toward
+    an alert, nor send an alert because of one: an advisory source that
+    contradicts itself must not be able to page anyone.

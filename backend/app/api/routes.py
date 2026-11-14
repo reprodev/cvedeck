@@ -49,6 +49,7 @@ from ..enums import ScanJobTargetState, ScanStatus, Severity
 from ..models import Package as DomainPackage
 from ..package_identifier import (
     advisory_source,
+    fix_is_disputed,
     is_kernel_package,
     parse_fix,
     parse_package_name,
@@ -238,6 +239,11 @@ def _to_finding_out(
         fix_release = fix_release_version = None
         if fixed_version is None:
             fix_status = "none"
+        elif fix_is_disputed(finding.package_identifier):
+            # The fix it names is one the host already has (Req 14.11). Kept,
+            # counted and shown with its version, but never offered as an
+            # upgrade: has_fix below is false for it.
+            fix_status = "disputed"
 
     # Every binary of the finding's source is affected, so dependencies and
     # dependents are those of all of them -- what breaks if glibc goes is what

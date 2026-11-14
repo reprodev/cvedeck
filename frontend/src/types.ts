@@ -110,7 +110,12 @@ export interface MachineSummary {
 }
 
 /** How a finding can be fixed on the host it was found on. */
-export type FixStatus = "available" | "newer_release" | "upstream" | "none";
+/**
+ * "disputed": the host's own release names a fix, but it is not newer than the
+ * installed version -- the advisory contradicts itself (Req 14.11). Shown and
+ * counted, never offered as an upgrade, never alerted on.
+ */
+export type FixStatus = "available" | "newer_release" | "upstream" | "none" | "disputed";
 
 /** A single CVE finding for a machine, as shown in the drill-down view. */
 export interface CveFinding {
@@ -131,7 +136,8 @@ export interface CveFinding {
    * Where the fix is (Req 14.7, 14.8): "available" on this host's own release;
    * "newer_release" when only a newer release (or Ubuntu Pro) has it, so no
    * package upgrade can clear it; "upstream" when a fix exists but could not be
-   * confirmed for this release; "none" when nothing is published.
+   * confirmed for this release; "none" when nothing is published;
+   * "disputed" when the fix it names is already installed (Req 14.11).
    */
   fixStatus?: FixStatus;
   /** The release that has the fix, for "newer_release" and "upstream". */

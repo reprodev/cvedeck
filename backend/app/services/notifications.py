@@ -41,7 +41,7 @@ from app.enums import (
     ScanStatus,
     Severity,
 )
-from app.package_identifier import parse_package_name
+from app.package_identifier import fix_is_disputed, parse_package_name
 from app.services import notify_destination
 from app.services.notify_destination import Destination, SendResult
 
@@ -181,6 +181,10 @@ def build_digest(
             continue
         found: list[NewFinding] = []
         for snap in diff.new:
+            # A fix the host already has: the source contradicted itself, and
+            # it must not page anyone (Req 21.18, Property 24).
+            if fix_is_disputed(snap.package_identifier):
+                continue
             if not qualifies(snap.severity, snap.kev_listed, threshold):
                 continue
             if snap.kev_listed is True:
