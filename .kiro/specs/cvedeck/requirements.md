@@ -840,3 +840,21 @@ leak my fleet's weaknesses or to aim CveDeck at someone else.
 18. THE system SHALL NOT count a disputed finding (Requirement 14.11) toward
     an alert, nor send an alert because of one: an advisory source that
     contradicts itself must not be able to page anyone.
+19. WHEN a refresh of the threat-intel feeds changes a stored finding from
+    not listed, or not checked, to listed in the KEV catalogue THEN THE system
+    SHALL send one alert for that refresh covering every such finding, after
+    the refresh is committed, whatever the alert threshold -- a finding that
+    becomes actively exploited is the most urgent news the system can give,
+    and it is not new to any scan. A finding leaving the catalogue SHALL NOT
+    cause an alert, and a disputed finding SHALL NOT be counted.
+20. WHEN the KEV catalogue was not usable before a refresh THEN THE system
+    SHALL NOT send an alert for that refresh: its first usable catalogue is
+    a baseline, as a host's first scan is, and would otherwise report every
+    exploited finding in the fleet at once.
+21. THE system SHALL apply Requirement 21.19 to every way a refresh is
+    started -- the periodic refresher, the HTTP route and the command line --
+    since none of them has someone watching the dashboard, and SHALL NOT
+    refresh, and so SHALL NOT alert, in demo mode.
+22. THE dashboard SHALL let an administrator switch alerts about newly
+    exploited findings off and on, separately from alerts after scheduled
+    scans; they SHALL be on by default.

@@ -472,8 +472,13 @@ def test_every_refresh_path_commits_feed_by_feed(db_path, monkeypatch):
 
     seen: list[str] = []
 
-    def fake(repository, *, checkpoint=None):
-        seen.append("checkpoint" if callable(checkpoint) else "none")
+    def fake(repository, *, checkpoint=None, notify):
+        # Req 21.21 rides on the same three paths: each must also pass the
+        # hook that alerts on findings newly listed in KEV.
+        seen.append(
+            ("checkpoint" if callable(checkpoint) else "none")
+            + ("+notify" if callable(notify) else "")
+        )
         return [], 0
 
     monkeypatch.setattr(enrichment, "refresh_feeds_and_reapply", fake)
@@ -490,7 +495,7 @@ def test_every_refresh_path_commits_feed_by_feed(db_path, monkeypatch):
     app.dependency_overrides[get_session] = lambda: Session(engine)
     assert TestClient(app).post("/api/feeds/refresh").status_code == 200
 
-    assert seen == ["checkpoint"] * 3
+    assert seen == ["checkpoint+notify"] * 3
 
 
 # --------------------------------------------------------------------------- #

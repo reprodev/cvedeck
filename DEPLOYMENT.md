@@ -660,6 +660,41 @@ and in Settings, as the destination's host and the status, never the URL. A
 connection error or a 5xx is retried once after 5 seconds. Redirects are not
 followed, and the response body is never read.
 
+#### When a finding becomes actively exploited
+
+Since 0.18.0, CveDeck also sends a message when CISA adds a CVE you already
+have to its catalogue of actively exploited vulnerabilities (KEV). This is
+often the most urgent news there is, and no scan reports it: the finding is
+not new, only its status changed.
+
+- **When it fires.** After a refresh of the threat-intel feeds -- the
+  automatic one (every `CVEDECK_FEED_REFRESH_HOURS`, 24 by default),
+  `POST /api/feeds/refresh`, or `cvedeck-admin refresh-feeds` -- that moved
+  at least one stored finding into the catalogue. One message per refresh,
+  whatever the threshold. A finding leaving the catalogue sends nothing.
+- **Not for the first catalogue.** The first time the KEV catalogue is
+  downloaded, every exploited finding becomes listed at once. That is a
+  baseline, like a host's first scan, and sends nothing.
+- **Same rules as scan alerts.** Same destination, same LAN-only default, same
+  summary-unless-detailed rule, same signature. A finding whose stated fix is
+  already installed (shown as *Disputed fix*) is never counted.
+- **Switch.** *Alert when a finding becomes actively exploited* in Settings →
+  Alerts. It is on by default, including after an upgrade: with alerts already
+  switched on, these start arriving.
+
+A summary reads:
+
+```
+CveDeck: 2 findings newly exploited
+CISA added 2 CVEs found on 1 host to its catalogue of actively exploited vulnerabilities (KEV).
+They were already among your findings; what changed is that exploitation is now confirmed.
+```
+
+A webhook receives `"event": "kev.newly_listed"` (a scan's alert is
+`"scheduled_scan.finished"`), with `summary.newly_exploited` and
+`summary.hosts`. Detailed mode adds `hosts[].findings[]`, each with `cve_id`,
+`severity`, `cvss`, `package` and CISA's `kev_due_date`.
+
 ## Demo mode
 
 `CVEDECK_DEMO_MODE=true` turns an instance into a showcase:

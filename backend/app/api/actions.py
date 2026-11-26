@@ -465,12 +465,15 @@ def set_notifications(
     row.enabled = body.enabled
     row.threshold = body.threshold.value
     row.include_not_checked = body.include_not_checked
+    if body.include_newly_exploited is not None:
+        row.include_newly_exploited = body.include_newly_exploited
     session.commit()
     _audit(
         request,
         "Notifications",
         f"{'on' if body.enabled else 'off'}, threshold {body.threshold.value}, "
-        f"unchecked hosts {'reported' if body.include_not_checked else 'not reported'}",
+        f"unchecked hosts {'reported' if body.include_not_checked else 'not reported'}, "
+        f"newly exploited {'reported' if row.include_newly_exploited else 'not reported'}",
     )
     return notifications_out(session)
 
@@ -607,7 +610,9 @@ def refresh_feeds(
     from ..services.enrichment import refresh_feeds_and_reapply
 
     outcomes, findings_updated = refresh_feeds_and_reapply(
-        Repository(session), checkpoint=session.commit
+        Repository(session),
+        checkpoint=session.commit,
+        notify=notifications.newly_exploited_hook(session),
     )
     session.commit()
 

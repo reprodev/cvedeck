@@ -443,10 +443,14 @@ export interface NotificationSettings {
   /** "kev", "critical" or "high". */
   threshold: string;
   includeNotChecked: boolean;
+  /** Alert when a feed refresh makes a finding actively exploited (Req 21.22). */
+  includeNewlyExploited: boolean;
   lastSentAt: string | null;
   lastStatus: string | null;
   lastError: string | null;
   lastJobId: string | null;
+  /** What the last alert was about: "scheduled_scan", "kev_update" or "test". */
+  lastEvent: string | null;
 }
 
 /** The result of a test alert. */

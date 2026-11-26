@@ -489,3 +489,59 @@ def test_a_0_12_0_database_upgrades_to_cancellable_jobs_with_its_jobs(tmp_path):
         job = session.get(ScanJob, "old")
         assert job.status is ScanJobStatus.CANCELLED
         assert job.targets[0].state is ScanJobTargetState.CANCELLED
+
+
+def test_a_0_17_database_keeps_its_alert_settings_and_turns_on_newly_exploited(tmp_path):
+    """Validates Req 21.22: the switch arrives on, the existing row survives."""
+    from sqlalchemy.orm import Session
+
+    from app.data.schema import NotificationSettings
+
+    engine = create_engine(f"sqlite:///{(tmp_path / 'v0171.db').as_posix()}")
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "f2c8a5d0b613")
+        connection.execute(
+            text(
+                "INSERT INTO notification_settings (id, enabled, threshold, include_not_checked, "
+                "last_status) VALUES (1, 1, 'kev', 0, 'sent')"
+            )
+        )
+
+    upgrade_to_head(engine)
+
+    assert _revision(engine) == _head()
+    with Session(engine) as session:
+        row = session.get(NotificationSettings, 1)
+        assert (row.enabled, row.threshold, row.include_not_checked) == (True, "kev", False)
+        assert row.include_newly_exploited is True
+        assert row.last_event is None and row.last_status == "sent"
+
+
+def test_the_alert_tables_match_the_orm_after_migrating(tmp_path):
+    """A column in schema.py without a revision breaks every upgrade; compare them."""
+    engine = create_engine(f"sqlite:///{(tmp_path / 'cols.db').as_posix()}")
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "f2c8a5d0b613")
+    upgrade_to_head(engine)
+
+    inspector = inspect(engine)
+    for table in ("notification_settings", "scan_jobs"):
+        migrated = {c["name"] for c in inspector.get_columns(table)}
+        assert migrated == set(Base.metadata.tables[table].columns.keys()), table
+
+
+def test_the_newly_exploited_migration_round_trips(tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'rt.db').as_posix()}")
+    upgrade_to_head(engine)
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.downgrade(cfg, "f2c8a5d0b613")
+        columns = {c["name"] for c in inspect(connection).get_columns("notification_settings")}
+        assert "include_newly_exploited" not in columns and "last_event" not in columns
+        command.upgrade(cfg, "head")
+    assert _revision(engine) == _head()

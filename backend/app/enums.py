@@ -213,3 +213,14 @@ class NotificationStatus(str, Enum):
     FAILED = "failed"
     REFUSED = "refused"
     NOTHING_TO_SEND = "nothing_to_send"
+
+
+class NotificationEvent(str, Enum):
+    """What a recorded alert was about (Req 21.8, 21.19).
+
+    Stored as a plain string, like :class:`NotificationStatus`.
+    """
+
+    SCHEDULED_SCAN = "scheduled_scan"
+    KEV_UPDATE = "kev_update"
+    TEST = "test"

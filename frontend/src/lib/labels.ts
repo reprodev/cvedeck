@@ -169,6 +169,20 @@ export function notificationStatusLabel(
 }
 
 /** The dashboard's choice of what is worth an alert (Req 21.4). */
+/** What an alert was about, for "Last alert: ... after a KEV update". */
+export function notificationEventLabel(event: string | null): string | null {
+  switch (event) {
+    case "scheduled_scan":
+      return "after a scheduled scan";
+    case "kev_update":
+      return "after a KEV update";
+    case "test":
+      return "test alert";
+    default:
+      return null;
+  }
+}
+
 export const NOTIFICATION_THRESHOLDS: { value: string; label: string }[] = [
   { value: "kev", label: "Actively exploited only" },
   { value: "critical", label: "Actively exploited, or critical" },

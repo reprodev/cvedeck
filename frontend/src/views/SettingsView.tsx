@@ -21,7 +21,12 @@ import type {
   TestNotificationResult,
 } from "../types";
 import { MIN_PASSWORD_LENGTH } from "./SetupView";
-import { NOTIFICATION_THRESHOLDS, notificationStatusLabel, parseServerTime } from "../lib/labels";
+import {
+  NOTIFICATION_THRESHOLDS,
+  notificationEventLabel,
+  notificationStatusLabel,
+  parseServerTime,
+} from "../lib/labels";
 import { randomTopicName } from "../lib/topicName";
 
 export interface SettingsViewProps {
@@ -50,6 +55,7 @@ export interface SettingsViewProps {
     enabled: boolean,
     threshold: string,
     includeNotChecked: boolean,
+    includeNewlyExploited: boolean,
   ) => Promise<NotificationSettings>;
   onSendTestNotification?: () => Promise<TestNotificationResult>;
   onBack: () => void;
@@ -286,6 +292,7 @@ function NotificationsPanel({
   const [enabled, setEnabled] = useState(false);
   const [threshold, setThreshold] = useState("critical");
   const [includeNotChecked, setIncludeNotChecked] = useState(true);
+  const [includeNewlyExploited, setIncludeNewlyExploited] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -296,6 +303,7 @@ function NotificationsPanel({
     setEnabled(next.enabled);
     setThreshold(next.threshold);
     setIncludeNotChecked(next.includeNotChecked);
+    setIncludeNewlyExploited(next.includeNewlyExploited);
   }, []);
 
   useEffect(() => {
@@ -309,7 +317,7 @@ function NotificationsPanel({
     setBusy(true);
     setError(null);
     try {
-      const saved = await onSet(enabled, threshold, includeNotChecked);
+      const saved = await onSet(enabled, threshold, includeNotChecked, includeNewlyExploited);
       show(saved);
       toast.success(saved.enabled ? "Alerts on." : "Alerts off.");
     } catch (err) {
@@ -338,9 +346,11 @@ function NotificationsPanel({
     settings !== null &&
     enabled === settings.enabled &&
     threshold === settings.threshold &&
-    includeNotChecked === settings.includeNotChecked;
+    includeNotChecked === settings.includeNotChecked &&
+    includeNewlyExploited === settings.includeNewlyExploited;
   const sendable = settings !== null && settings.configured && settings.problems.length === 0;
   const lastAlert = settings ? notificationStatusLabel(settings.lastStatus) : null;
+  const lastEvent = settings ? notificationEventLabel(settings.lastEvent) : null;
 
   return (
     <section className="card settings-panel" aria-labelledby="alerts-heading">
@@ -349,8 +359,9 @@ function NotificationsPanel({
       </h3>
       <p className="hint">
         One message after a scheduled scan that finds something new worth acting on, or a
-        host it could not check. Never an all-clear. Where alerts go, and how much they say,
-        are set in the server&apos;s environment, not here.
+        host it could not check, and one when CISA lists a finding you already have as
+        actively exploited. Never an all-clear. Where alerts go, and how much they say, are
+        set in the server&apos;s environment, not here.
       </p>
 
       {error && (
@@ -423,7 +434,7 @@ function NotificationsPanel({
                   disabled={!settings.configured && !settings.enabled}
                   onChange={(e) => setEnabled(e.target.checked)}
                 />{" "}
-                Send alerts after scheduled scans
+                Send alerts
               </label>
             </div>
             <div className="field-group">
@@ -451,9 +462,25 @@ function NotificationsPanel({
                 Also alert when a host could not be checked
               </label>
             </div>
+            <div className="field-group">
+              <label className="inline-check" htmlFor="alerts-newly-exploited">
+                <input
+                  id="alerts-newly-exploited"
+                  type="checkbox"
+                  checked={includeNewlyExploited}
+                  onChange={(e) => setIncludeNewlyExploited(e.target.checked)}
+                />{" "}
+                Alert when a finding becomes actively exploited
+              </label>
+              <span className="field-hint">
+                When CISA adds a CVE you already have to its KEV catalogue. Not for the
+                catalogue&apos;s first download.
+              </span>
+            </div>
             {settings.lastSentAt && (
               <p className="hint" data-testid="alerts-last">
                 Last alert: {formatDate(settings.lastSentAt)}
+                {lastEvent ? ` (${lastEvent})` : ""}
                 {lastAlert ? ` — ${lastAlert.text}` : ""}
                 {settings.lastError ? ` (${settings.lastError})` : "."}
               </p>

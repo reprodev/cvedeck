@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from ..enums import (
     FeedStatus,
     FindingChange,
+    NotificationEvent,
     NotificationStatus,
     NotificationThreshold,
     Platform,
@@ -575,10 +576,14 @@ class NotificationsOut(BaseModel):
     enabled: bool
     threshold: NotificationThreshold
     include_not_checked: bool
+    #: Alert when a refresh makes a stored finding KEV-listed (Req 21.22).
+    include_newly_exploited: bool = True
     last_sent_at: datetime | None = None
     last_status: NotificationStatus | None = None
     last_error: str | None = None
     last_job_id: str | None = None
+    #: What the last recorded alert was about.
+    last_event: NotificationEvent | None = None
 
 
 class NotificationsIn(BaseModel):
@@ -593,6 +598,9 @@ class NotificationsIn(BaseModel):
     enabled: bool
     threshold: NotificationThreshold
     include_not_checked: bool
+    #: Omitted leaves it as it is, so a client that predates the switch cannot
+    #: turn back on what someone turned off (Req 21.22).
+    include_newly_exploited: bool | None = None
 
 
 class TestNotificationOut(BaseModel):

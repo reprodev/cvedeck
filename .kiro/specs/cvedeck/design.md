@@ -568,6 +568,14 @@ In 0.17.0's upgrade check, OSV once reported 6,835 kernel CVEs against a Debian 
 
 **Validates: Requirements 2.12, 14.11, 21.18**
 
+### Property 25: A finding newly listed as exploited is reported once, and only then
+
+*For any* set of findings a feed refresh moved from not listed (or not checked) to listed in the KEV catalogue, and any alert settings, a message SHALL be produced exactly when the catalogue was usable before the refresh AND the newly-exploited alert is switched on AND at least one of those findings is not disputed; it SHALL count exactly the non-disputed ones and the distinct hosts carrying them; and a summary SHALL contain no hostname, CVE identifier, package name or CveDeck version.
+
+"Once" holds by construction rather than by bookkeeping: the refresh writes the new state, so the next refresh sees no change. The baseline clause is the one that stops a fresh install, or a deployment whose feed has never downloaded, from paging for the whole fleet the first time the catalogue arrives.
+
+**Validates: Requirements 21.19, 21.20, 21.22**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).
@@ -1143,3 +1151,36 @@ scans.
   taking the first would dispute a real finding and silence it. The matcher
   takes the earliest fix newer than the installed version, within one
   advisory's ranges and across duplicate records, wherever an ordering exists.
+
+### Newly exploited (0.18.0)
+
+A finding the fleet has carried for months can be added to CISA's KEV
+catalogue on any day. Until 0.18.0 that changed the dashboard silently: alerts
+covered only findings new to a scheduled scan, and a scan never sees the
+change, because the feed refresh has already written it.
+
+- **Detected where the state changes.** `FindingEnricher.reapply_to_stored`
+  already compares each stored finding's signals with the catalogue; it now
+  also returns the findings whose `kev_listed` became `True`
+  (`ReapplyResult.newly_listed`).
+- **One join, with a required hook.** `refresh_feeds_and_reapply` notes
+  whether KEV was usable *before* refreshing, commits the reapply, then calls
+  `notify(newly_listed, kev_was_usable)`. `notify` is a required keyword: the
+  three callers (periodic refresher, `POST /api/feeds/refresh`,
+  `cvedeck-admin refresh-feeds`) each pass one, and a fourth cannot be written
+  without deciding (Req 21.21). The same reasoning made this function the one
+  place refresh and reapply are joined.
+- **Sent with no transaction open.** The notifier reads in one session, sends,
+  and records in another, as `notify_after_job` does; it never raises into the
+  refresh, so an alert failure cannot cost the catalogue it reports on.
+- **Baseline** (Req 21.20). A NULL `kev_listed` exists only while no catalogue
+  has ever been usable; the first refresh that makes one usable turns them all
+  `True` at once, and is not news.
+- **Pure digest** (`build_exploited_digest`, Property 25). Disputed findings
+  are skipped (Req 21.18); every qualifying finding counts whatever the
+  threshold, as KEV always has (Req 21.4). Webhook event `kev.newly_listed`;
+  summary fields `newly_exploited`, `hosts`; detailed adds per-host CVE,
+  package, severity and CISA's due date. All of 0.17.0's limits apply.
+- **Settings.** `notification_settings.include_newly_exploited` (default
+  true) and `last_event` (`scheduled_scan`, `kev_update` or `test`), so the
+  dashboard can say what the last result was about.

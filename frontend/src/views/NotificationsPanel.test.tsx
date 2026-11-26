@@ -20,8 +20,20 @@ function renderAlerts(
     onGetNotifications: vi.fn().mockResolvedValue(settings),
     onSetNotifications: vi
       .fn()
-      .mockImplementation(async (enabled: boolean, threshold: string, includeNotChecked: boolean) =>
-        makeNotificationSettings({ ...settings, enabled, threshold, includeNotChecked }),
+      .mockImplementation(
+        async (
+          enabled: boolean,
+          threshold: string,
+          includeNotChecked: boolean,
+          includeNewlyExploited: boolean,
+        ) =>
+          makeNotificationSettings({
+            ...settings,
+            enabled,
+            threshold,
+            includeNotChecked,
+            includeNewlyExploited,
+          }),
       ),
     onSendTestNotification: vi.fn().mockResolvedValue({ status: "sent", error: null }),
     onBack: vi.fn(),
@@ -38,27 +50,43 @@ describe("SettingsView alerts (Req 21)", () => {
     const facts = await screen.findByTestId("alerts-facts");
     expect(facts).toHaveTextContent("Webhook at alerts.home.example.org");
     expect(facts).toHaveTextContent("Summary: counts only");
-    expect(screen.getByLabelText("Send alerts after scheduled scans")).not.toBeChecked();
+    expect(screen.getByLabelText("Send alerts")).not.toBeChecked();
     expect(screen.getByLabelText("Alert on new findings that are")).toHaveValue("critical");
     expect(screen.getByLabelText("Also alert when a host could not be checked")).toBeChecked();
+    expect(screen.getByLabelText("Alert when a finding becomes actively exploited")).toBeChecked();
   });
 
   it("switches alerts on with a threshold (Req 21.1, 21.4)", async () => {
     const props = renderAlerts();
 
-    await userEvent.click(await screen.findByLabelText("Send alerts after scheduled scans"));
+    await userEvent.click(await screen.findByLabelText("Send alerts"));
     await userEvent.selectOptions(screen.getByLabelText("Alert on new findings that are"), "kev");
     await userEvent.click(screen.getByRole("button", { name: "Save alerts" }));
 
-    await waitFor(() => expect(props.onSetNotifications).toHaveBeenCalledWith(true, "kev", true));
+    await waitFor(() =>
+      expect(props.onSetNotifications).toHaveBeenCalledWith(true, "kev", true, true),
+    );
+  });
+
+  it("switches off alerts about newly exploited findings on their own (Req 21.22)", async () => {
+    const props = renderAlerts(makeNotificationSettings({ enabled: true }));
+
+    await userEvent.click(
+      await screen.findByLabelText("Alert when a finding becomes actively exploited"),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save alerts" }));
+
+    await waitFor(() =>
+      expect(props.onSetNotifications).toHaveBeenCalledWith(true, "critical", true, false),
+    );
   });
 
   it("offers no control over where alerts go or how much they say (Req 21.10)", async () => {
     renderAlerts();
     await screen.findByTestId("alerts-facts");
 
-    // Three controls, none of them a destination, token or detail level.
-    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    // Four controls, none of them a destination, token or detail level.
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
     expect(screen.getAllByRole("combobox")).toHaveLength(1);
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
@@ -67,7 +95,7 @@ describe("SettingsView alerts (Req 21)", () => {
     renderAlerts(makeNotificationSettings({ configured: false, destinationHost: null }));
 
     expect(await screen.findByTestId("alerts-not-configured")).toHaveTextContent("CVEDECK_NOTIFY_URL");
-    expect(screen.getByLabelText("Send alerts after scheduled scans")).toBeDisabled();
+    expect(screen.getByLabelText("Send alerts")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send a test alert" })).toBeDisabled();
   });
 
@@ -127,6 +155,21 @@ describe("SettingsView alerts (Req 21)", () => {
 
     expect(await screen.findByTestId("alerts-last")).toHaveTextContent(
       "Alert failed (alerts.home.example.org: HTTP 401)",
+    );
+  });
+
+  it("says what the last alert was about", async () => {
+    renderAlerts(
+      makeNotificationSettings({
+        enabled: true,
+        lastSentAt: "2026-11-26T03:04:12Z",
+        lastStatus: "sent",
+        lastEvent: "kev_update",
+      }),
+    );
+
+    expect(await screen.findByTestId("alerts-last")).toHaveTextContent(
+      "(after a KEV update) — Alert sent",
     );
   });
 

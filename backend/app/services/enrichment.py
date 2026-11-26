@@ -109,6 +109,32 @@ def _digest(rows: Sequence[tuple]) -> str:
 
 
 @dataclass(frozen=True)
+class ListedFinding:
+    """A stored finding a refresh moved into the KEV catalogue (Req 21.19)."""
+
+    machine_id: str
+    cve_id: str
+    package_identifier: str | None
+    severity: Any
+    cvss_score: float | None
+    kev_due_date: Any
+
+
+@dataclass(frozen=True)
+class ReapplyResult:
+    """What a reapply changed: how many findings, and which became KEV-listed."""
+
+    changed: int
+    #: Findings whose ``kev_listed`` was ``False`` or ``None`` and is now
+    #: ``True``. Leaving the catalogue is not here: it is not news.
+    newly_listed: tuple[ListedFinding, ...] = ()
+
+
+#: ``notify(newly_listed, kev_was_usable)``, called once a refresh is committed.
+NotifyNewlyListed = Callable[[Sequence[ListedFinding], bool], None]
+
+
+@dataclass(frozen=True)
 class FeedRefreshOutcome:
     """The result of refreshing one feed."""
 
@@ -591,6 +617,13 @@ class FindingEnricher:
         return enriched
 
     def reapply_to_stored(self) -> int:
+        """Reapply the feed caches to stored findings; how many changed.
+
+        See :meth:`reapply_and_report`, which this delegates to.
+        """
+        return self.reapply_and_report().changed
+
+    def reapply_and_report(self) -> ReapplyResult:
         """Reapply the feed caches to findings already in the database.
 
         The counterpart of :meth:`enrich`, which runs once per finding, at the
@@ -620,23 +653,30 @@ class FindingEnricher:
         through the unit of work and does not commit -- the caller owns the
         transaction, as everywhere else.
 
+        It also reports which findings became KEV-listed (Req 21.19): this is
+        the one place a stored finding's exploitation state changes, so it is
+        the one place the change can be seen. A scan never sees it, because
+        by then the refresh has already written it.
+
         Returns:
-            How many stored findings actually changed. Zero is a normal answer:
-            it means the refresh brought no news, which is most days.
+            How many stored findings actually changed -- zero is a normal
+            answer, it means the refresh brought no news, which is most days --
+            and the ones that moved into the KEV catalogue.
         """
         kev_health = self.feed_health(KEV_FEED)
         epss_health = self.feed_health(EPSS_FEED)
         if not kev_health.usable and not epss_health.usable:
-            return 0
+            return ReapplyResult(0)
 
         cve_ids = self._repository.all_finding_cve_ids()
         if not cve_ids:
-            return 0
+            return ReapplyResult(0)
 
         kev_map = self._repository.get_kev_map(cve_ids) if kev_health.usable else {}
         epss_map = self._repository.get_epss_map(cve_ids) if epss_health.usable else {}
 
         changed = 0
+        newly_listed: list[ListedFinding] = []
         for finding in self._repository.iter_findings_for_enrichment():
             key = finding.cve_id.upper() if finding.cve_id else ""
             updates: dict[str, object] = {}
@@ -655,6 +695,17 @@ class FindingEnricher:
             # Assign only what differs, so the count reports findings that
             # genuinely moved and the session does not mark the whole fleet
             # dirty on a refresh that brought nothing new.
+            if updates.get("kev_listed") is True and finding.kev_listed is not True:
+                newly_listed.append(
+                    ListedFinding(
+                        machine_id=finding.machine_id,
+                        cve_id=finding.cve_id,
+                        package_identifier=finding.package_identifier,
+                        severity=finding.severity,
+                        cvss_score=finding.cvss_score,
+                        kev_due_date=updates.get("kev_due_date"),
+                    )
+                )
             touched = False
             for field, value in updates.items():
                 if getattr(finding, field) != value:
@@ -670,7 +721,7 @@ class FindingEnricher:
 
         if changed:
             _LOGGER.info("Reapplied intel to %d stored finding(s)", changed)
-        return changed
+        return ReapplyResult(changed, tuple(newly_listed))
 
     def feed_health(self, feed_name: str) -> FeedHealth:
         """Report one feed's cache state, including whether it is stale."""
@@ -781,7 +832,10 @@ def build_feed_refresh_service(
 
 
 def refresh_feeds_and_reapply(
-    repository: Repository, *, checkpoint: Callable[[], None] | None = None
+    repository: Repository,
+    *,
+    checkpoint: Callable[[], None] | None = None,
+    notify: NotifyNewlyListed | None,
 ) -> tuple[list[FeedRefreshOutcome], int]:
     """Refresh both feeds, then reapply them to the stored findings.
 
@@ -817,8 +871,20 @@ def refresh_feeds_and_reapply(
     not a guard.
 
     Commits only through ``checkpoint``, after each feed (Req 13.7); every
-    caller passes its session's commit, and commits again after the reapply,
-    which is therefore a transaction of its own.
+    caller passes its session's commit. The reapply is committed through it
+    too, before anything is sent.
+
+    **``notify`` is required, and that is the point (Req 21.21).** A stored
+    finding becomes KEV-listed here and nowhere else, so this is where an
+    alert about it starts. Each caller -- the periodic refresher, the route
+    and the CLI -- passes ``notifications.newly_exploited_hook(session)``; a
+    fourth caller cannot be written without deciding, which is the same
+    reason refresh and reapply are joined in this one function. ``None`` is
+    an explicit "no alerts" for tests. It is called once, after the commit,
+    with the findings that moved into the catalogue and whether KEV was
+    usable *before* this refresh -- a first usable catalogue is a baseline,
+    not news (Req 21.20) -- and never while a transaction is open: the
+    notifier opens its own sessions and does not raise.
 
     Returns:
         The per-feed outcomes, and how many stored findings changed.
@@ -836,6 +902,8 @@ def refresh_feeds_and_reapply(
             for feed in (KEV_FEED, EPSS_FEED)
         ], 0
 
+    # Before the refresh: whether this catalogue is the first usable one.
+    kev_was_usable = FindingEnricher(repository).feed_health(KEV_FEED).usable
     outcomes = build_feed_refresh_service(repository, checkpoint=checkpoint).refresh_all()
     # Nothing a reapply could write would differ, so skip the fleet-wide scan
     # (Req 10.14). Only when every outcome says so: one feed unchanged and the
@@ -847,7 +915,11 @@ def refresh_feeds_and_reapply(
     # day staleness starts gating anything.
     from ..config import feed_max_age_hours
 
-    updated = FindingEnricher(
+    result = FindingEnricher(
         repository, max_age_hours=feed_max_age_hours()
-    ).reapply_to_stored()
-    return outcomes, updated
+    ).reapply_and_report()
+    if checkpoint is not None:
+        checkpoint()
+    if notify is not None and result.newly_listed:
+        notify(result.newly_listed, kev_was_usable)
+    return outcomes, result.changed

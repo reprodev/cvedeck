@@ -3109,3 +3109,42 @@ Another, log4shell's ID, has a newer fix. The third is a made-up CVE that was
 reintroduced. A scheduled scan whose only new finding was the contradiction
 sent nothing. One with all three new sent one alert counting two, and the
 reintroduced CVE named the fix after the installed version.
+
+## Chapter 39 — The news no scan reports (v0.18.0)
+
+0.17.0's alerts answered "what did last night's scan find that is new?". The
+most urgent answer CveDeck can give is to a different question: which of the
+vulnerabilities you have lived with for months is now being exploited? CISA
+adds to its KEV catalogue every few days, and when it adds a CVE the fleet
+already carries, nothing about any scan changes. The daily feed refresh
+rewrites the stored finding, the dashboard turns it red, and nobody is told.
+
+The fix started from where the state changes. The refresh's reapply already
+compared every stored finding with the catalogue, so it now also reports which
+ones became listed. The decision was what to do with that list, and the
+lesson came from 0.8.8: three paths start a refresh, and a sequence each
+spells out for itself is a sequence a fourth will get wrong. So the function
+that joins refresh and reapply takes a `notify` hook that every caller must
+pass, and calls it only after the reapply is committed, because the notifier
+opens its own sessions and SQLite allows one writer.
+
+Two rules keep it from crying wolf. The first catalogue a deployment ever
+downloads lists every exploited finding at once, so it is a baseline, as a
+host's first scan is. "Was KEV usable before this refresh" is the test, and it
+has to be read before the refresh, never after. And a finding whose fix is
+already installed, the disputed kind from 0.17.1, never counts.
+
+The container check served CISA's real catalogue from a local server and
+added, one refresh at a time, CVEs the Debian test host really has. Each path
+-- the automatic refresh, the route, the CLI -- sent exactly one alert. A
+refresh with nothing new, the switch turned off and a disputed finding each
+sent nothing, and the check confirmed first that the CVE had really arrived,
+because a "nothing sent" that never received its input proves nothing. That
+lesson was learned the hard way in 0.17.1.
+
+One thing in this release came from the environment rather than the code.
+Halfway through, every frontend test file failed to load: `describe` was
+undefined in vitest's runner. Stashing the changes changed nothing. The
+session's working directory had switched to a lowercase drive letter, and on
+Windows Vite then loads its runner twice, once for each spelling of `C:`.
+Running from the uppercase path fixed it.

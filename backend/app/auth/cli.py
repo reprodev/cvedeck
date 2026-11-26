@@ -205,9 +205,14 @@ def _refresh_feeds() -> int:
     from ..data.repository import Repository
     from ..enums import FeedStatus
     from ..services.enrichment import refresh_feeds_and_reapply
+    from ..services.notifications import newly_exploited_hook
 
     with _session() as session:
-        outcomes, updated = refresh_feeds_and_reapply(Repository(session), checkpoint=session.commit)
+        outcomes, updated = refresh_feeds_and_reapply(
+            Repository(session),
+            checkpoint=session.commit,
+            notify=newly_exploited_hook(session),
+        )
         session.commit()
 
     if outcomes and all(outcome.status is FeedStatus.SKIPPED for outcome in outcomes):

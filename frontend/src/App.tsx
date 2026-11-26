@@ -726,8 +726,8 @@ export function App({ client, account = null, onSignOut }: AppProps = {}) {
           onGetScanSchedule={() => api.getScanSchedule()}
           onSetScanSchedule={(enabled, timeOfDay) => api.setScanSchedule(enabled, timeOfDay)}
           onGetNotifications={() => api.getNotifications()}
-          onSetNotifications={(enabled, threshold, includeNotChecked) =>
-            api.setNotifications(enabled, threshold, includeNotChecked)
+          onSetNotifications={(enabled, threshold, includeNotChecked, includeNewlyExploited) =>
+            api.setNotifications(enabled, threshold, includeNotChecked, includeNewlyExploited)
           }
           onSendTestNotification={() => api.sendTestNotification()}
           onChangePassword={(current, next) => api.changePassword(current, next)}

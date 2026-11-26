@@ -469,10 +469,17 @@ class NotificationSettings(Base):
     include_not_checked: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=sa_true()
     )
+    #: Alert when a feed refresh moves a stored finding into the KEV
+    #: catalogue (Req 21.22).
+    include_newly_exploited: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
     last_sent_at: Mapped[datetime | None] = mapped_column(nullable=True)
     last_status: Mapped[str | None] = mapped_column(String, nullable=True)
     last_error: Mapped[str | None] = mapped_column(String, nullable=True)
     last_job_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: A ``NotificationEvent`` value: what the last recorded alert was about.
+    last_event: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class UbuntuKernelFeed(Base):

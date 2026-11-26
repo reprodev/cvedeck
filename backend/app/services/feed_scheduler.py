@@ -54,8 +54,14 @@ def refresh_feeds_once(engine: Engine) -> list[str]:
     are committed separately, so no one write holds the lock for long
     (Req 13.7).
     """
+    from .notifications import newly_exploited_hook
+
     with Session(engine) as session:
-        outcomes, updated = refresh_feeds_and_reapply(Repository(session), checkpoint=session.commit)
+        outcomes, updated = refresh_feeds_and_reapply(
+            Repository(session),
+            checkpoint=session.commit,
+            notify=newly_exploited_hook(session),
+        )
         session.commit()
     return [
         f"{o.feed_name}: {o.status}, {o.record_count} records"

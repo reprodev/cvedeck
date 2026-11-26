@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   durationLabel,
   formatServerTime,
+  notificationEventLabel,
   notificationStatusLabel,
   parseServerTime,
   requestedByLabel,
@@ -171,5 +172,15 @@ describe("durationLabel", () => {
   it("counts to now while running, and shows a dash before it starts", () => {
     expect(durationLabel("2026-09-01T11:00:00", null, new Date("2026-09-01T11:00:30Z"))).toBe("30s");
     expect(durationLabel(null, null)).toBe("–");
+  });
+});
+
+describe("notificationEventLabel", () => {
+  it("names every event an alert can be about, and nothing else", () => {
+    expect(notificationEventLabel("scheduled_scan")).toBe("after a scheduled scan");
+    expect(notificationEventLabel("kev_update")).toBe("after a KEV update");
+    expect(notificationEventLabel("test")).toBe("test alert");
+    expect(notificationEventLabel(null)).toBeNull();
+    expect(notificationEventLabel("something_new")).toBeNull();
   });
 });

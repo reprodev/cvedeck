@@ -1,9 +1,15 @@
-"""Alerts when a scheduled scan finds something new (Req 21).
+"""Alerts when a scheduled scan finds something new, or a finding becomes exploited (Req 21).
 
 One message per scheduled job, and only when there is something to act on: a
 new finding that is KEV-listed or over the threshold, or a host whose data
 cannot be trusted. Never an all-clear -- a nightly "nothing new" teaches people
 to mute the channel -- and never a baseline's thousand findings.
+
+And one message per feed refresh that moves findings the fleet already has
+into CISA's KEV catalogue (Req 21.19): the most urgent news there is, and one
+no scan ever sees, because the refresh has already written it. Built by
+:func:`build_exploited_digest` (Property 25) and sent by
+:func:`notify_newly_exploited` under the same rules.
 
 The module is in three layers, so the rules can be tested without a network:
 
@@ -32,9 +38,10 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.data.repository import FindingDiff, Repository
-from app.data.schema import NotificationSettings, ScanJob
+from app.data.schema import NotificationSettings, ScanJob, TargetMachine
 from app.enums import (
     SEVERITY_RANK,
+    NotificationEvent,
     NotificationStatus,
     NotificationThreshold,
     ScanJobStatus,
@@ -297,6 +304,11 @@ def detail_lines(digest: Digest, budget: int) -> list[str]:
         rendered.extend(_finding_line(f) for f in host.findings)
     for host in digest.not_checked:
         rendered.append(f"{host.hostname}: not checked ({host.reason})")
+    return _fit(rendered, budget)
+
+
+def _fit(rendered: list[str], budget: int) -> list[str]:
+    """The lines that fit in ``budget`` bytes, then how many did not."""
     kept: list[str] = []
     used = 0
     for i, line in enumerate(rendered):
@@ -388,7 +400,12 @@ def sign(secret: str, timestamp: str, body: bytes) -> str:
 
 def render_webhook(digest: Digest, destination: Destination, *, test: bool = False,
                    now: Callable[[], float] = time.time) -> tuple[dict[str, str], bytes]:
-    body = json.dumps(webhook_payload(digest, destination, test=test), ensure_ascii=False).encode("utf-8")
+    return _signed_json(webhook_payload(digest, destination, test=test), destination, now)
+
+
+def _signed_json(payload: dict[str, object], destination: Destination,
+                 now: Callable[[], float] = time.time) -> tuple[dict[str, str], bytes]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if destination.secret is not None:
         timestamp = str(int(now()))
@@ -500,35 +517,58 @@ def _notify_after_job(session_factory, job_id, scans, send) -> NotificationStatu
     if not enabled:
         return None
 
-    policy = notify_destination.evaluate(notify_destination.read_config())
-    if not policy.configured:
-        result = SendResult(NotificationStatus.REFUSED, "No destination is configured.")
-    elif not policy.usable:
-        result = SendResult(NotificationStatus.REFUSED, "; ".join(policy.problems))
-    else:
-        digest = build_digest(
-            job_status=job_status,
-            requested_by=SCHEDULE_REQUESTER,
-            finished_at=finished_at,
-            outcomes=outcomes,
-            threshold=threshold,
-            include_not_checked=include_not_checked,
-            kev_feed_usable=kev_usable,
-        )
-        if digest is None:
-            result = SendResult(NotificationStatus.NOTHING_TO_SEND)
-        else:
-            assert policy.destination is not None
-            headers, body = render(digest, policy.destination)
-            result = send(policy.destination, headers=headers, body=body)
+    digest = build_digest(
+        job_status=job_status,
+        requested_by=SCHEDULE_REQUESTER,
+        finished_at=finished_at,
+        outcomes=outcomes,
+        threshold=threshold,
+        include_not_checked=include_not_checked,
+        kev_feed_usable=kev_usable,
+    )
+    result = _through_policy(
+        None if digest is None else (lambda destination: render(digest, destination)), send
+    )
 
-    record(session_factory, job_id, result)
+    record(session_factory, job_id, result, NotificationEvent.SCHEDULED_SCAN)
     if result.status in (NotificationStatus.FAILED, NotificationStatus.REFUSED):
         _SECURITY_LOG.warning("Alert for scan job %s %s: %s", job_id, result.status.value, result.error)
     return result.status
 
 
-def record(session_factory: Callable[[], Session], job_id: str | None, result: SendResult) -> None:
+def _through_policy(
+    make: Callable[[Destination], tuple[dict[str, str], bytes]] | None, send: SendFn
+) -> SendResult:
+    """Refuse, skip or send, by the destination policy (Req 21.10-21.17).
+
+    ``make`` is ``None`` when there is nothing to say; a refusal is reported
+    either way, so a misconfiguration shows up on the day it matters least.
+    """
+    policy = notify_destination.evaluate(notify_destination.read_config())
+    if not policy.configured:
+        return SendResult(NotificationStatus.REFUSED, "No destination is configured.")
+    if not policy.usable:
+        return SendResult(NotificationStatus.REFUSED, "; ".join(policy.problems))
+    if make is None:
+        return SendResult(NotificationStatus.NOTHING_TO_SEND)
+    assert policy.destination is not None
+    headers, body = make(policy.destination)
+    return send(policy.destination, headers=headers, body=body)
+
+
+def event_of(row: NotificationSettings) -> NotificationEvent | None:
+    try:
+        return NotificationEvent(row.last_event) if row.last_event else None
+    except ValueError:
+        return None
+
+
+def record(
+    session_factory: Callable[[], Session],
+    job_id: str | None,
+    result: SendResult,
+    event: NotificationEvent,
+) -> None:
     """Store an attempt's result on the job and the settings row (Req 21.8)."""
     error = (result.error or "")[:_MAX_ERROR_LENGTH] or None
     with session_factory() as session:
@@ -543,6 +583,7 @@ def record(session_factory: Callable[[], Session], job_id: str | None, result: S
             settings.last_status = result.status.value
             settings.last_error = error
             settings.last_job_id = job_id
+            settings.last_event = event.value
         session.commit()
 
 
@@ -559,5 +600,234 @@ def send_test(session_factory: Callable[[], Session], *, send: SendFn | None = N
         assert policy.destination is not None
         headers, body = render(TEST_DIGEST, policy.destination, test=True)
         result = send(policy.destination, headers=headers, body=body)
-    record(session_factory, None, result)
+    record(session_factory, None, result, NotificationEvent.TEST)
     return result
+
+
+# --- Newly exploited (Req 21.19-21.22, Property 25) ----------------------------
+
+#: The webhook ``event`` of an alert about findings newly listed in KEV.
+KEV_UPDATE_EVENT = "kev.newly_listed"
+
+
+@dataclass(frozen=True)
+class ExploitedFinding:
+    cve_id: str
+    severity: Severity
+    cvss: float | None
+    package: str | None
+    #: CISA's remediation due date, ISO formatted, when it gives one.
+    kev_due_date: str | None
+
+
+@dataclass(frozen=True)
+class ExploitedHost:
+    hostname: str
+    findings: tuple[ExploitedFinding, ...]
+
+
+@dataclass(frozen=True)
+class ExploitedDigest:
+    newly_exploited: int
+    hosts: tuple[ExploitedHost, ...]
+
+
+def _severity(value: object) -> Severity:
+    if isinstance(value, Severity):
+        return value
+    try:
+        return Severity(str(value))
+    except ValueError:
+        return Severity.UNSCORED
+
+
+def build_exploited_digest(
+    listed: Sequence[object],
+    *,
+    kev_was_usable: bool,
+    enabled_for_kev: bool,
+    hostnames: dict[str, str],
+) -> ExploitedDigest | None:
+    """What a refresh moved into the KEV catalogue that is worth a message (Property 25).
+
+    ``None`` when the switch is off (Req 21.22), when this refresh brought the
+    first usable catalogue -- a baseline, like a host's first scan (Req 21.20)
+    -- and when every finding it listed is disputed (Req 21.18). Every other
+    finding counts whatever the threshold: KEV always qualifies (Req 21.4).
+    """
+    if not enabled_for_kev or not kev_was_usable:
+        return None
+    by_machine: dict[str, list[ExploitedFinding]] = {}
+    for item in listed:
+        identifier = getattr(item, "package_identifier")
+        if fix_is_disputed(identifier):
+            continue
+        due = getattr(item, "kev_due_date")
+        by_machine.setdefault(getattr(item, "machine_id"), []).append(
+            ExploitedFinding(
+                cve_id=clean(getattr(item, "cve_id")) or "?",
+                severity=_severity(getattr(item, "severity")),
+                cvss=getattr(item, "cvss_score"),
+                package=clean(parse_package_name(identifier)),
+                kev_due_date=due.isoformat() if hasattr(due, "isoformat") else (str(due) if due else None),
+            )
+        )
+    if not by_machine:
+        return None
+    hosts = sorted(
+        (
+            ExploitedHost(
+                clean(hostnames.get(machine_id, machine_id)) or "?",
+                tuple(sorted(found, key=lambda f: (SEVERITY_RANK[f.severity], f.cve_id))),
+            )
+            for machine_id, found in by_machine.items()
+        ),
+        key=lambda h: h.hostname,
+    )
+    return ExploitedDigest(sum(len(h.findings) for h in hosts), tuple(hosts))
+
+
+def exploited_title(digest: ExploitedDigest) -> str:
+    """Counts only (Req 21.11)."""
+    return f"CveDeck: {_plural(digest.newly_exploited, 'finding')} newly exploited"
+
+
+def exploited_summary_lines(digest: ExploitedDigest) -> list[str]:
+    """Counts, and nothing naming a machine (Req 21.7)."""
+    n, hosts = digest.newly_exploited, len(digest.hosts)
+    return [
+        f"CISA added {_plural(n, 'CVE')} found on {_plural(hosts, 'host')} to its "
+        "catalogue of actively exploited vulnerabilities (KEV).",
+        f"{'It was' if n == 1 else 'They were'} already among your findings; what "
+        "changed is that exploitation is now confirmed.",
+    ]
+
+
+def exploited_detail_lines(digest: ExploitedDigest, budget: int) -> list[str]:
+    rendered: list[str] = []
+    for host in digest.hosts:
+        rendered.append(f"{host.hostname}:")
+        for f in host.findings:
+            package = f" in {f.package}" if f.package else ""
+            due = f", CISA due {f.kev_due_date}" if f.kev_due_date else ""
+            rendered.append(f"  {f.cve_id} ({f.severity.value}){package}{due}")
+    return _fit(rendered, budget)
+
+
+def render_exploited(digest: ExploitedDigest, destination: Destination
+                     ) -> tuple[dict[str, str], bytes]:
+    """Headers and body, by the same rules as a scan's alert (Req 21.7, 21.11, 21.16)."""
+    if destination.kind == "ntfy":
+        headers = {
+            "Title": exploited_title(digest),
+            "Priority": "5",
+            "Tags": "rotating_light",
+            "Content-Type": "text/plain; charset=utf-8",
+        }
+        if destination.link_url:
+            headers["Click"] = destination.link_url + "/#/fleet"
+        lines = exploited_summary_lines(digest)
+        if destination.detail == "detailed":
+            head = "\n".join(lines).encode("utf-8")
+            lines += [""] + exploited_detail_lines(digest, NTFY_BODY_BUDGET - len(head) - 2)
+        return headers, "\n".join(lines).encode("utf-8")
+
+    payload: dict[str, object] = {
+        "event": KEV_UPDATE_EVENT,
+        "refreshed_at": datetime.now(timezone.utc).isoformat(),
+        "title": exploited_title(digest),
+        "message": "\n".join(exploited_summary_lines(digest)),
+        "summary": {
+            "newly_exploited": digest.newly_exploited,
+            "hosts": len(digest.hosts),
+            "kev_feed_usable": True,
+        },
+    }
+    if destination.link_url:
+        payload["dashboard_url"] = destination.link_url + "/#/fleet"
+    if destination.detail == "detailed":
+        from app.api.app import _VERSION  # local: the API layer imports this module
+
+        payload["cvedeck_version"] = _VERSION
+        payload["hosts"] = [
+            {
+                "hostname": h.hostname,
+                "findings": [
+                    {
+                        "cve_id": f.cve_id,
+                        "severity": f.severity.value,
+                        "cvss": f.cvss,
+                        "package": f.package,
+                        "kev_due_date": f.kev_due_date,
+                    }
+                    for f in h.findings
+                ],
+            }
+            for h in digest.hosts
+        ]
+    return _signed_json(payload, destination)
+
+
+def notify_newly_exploited(
+    session_factory: Callable[[], Session],
+    listed: Sequence[object],
+    kev_was_usable: bool,
+    *,
+    send: SendFn | None = None,
+) -> NotificationStatus | None:
+    """Send the alert for findings a refresh moved into KEV, and record it (Req 21.19).
+
+    Called by ``refresh_feeds_and_reapply`` once the refresh is committed.
+    Reads in one session, sends with none open, records in another, as
+    :func:`notify_after_job` does. Returns the status recorded, or ``None``
+    when alerts are off.
+
+    Never raises: a refresh must not fail, or lose the catalogue it just
+    stored, because an alert about it did.
+    """
+    try:
+        return _notify_newly_exploited(
+            session_factory, listed, kev_was_usable, send or notify_destination.send
+        )
+    except Exception:  # noqa: BLE001 -- see docstring
+        _LOGGER.exception("Alert for newly exploited findings failed unexpectedly")
+        return None
+
+
+def _notify_newly_exploited(session_factory, listed, kev_was_usable, send) -> NotificationStatus | None:
+    machine_ids = sorted({getattr(item, "machine_id") for item in listed})
+    with session_factory() as session:
+        settings = get_notification_settings(session)
+        enabled = settings.enabled
+        enabled_for_kev = settings.include_newly_exploited
+        hostnames = {
+            m.id: m.hostname
+            for m in session.query(TargetMachine).filter(TargetMachine.id.in_(machine_ids))
+        }
+        session.commit()
+    if not enabled:
+        return None
+
+    digest = build_exploited_digest(
+        listed, kev_was_usable=kev_was_usable, enabled_for_kev=enabled_for_kev, hostnames=hostnames
+    )
+    result = _through_policy(
+        None if digest is None else (lambda destination: render_exploited(digest, destination)), send
+    )
+    record(session_factory, None, result, NotificationEvent.KEV_UPDATE)
+    _LOGGER.info(
+        "KEV update: %d finding(s) newly listed; alert %s", len(listed), result.status.value
+    )
+    if result.status in (NotificationStatus.FAILED, NotificationStatus.REFUSED):
+        _SECURITY_LOG.warning("Alert for newly exploited findings %s: %s", result.status.value, result.error)
+    return result.status
+
+
+def newly_exploited_hook(session: Session) -> Callable[[Sequence[object], bool], None]:
+    """The ``notify`` a refresh caller passes (Req 21.21): new sessions on ``session``'s bind."""
+    bind = session.get_bind()
+
+    def notify(listed: Sequence[object], kev_was_usable: bool) -> None:
+        notify_newly_exploited(lambda: Session(bind), listed, kev_was_usable)
+
+    return notify

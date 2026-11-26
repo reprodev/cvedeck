@@ -8,6 +8,41 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.18.0] - 2026-11-26
+
+An alert when a finding you already have becomes actively exploited.
+
+### Added
+
+- **Alerts when CISA lists a finding you already have as actively exploited**
+  (Req 21.19-21.22). Until now alerts covered only findings new to a
+  scheduled scan; a CVE added to the KEV catalogue weeks later changed the
+  dashboard and told no one. Now the feed refresh that moves a stored finding
+  into the catalogue sends one message, whatever the threshold:
+  - it fires after the automatic refresh, `POST /api/feeds/refresh` and
+    `cvedeck-admin refresh-feeds` alike;
+  - not for the catalogue's first download, which would list every exploited
+    finding at once;
+  - never for a finding marked *Disputed fix*;
+  - the same destination, limits and signature as scan alerts. Webhook
+    receivers get `"event": "kev.newly_listed"`; DEPLOYMENT.md has the fields.
+- **A switch for it** in Settings → Alerts, on by default. **After upgrading,
+  an instance with alerts switched on starts receiving these.**
+- Settings → Alerts says what the last alert was about: a scheduled scan, a
+  KEV update, or a test.
+
+### Changed
+
+- The master switch reads *Send alerts*, since it now covers both kinds.
+- fastapi 0.162.5, pydantic 2.14.3, sqlalchemy 2.1.8, psycopg 3.3.9;
+  hypothesis, vite, vitest and other test and build tooling (Dependabot #48,
+  #49).
+
+A migration adds the switch and the last alert's event to the alert settings;
+it runs on start.
+
+---
+
 ## [0.17.1] - 2026-11-14
 
 A finding whose stated fix is already installed is marked, and never alerts.

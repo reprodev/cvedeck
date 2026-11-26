@@ -779,10 +779,12 @@ def notifications_out(session: Session) -> NotificationsOut:
         enabled=row.enabled,
         threshold=notifications.threshold_of(row),
         include_not_checked=row.include_not_checked,
+        include_newly_exploited=row.include_newly_exploited,
         last_sent_at=row.last_sent_at,
         last_status=row.last_status,
         last_error=row.last_error,
         last_job_id=row.last_job_id,
+        last_event=notifications.event_of(row),
     )
 
 

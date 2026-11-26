@@ -117,10 +117,12 @@ export function makeNotificationSettings(
     enabled: false,
     threshold: "critical",
     includeNotChecked: true,
+    includeNewlyExploited: true,
     lastSentAt: null,
     lastStatus: null,
     lastError: null,
     lastJobId: null,
+    lastEvent: null,
     ...overrides,
   };
 }

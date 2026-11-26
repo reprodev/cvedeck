@@ -543,6 +543,17 @@ environment the app reads, so no alembic.ini edit is needed.
     answers first and hides a missing route guard;
     `test_the_test_alert_route_carries_its_own_guard` switches it off to test
     the route's own.
+  - **A finding newly listed in KEV alerts from the refresh, not a scan**
+    (Req 21.19-21.22). `reapply_and_report` is the one place a stored
+    finding's KEV state changes, so it reports which became listed, and
+    `refresh_feeds_and_reapply` takes a *required* `notify` keyword that it
+    calls after committing the reapply. Keep it required: the periodic
+    refresher, the route and the CLI each pass
+    `notifications.newly_exploited_hook(session)`, and a fourth path must not
+    be writable without deciding. Never call `notify` before the commit (the
+    notifier opens its own sessions and SQLite has one writer). The first
+    usable catalogue is a baseline and sends nothing -- `kev_was_usable` is
+    read *before* the refresh, never after.
 
 - A fix the host already has is *disputed* -- not fixed, and not deleted
   (Req 14.11, 21.18, Property 24). `fix_is_disputed` in

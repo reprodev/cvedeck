@@ -370,6 +370,8 @@ interface NotificationSettingsWire {
   enabled: boolean;
   threshold: string;
   include_not_checked: boolean;
+  include_newly_exploited?: boolean;
+  last_event?: string | null;
   last_sent_at?: string | null;
   last_status?: string | null;
   last_error?: string | null;
@@ -581,10 +583,13 @@ function toNotificationSettings(wire: NotificationSettingsWire): NotificationSet
     enabled: wire.enabled,
     threshold: wire.threshold,
     includeNotChecked: wire.include_not_checked,
+    // An older server has no switch; its alerts never covered this, so off.
+    includeNewlyExploited: wire.include_newly_exploited ?? false,
     lastSentAt: wire.last_sent_at ?? null,
     lastStatus: wire.last_status ?? null,
     lastError: wire.last_error ?? null,
     lastJobId: wire.last_job_id ?? null,
+    lastEvent: wire.last_event ?? null,
   };
 }
 
@@ -1055,12 +1060,14 @@ export class CveScannerApiClient {
     enabled: boolean,
     threshold: string,
     includeNotChecked: boolean,
+    includeNewlyExploited: boolean,
   ): Promise<NotificationSettings> {
     return toNotificationSettings(
       await this.request<NotificationSettingsWire>("PUT", "/api/notifications", {
         enabled,
         threshold,
         include_not_checked: includeNotChecked,
+        include_newly_exploited: includeNewlyExploited,
       }),
     );
   }

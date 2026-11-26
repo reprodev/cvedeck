@@ -789,7 +789,7 @@ def test_demo_mode_refreshes_nothing_and_downloads_nothing(repo, demo, monkeypat
         ),
     )
 
-    outcomes, updated = enrichment.refresh_feeds_and_reapply(repo)
+    outcomes, updated = enrichment.refresh_feeds_and_reapply(repo, notify=None)
 
     assert updated == 0
     assert {o.feed_name for o in outcomes} == {KEV_FEED, EPSS_FEED}
@@ -817,7 +817,7 @@ def test_a_demo_refresh_leaves_the_seeded_catalogue_intact(repo, demo, monkeypat
         ),
     )
 
-    enrichment.refresh_feeds_and_reapply(repo)
+    enrichment.refresh_feeds_and_reapply(repo, notify=None)
 
     assert repo.count_kev_entries() == 1
     assert repo.count_epss_scores() == 1
@@ -838,7 +838,7 @@ def test_a_demo_refresh_records_no_digest(repo, demo, monkeypatch):
         ),
     )
 
-    enrichment.refresh_feeds_and_reapply(repo)
+    enrichment.refresh_feeds_and_reapply(repo, notify=None)
 
     assert repo.get_feed_refresh(KEV_FEED) is None
     assert repo.get_feed_refresh(EPSS_FEED) is None
@@ -857,15 +857,15 @@ def test_both_feeds_unchanged_skips_the_reapply(repo, monkeypatch):
             repository, kev_source=kev, epss_source=epss
         ),
     )
-    enrichment.refresh_feeds_and_reapply(repo)  # first pass: rewrites and reapplies
+    enrichment.refresh_feeds_and_reapply(repo, notify=None)  # first pass: rewrites and reapplies
 
     called = []
     monkeypatch.setattr(
         enrichment.FindingEnricher,
-        "reapply_to_stored",
-        lambda self: called.append(True) or 0,
+        "reapply_and_report",
+        lambda self: called.append(True) or enrichment.ReapplyResult(0),
     )
-    outcomes, updated = enrichment.refresh_feeds_and_reapply(repo)
+    outcomes, updated = enrichment.refresh_feeds_and_reapply(repo, notify=None)
 
     assert all(o.unchanged for o in outcomes)
     assert updated == 0
@@ -886,7 +886,7 @@ def test_one_unchanged_feed_still_reapplies(repo, monkeypatch):
             repository, kev_source=kev, epss_source=epss
         ),
     )
-    enrichment.refresh_feeds_and_reapply(repo)
+    enrichment.refresh_feeds_and_reapply(repo, notify=None)
 
     # EPSS moves; KEV does not.
     epss._records = [EpssRecord(cve_id="CVE-2021-44228", score=0.88, percentile=0.99)]
@@ -894,10 +894,10 @@ def test_one_unchanged_feed_still_reapplies(repo, monkeypatch):
     called = []
     monkeypatch.setattr(
         enrichment.FindingEnricher,
-        "reapply_to_stored",
-        lambda self: called.append(True) or 0,
+        "reapply_and_report",
+        lambda self: called.append(True) or enrichment.ReapplyResult(0),
     )
-    outcomes, _ = enrichment.refresh_feeds_and_reapply(repo)
+    outcomes, _ = enrichment.refresh_feeds_and_reapply(repo, notify=None)
 
     by_feed = {o.feed_name: o for o in outcomes}
     assert by_feed[KEV_FEED].unchanged
