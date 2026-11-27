@@ -56,6 +56,7 @@ from .dependencies import get_scanner_engine, get_session, get_sync_service
 from .routes import machine_scan_out, notifications_out, scan_job_out, scan_schedule_out
 from .wiring import RepositoryHostKeyStore
 from .schemas import (
+    MAX_BATCH_BODY,
     DiscoveredHostOut,
     DiscoveredServiceOut,
     DiscoverySweepRequest,
@@ -325,6 +326,8 @@ def _requested_by(request: Request) -> str:
 @router.post(
     "/scans",
     response_model=ScanResponse,
+    # A batch of up to MAX_BATCH targets may each carry a key (Req 16.22).
+    max_body_size=MAX_BATCH_BODY,
     dependencies=[
         Depends(_demo_guard("Scanning")),
         Depends(_refuse_unsupported_platforms),
@@ -355,6 +358,7 @@ def initiate_scan(
     "/scans/jobs",
     response_model=ScanJobCreated,
     status_code=202,
+    max_body_size=MAX_BATCH_BODY,  # Req 16.22, as for POST /scans
     dependencies=[
         Depends(_demo_guard("Scanning")),
         Depends(_refuse_unsupported_platforms),
@@ -716,7 +720,13 @@ def discovery_sweep(
     )
 
 
-@router.post("/discovery/enroll", response_model=HostEnrollResponse, status_code=201)
+@router.post(
+    "/discovery/enroll",
+    response_model=HostEnrollResponse,
+    status_code=201,
+    # 4,096 hosts with every field at its bound exceed MAX_BODY (Req 16.22).
+    max_body_size=MAX_BATCH_BODY,
+)
 def enroll_discovered_hosts(
     body: HostEnrollBatchIn,
     session: Session = Depends(get_session),

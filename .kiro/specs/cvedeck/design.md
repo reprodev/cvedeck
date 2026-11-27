@@ -805,6 +805,20 @@ a reverse proxy.
 - **Opting out.** `CVEDECK_AUTH=disabled` serves everything without login, for
   deployments behind an authenticating proxy, and logs a warning on every
   start. Anything else, including a typo, leaves login on. Demo mode is open.
+- **Body size, below sign-in.** FastAPI reads and parses a request body
+  before it runs a route's dependencies, sign-in included, so the field bounds
+  of Req 16.13 never protected the read itself: an anonymous caller could make
+  the process hold a body of any size. Since 0.18.1 every router is included
+  with `max_body_size=MAX_BODY` (1 MiB); the scan routes and enrolment override
+  it with `MAX_BATCH_BODY` (16 MiB, the nginx example's `client_max_body_size`).
+  Starlette counts bytes as they arrive and refuses a declared `Content-Length`
+  over the limit before the first read. The limit sits on the routers rather
+  than the application because FastAPI answers an application-level refusal
+  with plain text from outside every user middleware; at router level it passes
+  through `security.BodyTooLargeMiddleware`, which turns any 413 into a JSON
+  `detail` stating the route's limit (Req 16.22). Measured honest sizes: a
+  4,096-host fleet re-scan with the server key is 0.27-0.45 MiB, the same with
+  an RSA-4096 key per target 14.2 MiB, every other route at most 76 KiB.
 - **Frontend.** `AuthGate` asks `GET /api/auth/state` before rendering and
   shows the setup page, the sign-in page, or the dashboard. The API client
   reports any 401 so an expired session returns to sign-in. Account settings

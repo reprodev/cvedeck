@@ -35,7 +35,9 @@ server {
     access_log /var/log/nginx/cvedeck.access.log;
     error_log  /var/log/nginx/cvedeck.error.log;
 
-    # Inventory payloads from large fleets can be sizeable.
+    # The largest body CveDeck itself accepts: a scan batch or an enrolment.
+    # Every other route stops at 1 MiB. Keep this equal to MAX_BATCH_BODY in
+    # backend/app/api/schemas.py -- a test checks that it is (Req 16.22).
     client_max_body_size 16m;
 
     location / {

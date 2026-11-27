@@ -3148,3 +3148,43 @@ undefined in vitest's runner. Stashing the changes changed nothing. The
 session's working directory had switched to a lowercase drive letter, and on
 Windows Vite then loads its runner twice, once for each spelling of `C:`.
 Running from the uppercase path fixed it.
+
+## Chapter 40 — What gets read before the door (v0.18.1)
+
+Since 0.8.13 every list and string a request may carry has had a bound: 4,096
+targets, 16 KiB for a key, 10,000 characters for a note. They read like a
+limit on the request. They are a limit on what the request may make CveDeck
+*do*. Validation runs on a body that has already been read and parsed, and
+FastAPI reads the body before it runs a route's dependencies -- sign-in among
+them. So the most expensive thing an anonymous caller could do happened
+before CveDeck asked who they were.
+
+The measurement settled it before any code did. The published 0.18.0 image,
+login on, was sent one 200 MiB POST by a caller with no session. It answered
+"Sign in to use CveDeck." -- after its memory had risen by 577 MiB. The same
+request to 0.18.1 is refused in 70 milliseconds with nothing added.
+
+The limit is FastAPI's own, new in the release Dependabot happened to offer
+that week, and the work was choosing its size and its place. The size came
+from building the largest honest body for every route: a fleet re-scan of
+4,096 hosts is under half a megabyte, because it sends no credentials, while
+a script that gives each of 4,096 targets its own RSA-4096 key sends 14 MiB.
+That one sat within twice the planned 16 MiB, so the owner chose, and chose
+16 -- the figure the nginx example has carried since the first deployment
+guide, now held equal to it by a test. Every other route stops at 1 MiB.
+
+The place mattered more than expected. Set on the application, the refusal
+comes back as plain text from a layer outside everything CveDeck adds, so no
+amount of wiring could make it say what the limit was. Set on each router, it
+passes through a small middleware that states the route's limit and never
+touches the body. That makes "every router carries a limit" a rule someone
+could break, so a test now walks every write route with login on and expects
+413 one byte over its limit. A 401 there would mean sign-in ran -- and sign-in
+only runs once the body has been read.
+
+The container check nearly proved nothing. Its first run reported "ALL CHECKS
+PASSED" having measured no memory at all: Git Bash had rewritten
+`/sys/fs/cgroup/memory.peak` into a path under `C:/Program Files/Git`, the
+read failed, and an empty number compared as zero. The same trap had bitten
+`docker cp` in 0.12.0. A measurement that can fail silently is not a
+measurement, so the harness now fails when it cannot read one.

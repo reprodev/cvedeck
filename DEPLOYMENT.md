@@ -784,10 +784,23 @@ Therefore:
   still carries the attacker's name. Set `CVEDECK_ALLOWED_HOSTS` to the names you
   use for CveDeck and every other name is refused. It matters most with login
   off, where nothing else stands in the way of a scan with the server's SSH key.
+- **Request size.** Since 0.18.1 CveDeck stops reading a request body at a
+  fixed size and answers **413** with the size it accepts, before it checks
+  sign-in -- the body used to be read in full first, so anyone who could reach
+  the port could make it hold a body of any size. `POST /api/scans`,
+  `POST /api/scans/jobs` and `POST /api/discovery/enroll` accept 16 MiB; every
+  other route 1 MiB. The dashboard never comes close: re-scanning 4,096 hosts
+  with the server key is under half a megabyte. A script sending its own key
+  for every target can: 4,096 targets with an RSA-4096 key each are about
+  14 MiB, with RSA-8192 keys about 27 MiB. Split a batch like that, or omit the
+  keys and let the server key (`CVEDECK_DEFAULT_SSH_KEY_PATH`) do it. The nginx
+  example's `client_max_body_size 16m` matches, so a proxy and CveDeck refuse
+  the same requests; raising the proxy's limit does not raise CveDeck's.
 - **The security log.** Lines from the `app.security` logger record each scan,
   discovery sweep and connection test with who asked and from where (and whether
   the server-managed key was used), each forgotten host key, refused cross-site
-  requests, unknown or revoked API tokens, and throttled sign-ins. No credential
+  requests, unknown or revoked API tokens, throttled sign-ins, and each body
+  refused for its size (path and limit only). No credential
   appears in any of them. `docker logs cvedeck 2>&1 | grep app.security`.
 - Use TLS end to end if scan requests cross any untrusted network — otherwise
   target credentials are sent in plaintext.

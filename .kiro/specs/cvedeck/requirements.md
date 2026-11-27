@@ -599,6 +599,14 @@ scripting against the API, I want a token that does not depend on a browser.
     other resources from a third party, since each such fetch tells that party
     the address of an instance and that it runs CveDeck; its API schema SHALL
     remain available, behind sign-in, for tools a user runs themselves.
+22. THE system SHALL stop reading a request body once it exceeds a fixed size
+    -- the most a scan batch or an enrolment can honestly need on the routes
+    that take one, and far less on every other route -- and SHALL refuse the
+    request with the size it accepts, before sign-in is checked and before the
+    route acts on the body. The field bounds of 16.13 apply only once a body
+    has been read and parsed in full, and a body is read before sign-in is
+    checked, so without this limit anyone who can reach the port could make
+    the system hold a body of any size in memory.
 
 ### Requirement 17: Pinned SSH host keys
 

@@ -389,6 +389,21 @@ MAX_NOTE = 10_000
 #: Distinct TCP ports probed per discovered address.
 MAX_SWEEP_PORTS = 64
 
+# The whole body, which the bounds above cannot cover (Req 16.22): FastAPI
+# reads and parses a body before it checks sign-in, so these are the only
+# limit an anonymous caller meets. Set per router in ``create_app`` and per
+# route in ``actions.py``. Measured honest sizes (0.18.1), JSON as sent:
+#: Every route but the batches. The largest honest body is a connection test
+#: with every field at its bound in 4-byte UTF-8, 76 KiB; a note at its bound
+#: is 60 KiB at worst.
+MAX_BODY = 1024 * 1024
+#: Scan batches and enrolment. 4,096 hosts re-scanned with the server key are
+#: 0.27-0.45 MiB; 4,096 targets each with its own RSA-4096 key are 14.2 MiB,
+#: with RSA-8192 keys 26.6 MiB -- such a batch must be split, as the nginx
+#: example's ``client_max_body_size 16m`` already requires. An enrolment of
+#: 4,096 hosts is 0.25 MiB, 2.2 MiB with every field at its bound.
+MAX_BATCH_BODY = 16 * 1024 * 1024
+
 Port = Annotated[int, Field(ge=1, le=65535)]
 
 

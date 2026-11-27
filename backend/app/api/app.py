@@ -34,10 +34,11 @@ from ..auth.dependencies import login_required, require_principal, resolve_princ
 from ..data import sqlite_journal
 from . import actions, auth_routes, routes, security
 from .dependencies import get_engine, get_scanner_engine, get_sync_service
+from .schemas import MAX_BODY
 
 # Keep in step with the newest released heading in CHANGELOG.md. This is what
 # GET /api/health reports, and it sat at 0.1.0 through three releases.
-_VERSION = "0.18.0"
+_VERSION = "0.18.1"
 
 
 async def _validation_error_without_input(
@@ -190,10 +191,18 @@ def create_app(*, wire_production: bool = False) -> FastAPI:
     # 0.8.12 (Req 15.9). The auth routers are excluded -- they already refuse
     # every change while login is off.
     protected = [Depends(require_principal), Depends(actions.refuse_writes_in_demo_mode)]
-    app.include_router(auth_routes.public_router)
-    app.include_router(auth_routes.account_router)
-    app.include_router(routes.router, dependencies=protected)
-    app.include_router(actions.router, dependencies=protected)
+    #
+    # Every router also carries a body limit, for the same reason: FastAPI reads
+    # a body before it runs sign-in, so an unlimited route would hold any size
+    # an anonymous caller sends (Req 16.22). On the routers, not on
+    # ``FastAPI(max_body_size=...)``: an application-level refusal is answered
+    # in plain text from outside every user middleware, where
+    # ``security.BodyTooLargeMiddleware`` cannot give it a readable reason. The
+    # batch routes raise it for themselves in ``actions.py``.
+    app.include_router(auth_routes.public_router, max_body_size=MAX_BODY)
+    app.include_router(auth_routes.account_router, max_body_size=MAX_BODY)
+    app.include_router(routes.router, dependencies=protected, max_body_size=MAX_BODY)
+    app.include_router(actions.router, dependencies=protected, max_body_size=MAX_BODY)
 
     # The machine-readable schema, for scripts and for any API tool you run
     # yourself. There is deliberately no interactive page: FastAPI's Swagger UI

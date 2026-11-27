@@ -8,6 +8,37 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.18.1] - 2026-11-27
+
+A limit on how much of a request CveDeck reads, which holds before sign-in.
+
+### Security
+
+- **CveDeck stops reading a request body at a fixed size** (Req 16.22). Every
+  list and string in a request was already bounded, but those bounds are
+  checked after the body has been read in full -- and the body is read before
+  sign-in is checked. Anyone who could reach the port could make CveDeck hold
+  a body of any size in memory. Now it stops at the limit and answers 413 with
+  the size it accepts, before sign-in:
+  - 16 MiB for `POST /api/scans`, `POST /api/scans/jobs` and
+    `POST /api/discovery/enroll`, the same as the nginx example's
+    `client_max_body_size`;
+  - 1 MiB for every other route.
+
+  The dashboard never comes near either. A script that sends its own key for
+  every target in a very large batch can: 4,096 targets with an RSA-8192 key
+  each is about 27 MiB. Split it, or let the server key do it. DEPLOYMENT.md,
+  *Security*, has the numbers.
+
+### Changed
+
+- fastapi 0.165.0, pydantic 2.14.4, sqlalchemy 2.1.9; hypothesis and
+  fast-check (Dependabot #50, #51).
+
+No migration.
+
+---
+
 ## [0.18.0] - 2026-11-26
 
 An alert when a finding you already have becomes actively exploited.

@@ -492,6 +492,20 @@ environment the app reads, so no alembic.ini edit is needed.
   - Drill-down sub-tabs (`🚀 Ready to Fix`, `⏳ Pending Vendor Patch`, `📋 All Findings`, `📦 By Package`, `🌳 Dependency Map`) maintain keyboard navigable tab semantics and preserve all accessibility contracts.
   - The drill-down header is a single `host-summary` strip -- exploitation state, severity chips, remediation progress -- sharing `.sev-chip` with the fleet view so the two screens read as one product. It replaced five KPI cards and a full-width progress card that cost ~250px and duplicated counts the sub-tabs already carry.
 
+- **Every router carries a body limit, and the limit is the only thing an
+  anonymous caller meets.** FastAPI reads and parses a request body *before* it
+  runs a route's dependencies, and sign-in is a dependency -- so Req 16.13's
+  field bounds bound what is acted on, never what is read. `create_app` includes
+  every router with `max_body_size=MAX_BODY` (1 MiB); the scan batch routes and
+  enrolment override it with `MAX_BATCH_BODY` (16 MiB, equal to the nginx
+  example, which a test checks). Req 16.22. A new router must be included with
+  a limit (`tests/test_request_body_limit.py` sweeps every write route with login
+  on and fails on a 401 where it expects 413); a new route that genuinely needs
+  more sets its own `max_body_size` with a measured reason -- never raise
+  `MAX_BODY`. Do not move the limit to `FastAPI(max_body_size=...)`: that
+  refusal is sent in plain text from outside every user middleware, so
+  `security.BodyTooLargeMiddleware` could no longer state the limit.
+
 - Demo mode must refuse every route that reaches the network. `CVEDECK_DEMO_MODE`
   exists so strangers can click around a populated dashboard; the seeded fleet is
   the harmless half. `POST /api/scans`, `POST /api/discovery/sweep`, and

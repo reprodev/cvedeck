@@ -1,6 +1,6 @@
-"""Response headers and the Host check, applied to every request (Req 16.15, 16.17).
+"""Response headers, the Host check and the body-size refusal (Req 16.15, 16.17, 16.22).
 
-Both are plain ASGI middleware rather than Starlette's ``BaseHTTPMiddleware``,
+All three are plain ASGI middleware rather than Starlette's ``BaseHTTPMiddleware``,
 so they add no task per request and cannot swallow a streaming response.
 
 The headers are what a browser needs to be told, because it cannot work them
@@ -18,7 +18,10 @@ server's own SSH key.
 
 from __future__ import annotations
 
+import json
 import logging
+
+from starlette.middleware.body_limit import MAX_BODY_SIZE_SCOPE_KEY
 
 from .. import config
 
@@ -80,6 +83,80 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+def size_label(size: int) -> str:
+    """``16 MiB`` for a whole number of mebibytes, otherwise ``N bytes``."""
+    mib = 1024 * 1024
+    return f"{size // mib} MiB" if size >= mib and size % mib == 0 else f"{size:,} bytes"
+
+
+def body_too_large_detail(limit: int | None) -> str:
+    """What a refused body is told: the size accepted, never what was sent."""
+    if limit is None:
+        return "The request body is larger than CveDeck accepts."
+    return (
+        f"The request body is larger than this endpoint accepts ({size_label(limit)}). "
+        "Split a large scan batch, or omit per-target keys and scan with the server key."
+    )
+
+
+class BodyTooLargeMiddleware:
+    """Give a body refused for its size a readable reason (Req 16.22).
+
+    The limit itself is FastAPI's ``max_body_size``, set on every router in
+    ``create_app``; Starlette stops reading at the limit and answers 413 with
+    the bare text "Content Too Large" -- or, when the refusal surfaces as an
+    exception, with that text as a JSON ``detail``. Either way the dashboard and
+    a script learn nothing they can act on. This rewrites any 413 into a JSON
+    ``detail`` stating the route's limit, which Starlette leaves in the scope
+    while it refuses. It never sees the body: the refusal happens before it is
+    read, and the original response body is discarded unread.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        replaced = False
+
+        async def send_readable(message) -> None:
+            nonlocal replaced
+            if replaced:
+                # The refusal's own body; ours has already been sent.
+                return
+            if message["type"] == "http.response.start" and message["status"] == 413:
+                replaced = True
+                limit = scope.get(MAX_BODY_SIZE_SCOPE_KEY)
+                logger.warning(
+                    "Refused a request to %s: its body was over %s.",
+                    str(scope.get("path", ""))[:100],
+                    size_label(limit) if isinstance(limit, int) else "the limit",
+                )
+                body = json.dumps(
+                    {"detail": body_too_large_detail(limit if isinstance(limit, int) else None)}
+                ).encode()
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 413,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode()),
+                            # The rest of the body was never read; the
+                            # connection cannot be reused for another request.
+                            (b"connection", b"close"),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": body})
+                return
+            await send(message)
+
+        await self.app(scope, receive, send_readable)
 
 
 def host_name(host_header: str) -> str:
@@ -156,7 +233,12 @@ class AllowedHostsMiddleware:
 
 
 def install(app) -> None:
-    """Add both middlewares to ``app``. The Host check runs first."""
+    """Add the middlewares to ``app``. The Host check runs first.
+
+    The 413 rewrite is added first so it sits innermost, inside the headers
+    middleware: a refusal still carries the security headers.
+    """
+    app.add_middleware(BodyTooLargeMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     allowed = config.allowed_hosts()
     if allowed:
