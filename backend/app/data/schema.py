@@ -563,14 +563,40 @@ class EpssScore(Base):
     ``score`` is the modelled probability (0.0-1.0) that the CVE is exploited in
     the next 30 days; ``percentile`` is its rank against every other scored CVE.
     Like ``KevEntry`` this is an upstream dataset, so it carries no sync status.
+
+    ``generation`` is which refresh wrote the row (Req 13.12, Property 26). A
+    refresh writes its whole set under a new generation, in parts, and only
+    then makes it the live one (``FeedGeneration``); readers see the live
+    generation and nothing else. Never read this table except through the
+    repository's EPSS lookups, which apply that filter.
     """
 
     __tablename__ = "epss_scores"
 
+    generation: Mapped[int] = mapped_column(
+        Integer, primary_key=True, default=0, server_default=sa_text("0")
+    )
     cve_id: Mapped[str] = mapped_column(String, primary_key=True)
     score: Mapped[float] = mapped_column(Float, nullable=False)
     percentile: Mapped[float] = mapped_column(Float, nullable=False)
     scored_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class FeedGeneration(Base):
+    """Which generation of a feed's cached rows readers see (Req 13.12).
+
+    ``live`` is the generation every reader uses; ``claimed`` is the last one
+    handed to a refresh, so two refreshes running at once never write under the
+    same number. ``live`` only moves forward. A database with no row for a feed
+    reads generation 0, which is what the 0.19.0 migration gave the scores it
+    kept and what the demo seeds.
+    """
+
+    __tablename__ = "feed_generations"
+
+    feed_name: Mapped[str] = mapped_column(String, primary_key=True)
+    live: Mapped[int] = mapped_column(Integer, nullable=False)
+    claimed: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class FeedRefresh(Base):

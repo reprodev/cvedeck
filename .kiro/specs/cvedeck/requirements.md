@@ -419,6 +419,13 @@ host.
     integrity before keeping it; and SHALL NOT overwrite an existing file unless
     told to, write over the live database, or attempt a SQLite backup of a
     PostgreSQL deployment.
+12. WHEN THE system rewrites its cached EPSS scores THEN it SHALL write the new
+    set in parts, each committed on its own so that other writes can commit
+    between them; SHALL make the new set visible in a single commit, so that a
+    reader sees the previous set or the new set in full and never part of each;
+    and IF the write fails or stops partway THEN it SHALL keep the previous set
+    in use and remove the partial set on a later refresh. Of two refreshes that
+    overlap, the one that started later SHALL be the one kept.
 
 ### Requirement 14: Accurate and reachable remediation guidance
 

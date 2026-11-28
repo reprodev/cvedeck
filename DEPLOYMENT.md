@@ -158,10 +158,27 @@ PostgreSQL deployments use `pg_dump` instead.
 ### Faster reads: WAL
 
 By default SQLite uses its rollback journal, which makes every read wait while
-a large write commits. A full feed refresh rewrites hundreds of thousands of
-rows, and on a slow disk the dashboard can stall for several seconds: measured
-with disk writes throttled to 5 MB/s, the slowest read was 16.8 s and the slowest
-write 17.0 s. With `CVEDECK_SQLITE_JOURNAL=wal` they were 1.7 s and 7.1 s.
+a large write commits. A full feed refresh rewrites over 400,000 EPSS scores.
+Since 0.19.0 it commits them in parts, so no single write holds the lock for
+long. Measured on four hosts with disk writes throttled to 5 MB/s, during a full
+refresh:
+
+| | Rollback journal (default) | WAL |
+| --- | --- | --- |
+| Slowest read | 3.2 s (0.18: 19.5 s) | 2.6 s (0.18: 3.2 s) |
+| Slowest write | 1.1 s (0.18: 18.4 s) | 0.8 s (0.18: 7.4 s) |
+
+WAL still helps reads on a slow disk, and the rollback journal is now a
+reasonable default there too.
+
+The refresh itself pays for this. Yesterday's scores are deleted row by row
+instead of in one statement, so a full refresh writes about 126-165 MB instead
+of 77-97 MB and takes longer (41 s instead of 26 s on a fast disk). Between
+refreshes the database keeps the previous set beside the live one, so a lookup
+that started just before the switch can finish: that is about 40-55 MB of extra
+disk, whatever the fleet's size, and SQLite does not shrink the file afterwards. On an SD card or other flash with limited write endurance, budget for
+the daily write volume. The refresh runs once a day by default
+(`CVEDECK_FEED_REFRESH_HOURS`).
 
 **Never use WAL with the database on a network filesystem** -- NFS, SMB/CIFS,
 sshfs or 9p. It relies on locking and shared memory those do not provide, and

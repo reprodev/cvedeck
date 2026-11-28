@@ -3188,3 +3188,73 @@ PASSED" having measured no memory at all: Git Bash had rewritten
 read failed, and an empty number compared as zero. The same trap had bitten
 `docker cp` in 0.12.0. A measurement that can fail silently is not a
 measurement, so the harness now fails when it cannot read one.
+
+## Chapter 41 — The write nobody had timed (v0.19.0)
+
+The slow write had a name for a month before anyone checked it. 0.16.0's WAL
+work measured a seven-second write stall at 5 MB/s, and the notes put it down
+to Canonical's kernel feed, "844,000 rows committing". The harness said so in
+a comment. HANDOVER said so. The follow-up was filed as "chunk the Ubuntu
+write".
+
+Reading the schema before planning the chunking undid it. The kernel feed had
+been stored as compressed blobs since 0.10.0 -- sixty rows, under three
+megabytes a release -- a month before the measurement that blamed it. Timing
+every commit of a full refresh on four real hosts gave the actual order:
+EPSS 9.4 s on a fast disk and 15.7 s at 5 MB/s, the kernel feed 1.3-1.9 s,
+KEV 0.2 s, the reapply 0.05 s. The write had been EPSS all along, and a
+comment in `dependencies.py` had been saying so the whole time.
+
+### Parts, without a part showing
+
+Committing 414,000 rows in parts is easy; doing it without breaking "a failed
+refresh never overwrites a good cache" is the work. A reader must see
+yesterday's set or today's, whole. So each refresh writes under a generation
+number nobody reads, and one `UPDATE` makes it the live one -- committed in
+the same transaction as the refresh's record of success, so the dashboard
+never says "refreshed" about a set nobody can read. The owner chose that
+over the simpler in-place overwrite, which would have left a mixture of two
+days' scores after a crash.
+
+Two details came from reading the driver rather than the design. SQLAlchemy's
+SQLite driver opens no transaction for a plain `SELECT`, so the EPSS lookup,
+split into parts to stay under SQLite's parameter limit, could straddle the
+switch; the previous generation is therefore kept until the next refresh
+starts. And nothing serialises the scheduler, the refresh route and the CLI,
+so each refresh claims its own number with one `INSERT ... ON CONFLICT DO
+UPDATE ... RETURNING`, and `live` only moves forward.
+
+### What it cost
+
+The freeze went: at 5 MB/s on the default journal, the slowest write fell from
+18.4 s to 1.1 s and the slowest read from 19.5 s to 3.2 s. The read did not
+reach the 2 s target, and could not: 0.18.1 under WAL, where readers never wait
+on the lock, shows the same three seconds, which is the refresh's own work in
+the same process. The refresh itself got slower and writes more, because
+0.18's `DELETE` of a whole table is almost free in SQLite and deleting one
+generation's rows is not; and keeping two sets costs 40-55 MB of disk. That was
+the trade the owner was shown, with the
+numbers, and accepted: the cost lands in a background job once a day, and the
+benefit lands on whoever has the dashboard open.
+
+### Two checks that saw nothing
+
+The baseline probe printed "slowest reads: s" and counted every probe as a
+failure. Its summary `awk` expected a line format the harness had stopped
+writing, and Windows curl added carriage returns; the "slowest writes"
+column was in fact the reads. The raw files were intact, and the summary is
+now a script that refuses to report on input it cannot parse.
+
+Writing the broken-copy checks found two controls no test watched. Clean-up
+deleting every generation but the live one passed, because in the property the
+later refresh always wins; it matters only when the later one then stops. And
+writing the whole set as one part -- the very write this release removes --
+passed, because the delete's commits were counted and the insert's were not.
+Both have tests now.
+
+PostgreSQL turned up something older. Running the whole migration chain on an
+empty PostgreSQL database fails at a September revision that writes
+`BOOLEAN DEFAULT 1`. Real deployments never take that path -- an empty
+database is created from the ORM and stamped -- so 0.19.0's migration was
+checked the way a deployment meets it: a database created by the published
+0.18.1, then upgraded.

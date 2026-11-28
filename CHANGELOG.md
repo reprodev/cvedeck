@@ -8,6 +8,56 @@ All notable changes to the **CveDeck** project are documented here.
 
 ---
 
+## [0.19.0] - 2026-11-28
+
+The dashboard no longer freezes while the daily feed refresh writes.
+
+### Changed
+
+- **The EPSS rewrite is committed in parts** (Req 13.12). Each refresh replaced
+  the whole EPSS cache, over 400,000 rows, in one transaction. SQLite has one
+  write lock, and with the default journal every reader waits on it too, so
+  for as long as that took the dashboard stopped answering. Measured on four
+  real hosts with disk writes throttled to 5 MB/s, during a full refresh:
+
+  | | 0.18.1 | 0.19.0 |
+  | --- | --- | --- |
+  | Slowest read, default journal | 19.5 s | 3.2 s |
+  | Slowest write, default journal | 18.4 s | 1.1 s |
+  | Slowest read, WAL | 3.2 s | 2.6 s |
+  | Slowest write, WAL | 7.4 s | 0.8 s |
+
+  What remains of a read is the refresh's own processing in the same process,
+  not the lock: 0.18.1 under WAL, where readers never wait on it, shows the
+  same three seconds.
+
+  The new scores are written where nobody reads them, and one small commit
+  switches every reader over, so a reader sees yesterday's set or today's,
+  whole, and never part of each. A refresh that stops partway, a crash or a
+  full disk, leaves yesterday's in use, as before.
+
+  The cost is paid in the background. A full refresh now takes longer (26 s
+  to 41 s on a fast disk) and writes more (about 126-165 MB instead of 77-97),
+  because yesterday's set is deleted row by row instead of being dropped in
+  one go, and the database keeps both sets between refreshes: about 40-55 MB
+  more on disk, whatever the fleet's size (43 MB to 82-97 MB in the check above),
+  from the first start after the upgrade. On an SD card or other flash that is worth knowing;
+  DEPLOYMENT.md has the numbers.
+
+### Fixed
+
+- The 0.16.0 notes blamed the slow write on Canonical's kernel feed. That feed
+  has been stored compressed since 0.10.0; timing each commit showed the EPSS
+  rewrite held the lock for 9.4 s of a fast-disk refresh, and the kernel feed
+  for 1.3 s.
+
+### Upgrading
+
+A migration rebuilds `epss_scores` and keeps every stored score. No settings
+change.
+
+---
+
 ## [0.18.1] - 2026-11-27
 
 A limit on how much of a request CveDeck reads, which holds before sign-in.

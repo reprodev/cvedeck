@@ -27,9 +27,10 @@ logger = logging.getLogger(__name__)
 
 #: Seconds a SQLite write waits for the single write lock before giving up.
 #: pysqlite's default is 5. Every write transaction is now short -- scans commit
-#: per target and feed refreshes download before writing (Req 13.6, 13.7) -- but
-#: the longest, the EPSS rewrite of roughly 400,000 rows, can still take a few
-#: seconds, and a write arriving behind it should queue rather than fail.
+#: per target, feed refreshes download before writing (Req 13.6, 13.7), and the
+#: EPSS rewrite of over 400,000 rows commits in parts (Req 13.12) -- but on a
+#: slow disk a commit can still take a second or two, and a write arriving
+#: behind it should queue rather than fail.
 SQLITE_BUSY_TIMEOUT = 30.0
 
 

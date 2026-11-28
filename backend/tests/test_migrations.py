@@ -545,3 +545,96 @@ def test_the_newly_exploited_migration_round_trips(tmp_path):
         assert "include_newly_exploited" not in columns and "last_event" not in columns
         command.upgrade(cfg, "head")
     assert _revision(engine) == _head()
+
+
+_EPSS_ROWS = [
+    ("CVE-2021-44228", 0.97, 0.999, "2026-11-26 00:00:00.000000"),
+    ("CVE-2024-3094", 0.85, 0.98, "2026-11-26 00:00:00.000000"),
+    ("CVE-2023-4863", 0.42, 0.93, "2026-11-26 00:00:00.000000"),
+]
+
+
+def _v0181_with_scores(tmp_path, name: str):
+    """A 0.18.1 database holding an EPSS cache, as an upgrade meets it."""
+    engine = create_engine(f"sqlite:///{(tmp_path / name).as_posix()}")
+    with engine.begin() as connection:
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "a7d3e9b1c428")
+        for row in _EPSS_ROWS:
+            connection.execute(
+                text(
+                    "INSERT INTO epss_scores (cve_id, score, percentile, scored_at) "
+                    "VALUES (:c, :s, :p, :t)"
+                ),
+                {"c": row[0], "s": row[1], "p": row[2], "t": row[3]},
+            )
+    return engine
+
+
+def test_upgrading_keeps_every_epss_score_and_keeps_reading_it(tmp_path):
+    """Validates Req 13.12: the stored cache survives as generation 0 and stays live.
+
+    Losing it would leave every finding's EPSS column to be wiped by the next
+    reapply if that refresh then failed -- an upgrade must not cost data.
+    """
+    from sqlalchemy.orm import Session
+
+    from app.data.repository import Repository
+
+    engine = _v0181_with_scores(tmp_path, "v0181.db")
+    upgrade_to_head(engine)
+
+    assert _revision(engine) == _head()
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("SELECT generation, cve_id, score, percentile FROM epss_scores ORDER BY cve_id")
+        ).all()
+        assert connection.execute(text("SELECT count(*) FROM feed_generations")).scalar() == 0
+    assert rows == sorted((0, c, s, p) for c, s, p, _t in _EPSS_ROWS)
+    with Session(engine) as session:
+        repo = Repository(session)
+        assert repo.count_epss_scores() == len(_EPSS_ROWS)
+        scores = repo.get_epss_map({c for c, *_ in _EPSS_ROWS})
+        assert {c: (r.score, r.percentile) for c, r in scores.items()} == {
+            c: (s, p) for c, s, p, _t in _EPSS_ROWS
+        }
+
+
+def test_the_epss_tables_match_the_orm_after_migrating(tmp_path):
+    """Columns and keys: a key the ORM and the database disagree on breaks the claim."""
+    engine = _v0181_with_scores(tmp_path, "keys.db")
+    upgrade_to_head(engine)
+
+    inspector = inspect(engine)
+    for table in ("epss_scores", "feed_generations"):
+        migrated = {c["name"] for c in inspector.get_columns(table)}
+        assert migrated == set(Base.metadata.tables[table].columns.keys()), table
+        key = inspector.get_pk_constraint(table)["constrained_columns"]
+        assert key == [c.name for c in Base.metadata.tables[table].primary_key.columns], table
+
+
+def test_the_epss_generations_migration_round_trips_keeping_the_live_set(tmp_path):
+    """Downgrading keeps the set readers were seeing, as the one set 0.18 expects."""
+    engine = _v0181_with_scores(tmp_path, "rt-epss.db")
+    upgrade_to_head(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO epss_scores (generation, cve_id, score, percentile, scored_at) "
+                "VALUES (1, 'CVE-2026-0001', 0.5, 0.5, '2026-11-27 00:00:00.000000')"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO feed_generations (feed_name, live, claimed) VALUES ('epss', 1, 1)")
+        )
+        cfg = alembic_config()
+        cfg.attributes["connection"] = connection
+        command.downgrade(cfg, "a7d3e9b1c428")
+        tables = set(inspect(connection).get_table_names())
+        assert "feed_generations" not in tables
+        assert connection.execute(text("SELECT cve_id FROM epss_scores")).scalars().all() == [
+            "CVE-2026-0001"
+        ]
+        command.upgrade(cfg, "head")
+    assert _revision(engine) == _head()

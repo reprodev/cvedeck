@@ -423,9 +423,9 @@ def test_each_feed_is_committed_before_the_next_is_written(db_path, monkeypatch)
     gate = _Gate()
     original = Repository.replace_epss_scores
 
-    def parked(self, scores):
+    def parked(self, scores, **kwargs):
         gate.park()
-        return original(self, scores)
+        return original(self, scores, **kwargs)
 
     monkeypatch.setattr(Repository, "replace_epss_scores", parked)
 

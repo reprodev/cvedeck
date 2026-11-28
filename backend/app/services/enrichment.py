@@ -42,7 +42,7 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, Callable, Protocol, Sequence
 
-from ..data.repository import FindingInput, Repository
+from ..data.repository import EPSS_FEED_NAME, FindingInput, Repository
 from ..data.schema import EpssScore, KevEntry
 from ..enums import FeedStatus, SyncStatus
 from ..scanner.epss_client import EpssRecord
@@ -66,7 +66,7 @@ KERNEL_FEED_PREFIX = "kernel-feed:"
 
 def kernel_feed_name(feed: str) -> str:
     return f"{KERNEL_FEED_PREFIX}{feed}"
-EPSS_FEED = "epss"
+EPSS_FEED = EPSS_FEED_NAME
 
 # Exceptions that mean "this code is broken", not "this feed is down". Mirrors
 # the same list in app.scanner.matcher: laundering a defect into a recorded
@@ -461,6 +461,8 @@ class FeedRefreshService:
             return unchanged
 
         scored_at = datetime.now(timezone.utc)
+        # Written in parts, committed by the checkpoint after each, and made
+        # live only by the commit that also records this refresh (Req 13.12).
         count = self._repository.replace_epss_scores(
             [
                 EpssScore(
@@ -470,8 +472,19 @@ class FeedRefreshService:
                     scored_at=scored_at,
                 )
                 for record in records
-            ]
+            ],
+            on_chunk=self._checkpoint,
         )
+        if count is None:
+            # A refresh that started later has already published its own set;
+            # this one is not used, and nothing about the feed failed.
+            _LOGGER.info("EPSS refresh superseded by a later one; keeping its set")
+            return FeedRefreshOutcome(
+                EPSS_FEED,
+                FeedStatus.OK,
+                record_count=self._repository.count_epss_scores(),
+                unchanged=True,
+            )
         self._repository.record_feed_refresh(
             EPSS_FEED, status=FeedStatus.OK, record_count=count, payload_digest=digest
         )

@@ -52,6 +52,7 @@ def test_create_all_creates_every_table(engine):
         "kev_entries",
         "epss_scores",
         "feed_refreshes",
+        "feed_generations",
         "ubuntu_kernel_feeds",
         "kernel_feeds",
         # Access control (Req 16). Not syncable either: credentials belong to

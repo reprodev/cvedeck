@@ -576,6 +576,14 @@ In 0.17.0's upgrade check, OSV once reported 6,835 kernel CVEs against a Debian 
 
 **Validates: Requirements 21.19, 21.20, 21.22**
 
+### Property 26: The EPSS cache is always one whole set
+
+*For any* stored EPSS set, any new set, and any point at which writing the new set fails -- including a second refresh claiming a generation and publishing before or after the first -- the scores a reader sees SHALL be exactly the previous set or exactly a new set, never a mixture and never a partial set; the live generation SHALL never move backwards; and once two later refreshes have completed, only the live generation and the one live before it SHALL remain.
+
+The rewrite is committed in parts so that a 414,000-row set no longer holds SQLite's single write lock for 9 s on a fast disk and 16 s on a slow one. Parts are only safe if no reader can see them, which is what the generation number is for: a refresh writes under a generation nobody reads, and one small commit makes it the one everybody reads.
+
+**Validates: Requirements 13.12**
+
 ## Addendum: design changes after the initial implementation
 
 Covers Requirements 10-16 (see requirements.md addendum).
@@ -930,7 +938,8 @@ network** (Req 13.6, 13.7).
   caller's `checkpoint` (its session's commit) after each feed, so each feed
   is its own transaction and the reapply another (0.10.4; one transaction
   for all three held the lock 9.4 s). A failed or empty download still never
-  overwrites a good cache.
+  overwrites a good cache. The EPSS rewrite, by far the largest, is itself committed
+  in parts behind a generation swap (0.19.0, *EPSS generations*).
 - **Residual contention is a 503.** The engine waits 30 s for the lock
   (`SQLITE_BUSY_TIMEOUT`, also used by the CLI) rather than pysqlite's 5. A
   request that still cannot write gets HTTP 503 with `Retry-After` -- SQLite's
@@ -1037,11 +1046,12 @@ process holding the file); the read-back is what is logged and what
 `wal_checkpoint(TRUNCATE)`.
 
 Measured on 2026-11-01 with disk writes throttled to 5 MB/s, during a full
-refresh that rewrites Ubuntu's 882,721-row kernel feed, with independent read
-and write probes: the rollback journal's slowest read was 16.8 s and slowest
-write 17.0 s; WAL's were 1.7 s and 7.1 s, medians unchanged. The remaining
-write wait is that one transaction holding the write lock while its pages
-stream out; chunking it is the further step.
+refresh, with independent read and write probes: the rollback journal's slowest
+read was 16.8 s and slowest write 17.0 s; WAL's were 1.7 s and 7.1 s, medians
+unchanged. The remaining write wait was one transaction holding the write lock
+while its pages streamed out. It was recorded at the time as Ubuntu's kernel
+feed, but that feed had been stored as compressed blobs since 0.10.0; timing
+each commit in 0.19.0 showed it was the EPSS rewrite (see *EPSS generations*).
 
 `cvedeck-admin backup <file>` copies the live database with SQLite's online
 backup API, integrity-checks the copy, writes it in the rollback journal so it
@@ -1198,3 +1208,44 @@ change, because the feed refresh has already written it.
 - **Settings.** `notification_settings.include_newly_exploited` (default
   true) and `last_event` (`scheduled_scan`, `kev_update` or `test`), so the
   dashboard can say what the last result was about.
+
+### EPSS generations (0.19.0)
+
+Req 13.12, Property 26. Timing each commit of a full refresh on 0.18.1 (four
+real hosts, every digest cleared) put the EPSS rewrite far ahead of everything
+else: 413,901 rows, 77-97 MB written, the write held for 9.4 s on a fast disk
+and 15.7 s with writes throttled to 5 MB/s. Canonical's kernel feed came next
+at 1.3-1.9 s, KEV at 0.2 s, the reapply at 0.05 s. One delete and one insert in
+a single transaction kept every other writer waiting for all of it, and under
+the rollback journal every reader too.
+
+- **Generations.** `epss_scores` is keyed `(generation, cve_id)`, and
+  `feed_generations` holds, per feed, the `live` generation and the last one
+  `claimed`. Readers (`get_epss_map`, `count_epss_scores`) read `live` first
+  and then only rows of that generation. Upgrading keeps the stored scores as
+  generation 0; a database with no `feed_generations` row reads generation 0.
+- **The rewrite.** `Repository.replace_epss_scores` claims a generation with a
+  single `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` (no two refreshes get
+  the same number, on SQLite or PostgreSQL), deletes generations older than
+  `live` in parts, inserts the new set in parts, calling `on_chunk` (the
+  caller's commit) after each part, and finally points `live` at the new
+  generation with one `UPDATE` that also requires the new generation to be
+  newer than `live` and to hold exactly the rows written. It does not commit
+  that last step: the service records the refresh's success and its
+  checkpoint commits both together, so the dashboard never says "refreshed"
+  about a set nobody can read yet, nor reads a set it has not recorded.
+- **Why not delete the old set straight away.** SQLAlchemy's SQLite driver
+  does not open a transaction for plain `SELECT`s, so a lookup split into
+  parts (`_lookup_by_cve_ids` caps bound parameters) could read `live`, see the
+  switch, and find its generation gone. The previous generation is kept until
+  the next refresh starts, which costs a second copy of the scores on disk.
+- **Overlap.** The periodic refresher, `POST /api/feeds/refresh` and the CLI
+  are not serialised against each other. Each claims its own generation; a
+  later claim that publishes first wins, and the earlier one's publish then
+  matches no row, is logged, and reports the feed as unchanged rather than
+  failed. The pointer never moves backwards.
+- **A refresh that stops partway** leaves a generation above `live` that no
+  reader sees; the next refresh to publish leaves it below `live`, and the one
+  after deletes it.
+- **Without a checkpoint** (the tests' default, and any caller that passes
+  none) every part stays in the caller's one transaction, as before 0.19.0.

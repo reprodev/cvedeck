@@ -217,6 +217,16 @@ environment the app reads, so no alembic.ini edit is needed.
   rather than written -- writing it would erase every exploitation flag in the fleet.
   `last_refreshed_at` advances only on success, so the dashboard reports the age of the
   data rather than the age of the last attempt.
+- The EPSS cache is rewritten in parts behind a generation swap (Req 13.12, Property 26),
+  because 414,000 rows in one transaction held SQLite's only write lock for 9-16 s and,
+  under the default rollback journal, froze every reader too. Each refresh claims a
+  generation, writes under it in committed parts nobody reads, and one `UPDATE` makes
+  it live -- committed together with the refresh's success record. Read `epss_scores`
+  only through `Repository.get_epss_map` / `count_epss_scores`, which filter on the live
+  generation; a bare `select(EpssScore)` sees half-written and superseded sets. Never
+  let clean-up delete anything but generations *below* live: one above it may be
+  another refresh still writing. Keep the previous generation until the next refresh
+  starts -- a lookup split into parts is several SELECTs and can straddle the switch.
 - Enrichment must never cost a scan its findings. `ScannerEngine._enrich` catches and
   logs; the findings persist unenriched (visibly, as NULLs). Collected inventory is the
   expensive part of a scan -- an SSH round trip to every host -- and a local cache

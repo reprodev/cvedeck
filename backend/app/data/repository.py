@@ -28,7 +28,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
 from sqlalchemy import String, case, cast, func, select
 from sqlalchemy.orm import Session, selectinload
@@ -49,6 +49,7 @@ from ..package_identifier import finding_package, parse_package_name
 from .schema import (
     CveFinding,
     EpssScore,
+    FeedGeneration,
     FeedRefresh,
     Inventory,
     KevEntry,
@@ -72,6 +73,14 @@ _IN_CLAUSE_CHUNK = 500
 #: Larger than the ``IN``-clause chunk because nothing is bound as a parameter
 #: here -- it only bounds how much of the result set the session holds.
 _ENRICHMENT_CHUNK = 1000
+
+#: The feed name the EPSS cache's generation is recorded under; the same
+#: string ``services.enrichment.EPSS_FEED`` records its refreshes under.
+EPSS_FEED_NAME = "epss"
+
+#: EPSS rows written or deleted per commit when a refresh rewrites the cache
+#: (Req 13.12). Starting value; 0.19.0 sets it from measurement.
+EPSS_CHUNK = 20_000
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -909,25 +918,157 @@ class Repository:
         self._session.flush()
         return len(entries)
 
-    def replace_epss_scores(self, scores: list[EpssScore]) -> int:
-        """Replace the cached EPSS score set wholesale.
+    def replace_epss_scores(
+        self,
+        scores: list[EpssScore],
+        *,
+        on_chunk: Callable[[], None] | None = None,
+        chunk_size: int = EPSS_CHUNK,
+    ) -> int | None:
+        """Replace the cached EPSS score set wholesale, in parts (Req 13.12, Property 26).
 
-        Same reasoning as :meth:`replace_kev_entries`: EPSS is a complete daily
-        snapshot, so merging yesterday's rows into today's would leave stale
-        scores for any CVE dropped from the model.
+        Wholesale for the same reason as :meth:`replace_kev_entries`: EPSS is a
+        complete daily snapshot, so merging yesterday's rows into today's would
+        leave stale scores for any CVE dropped from the model.
+
+        In parts because the set is over 400,000 rows: written in one
+        transaction it held SQLite's only write lock for 9.4 s on a fast disk
+        and 15.7 s on a slow one, and under the rollback journal every reader
+        waited too. So the set is written under a generation of its own, which
+        no reader looks at, with ``on_chunk`` -- the caller's commit -- called
+        after each part, and then made live by one ``UPDATE``:
+
+        1. claim a generation no other refresh can have;
+        2. delete generations older than the live one, in parts;
+        3. insert the new set under the claimed generation, in parts;
+        4. point ``live`` at it, only if it is newer than ``live`` and holds
+           exactly ``len(scores)`` rows.
+
+        Step 4 is left uncommitted, so the caller's record of the refresh is
+        committed in the same transaction as the switch. The generation that
+        was live stays until the next refresh's step 2: a reader that looked up
+        ``live`` just before the switch can finish reading it.
 
         Returns:
-            The number of scores written.
+            The number of scores now live, or ``None`` when a refresh that
+            started later has already published, so this set was not used.
+        """
+        generation = self._claim_generation(EPSS_FEED_NAME)
+        if on_chunk is not None:
+            on_chunk()
+        self._drop_epss_generations_below(
+            self._live_generation(EPSS_FEED_NAME), on_chunk, chunk_size
+        )
+        for start in range(0, len(scores), chunk_size):
+            part = scores[start : start + chunk_size]
+            for score in part:
+                score.generation = generation
+            # ``bulk_save_objects`` rather than per-row ``add``: at this size
+            # the ORM's per-object identity bookkeeping dominates the runtime.
+            self._session.bulk_save_objects(part)
+            self._session.flush()
+            if on_chunk is not None:
+                on_chunk()
+        return len(scores) if self._publish_generation(generation, len(scores)) else None
+
+    def _claim_generation(self, feed_name: str) -> int:
+        """A generation number for one refresh, never handed to another.
+
+        One ``INSERT ... ON CONFLICT DO UPDATE ... RETURNING``, so two refreshes
+        claiming at once -- the periodic one and ``POST /api/feeds/refresh``, or
+        the CLI in another process -- get different numbers on SQLite and on
+        PostgreSQL alike, with no read-then-write gap between them.
+        """
+        dialect = self._session.get_bind().dialect.name
+        if dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert
+        elif dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:  # pragma: no cover -- CveDeck supports these two databases only
+            raise RuntimeError(f"no generation claim for the {dialect} dialect")
+        stmt = (
+            insert(FeedGeneration)
+            .values(feed_name=feed_name, live=0, claimed=1)
+            .on_conflict_do_update(
+                index_elements=[FeedGeneration.feed_name],
+                set_={"claimed": FeedGeneration.claimed + 1},
+            )
+            .returning(FeedGeneration.claimed)
+        )
+        return int(self._session.execute(stmt).scalar_one())
+
+    def _live_generation(self, feed_name: str) -> int:
+        """The generation readers see; 0 where none was ever published."""
+        live = self._session.execute(
+            select(FeedGeneration.live).where(FeedGeneration.feed_name == feed_name)
+        ).scalar_one_or_none()
+        return 0 if live is None else int(live)
+
+    def _drop_epss_generations_below(
+        self, live: int, on_chunk: Callable[[], None] | None, chunk_size: int
+    ) -> None:
+        """Delete every EPSS generation older than ``live``, ``chunk_size`` rows at a time.
+
+        Only older ones: a generation above ``live`` may be another refresh's,
+        still being written. A portable ``cve_id IN (SELECT ... LIMIT n)``
+        rather than SQLite's ``rowid``, so PostgreSQL deployments work too.
         """
         from sqlalchemy import delete
 
-        self._session.execute(delete(EpssScore))
-        # ``bulk_save_objects`` rather than per-row ``add``: the EPSS set is
-        # ~280k rows, and the ORM's per-object identity bookkeeping dominates
-        # the runtime at that size.
-        self._session.bulk_save_objects(scores)
+        stale = (
+            self._session.execute(
+                select(EpssScore.generation).where(EpssScore.generation < live).distinct()
+            )
+            .scalars()
+            .all()
+        )
+        for generation in stale:
+            while True:
+                batch = (
+                    select(EpssScore.cve_id)
+                    .where(EpssScore.generation == generation)
+                    .limit(chunk_size)
+                    .scalar_subquery()
+                )
+                deleted = self._session.execute(
+                    delete(EpssScore)
+                    .where(EpssScore.generation == generation, EpssScore.cve_id.in_(batch))
+                    .execution_options(synchronize_session=False)
+                ).rowcount
+                if on_chunk is not None:
+                    on_chunk()
+                if not deleted:
+                    break
+
+    def _publish_generation(self, generation: int, expected: int) -> bool:
+        """Make ``generation`` the live EPSS set, if it should be (Property 26).
+
+        One statement, so the checks and the switch cannot be separated: the
+        generation must be newer than the live one -- a refresh that started
+        later and finished first keeps its set, and ``live`` never moves
+        backwards -- and must hold exactly the rows written, so a set that lost
+        rows is never shown. Not committed here; see :meth:`replace_epss_scores`.
+        """
+        from sqlalchemy import update
+
+        written = (
+            select(func.count())
+            .select_from(EpssScore)
+            .where(EpssScore.generation == generation)
+            .scalar_subquery()
+        )
+        switched = self._session.execute(
+            update(FeedGeneration)
+            .where(
+                FeedGeneration.feed_name == EPSS_FEED_NAME,
+                FeedGeneration.live < generation,
+                written == expected,
+            )
+            .values(live=generation)
+            .execution_options(synchronize_session=False)
+        ).rowcount
         self._session.flush()
-        return len(scores)
+        return switched == 1
 
     def count_kev_entries(self) -> int:
         """Count the KEV entries actually cached.
@@ -943,9 +1084,20 @@ class Repository:
         )
 
     def count_epss_scores(self) -> int:
-        """Count the EPSS scores actually cached. See :meth:`count_kev_entries`."""
+        """Count the live EPSS scores. See :meth:`count_kev_entries`.
+
+        The live generation only (Req 13.12): a set still being written, or one
+        a stopped refresh left behind, is not cached data anyone reads.
+        """
+        live = (
+            select(func.coalesce(func.max(FeedGeneration.live), 0))
+            .where(FeedGeneration.feed_name == EPSS_FEED_NAME)
+            .scalar_subquery()
+        )
         return int(
-            self._session.execute(select(func.count()).select_from(EpssScore)).scalar_one()
+            self._session.execute(
+                select(func.count()).select_from(EpssScore).where(EpssScore.generation == live)
+            ).scalar_one()
         )
 
     def record_feed_refresh(
@@ -1126,13 +1278,21 @@ class Repository:
         }
 
     def get_epss_map(self, cve_ids: set[str]) -> dict[str, EpssScore]:
-        """Look up EPSS scores for the given CVE ids, keyed by CVE id."""
+        """Look up live EPSS scores for the given CVE ids, keyed by CVE id.
+
+        ``live`` is read once, before the lookup's parts, so every part reads
+        the same generation even if a refresh switches it in between
+        (Req 13.12). That generation is kept until the next refresh starts.
+        """
+        live = self._live_generation(EPSS_FEED_NAME)
         return {
             row.cve_id: row
-            for row in self._lookup_by_cve_ids(EpssScore, EpssScore.cve_id, cve_ids)
+            for row in self._lookup_by_cve_ids(
+                EpssScore, EpssScore.cve_id, cve_ids, EpssScore.generation == live
+            )
         }
 
-    def _lookup_by_cve_ids(self, entity, column, cve_ids: set[str]) -> list:
+    def _lookup_by_cve_ids(self, entity, column, cve_ids: set[str], *where) -> list:
         """Fetch rows of ``entity`` whose ``column`` is in ``cve_ids``.
 
         Chunked because a fleet-wide enrichment pass can ask about tens of
@@ -1147,7 +1307,7 @@ class Repository:
         rows: list = []
         for start in range(0, len(ids), _IN_CLAUSE_CHUNK):
             chunk = ids[start : start + _IN_CLAUSE_CHUNK]
-            stmt = select(entity).where(column.in_(chunk))
+            stmt = select(entity).where(column.in_(chunk), *where)
             rows.extend(self._session.execute(stmt).scalars().all())
         return rows
 
